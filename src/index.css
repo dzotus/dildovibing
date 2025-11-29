@@ -1,0 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ArchiPhoenix Dark Theme - Professional Tech Aesthetic */
+    --background: 220 18% 8%;
+    --foreground: 210 20% 98%;
+    
+    --card: 220 18% 10%;
+    --card-foreground: 210 20% 98%;
+    
+    --popover: 220 18% 12%;
+    --popover-foreground: 210 20% 98%;
+    
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    
+    --secondary: 220 15% 15%;
+    --secondary-foreground: 210 20% 98%;
+    
+    --muted: 220 15% 18%;
+    --muted-foreground: 210 10% 65%;
+    
+    --accent: 142 76% 36%;
+    --accent-foreground: 0 0% 100%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    
+    --border: 220 15% 20%;
+    --input: 220 15% 20%;
+    --ring: 217 91% 60%;
+    
+    --canvas-bg: 220 18% 11%;
+    --canvas-grid: 220 15% 16%;
+    --sidebar-bg: 220 18% 9%;
+    --toolbar-bg: 220 18% 10%;
+    --panel-border: 220 15% 18%;
+    
+    --component-kafka: 0 0% 100%;
+    --component-rabbitmq: 25 95% 53%;
+    --component-postgres: 211 100% 50%;
+    --component-nginx: 142 71% 45%;
+    --component-docker: 207 71% 55%;
+    --component-k8s: 221 83% 53%;
+    --component-api: 271 91% 65%;
+    
+    --shadow-sm: 0 2px 8px -2px hsl(220 18% 5% / 0.3);
+    --shadow-md: 0 4px 16px -4px hsl(220 18% 5% / 0.4);
+    --shadow-lg: 0 8px 32px -8px hsl(220 18% 5% / 0.5);
+    
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  
+  /* Custom scrollbar for dark theme */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-background;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted rounded-md;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/50;
+  }
+  
+  /* Selection */
+  ::selection {
+    @apply bg-primary/30 text-foreground;
+  }
+}
+
+@layer utilities {
+  .canvas-grid {
+    background-color: hsl(var(--canvas-bg));
+    background-image: 
+      linear-gradient(hsl(var(--canvas-grid)) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--canvas-grid)) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  
+  .glow-primary {
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+  
+  .glow-accent {
+    box-shadow: 0 0 20px hsl(var(--accent) / 0.3);
+  }
+  
+  .transition-smooth {
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -24;
+  }
+}
