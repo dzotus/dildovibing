@@ -80,6 +80,36 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
           },
         ],
       },
+      {
+        id: 'messageSchemas',
+        title: 'Message Schemas',
+        description: 'Define message schemas for queues and topics',
+        fields: [
+          {
+            id: 'messageSchemas',
+            label: 'Schema Definitions',
+            type: 'textarea',
+            description: 'JSON array of schemas: [{"queue": "orders", "format": "json", "schema": "..."}]',
+            placeholder: '[{"queue": "orders", "format": "json", "schema": "{\\"type\\": \\"object\\"}"}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'sampleMessages',
+        title: 'Sample Messages',
+        description: 'Example messages for testing and documentation',
+        fields: [
+          {
+            id: 'sampleMessages',
+            label: 'Sample Messages (JSON)',
+            type: 'textarea',
+            description: 'JSON array of sample messages: [{"queue": "orders", "message": "..."}]',
+            placeholder: '[{"queue": "orders", "message": "{\\"id\\": 1, \\"amount\\": 99.99}"}]',
+            rows: 8,
+          },
+        ],
+      },
     ],
   },
   'aws-sqs': {
@@ -150,6 +180,36 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
           },
           { id: 'accessKey', label: 'Access Key', type: 'text' },
           { id: 'secretKey', label: 'Secret Key', type: 'text' },
+        ],
+      },
+      {
+        id: 'messageAttributes',
+        title: 'Message Attributes',
+        description: 'Define message attributes and metadata',
+        fields: [
+          {
+            id: 'messageAttributes',
+            label: 'Attributes Schema (JSON)',
+            type: 'textarea',
+            description: 'JSON object defining message attributes: {"userId": "String", "priority": "Number"}',
+            placeholder: '{"userId": "String", "priority": "Number", "source": "String"}',
+            rows: 6,
+          },
+        ],
+      },
+      {
+        id: 'sampleMessages',
+        title: 'Sample Messages',
+        description: 'Example messages for testing',
+        fields: [
+          {
+            id: 'sampleMessages',
+            label: 'Sample Messages (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"body": "...", "attributes": {...}}]',
+            placeholder: '[{"body": "{\\"orderId\\": \\"123\\"}", "attributes": {"priority": 1}}]',
+            rows: 8,
+          },
         ],
       },
     ],
@@ -227,6 +287,51 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
           },
         ],
       },
+      {
+        id: 'subscriptions',
+        title: 'Subscriptions',
+        description: 'Topic subscriptions configuration',
+        fields: [
+          {
+            id: 'subscriptions',
+            label: 'Subscriptions (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "sub1", "maxDeliveryCount": 10, "enableDeadLettering": true}]',
+            placeholder: '[{"name": "sub1", "maxDeliveryCount": 10}]',
+            rows: 6,
+          },
+        ],
+      },
+      {
+        id: 'messageSchemas',
+        title: 'Message Schemas',
+        description: 'Define message schemas',
+        fields: [
+          {
+            id: 'messageSchemas',
+            label: 'Schema Definitions (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"entity": "queue1", "format": "json", "schema": "..."}]',
+            placeholder: '[{"entity": "queue1", "format": "json", "schema": "{\\"type\\": \\"object\\"}"}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'sampleMessages',
+        title: 'Sample Messages',
+        description: 'Example messages for testing',
+        fields: [
+          {
+            id: 'sampleMessages',
+            label: 'Sample Messages (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"entity": "queue1", "message": "..."}]',
+            placeholder: '[{"entity": "queue1", "message": "{\\"id\\": 1}"}]',
+            rows: 8,
+          },
+        ],
+      },
     ],
   },
   'gcp-pubsub': {
@@ -289,6 +394,51 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
             label: 'Push Endpoint URL',
             type: 'text',
             placeholder: 'https://api.service/push',
+          },
+        ],
+      },
+      {
+        id: 'filters',
+        title: 'Message Filters',
+        description: 'Define subscription filters for message routing',
+        fields: [
+          {
+            id: 'filters',
+            label: 'Filter Expressions',
+            type: 'textarea',
+            description: 'JSON array of filters: [{"subscription": "sub1", "filter": "attributes.source == \\"orders\\""}]',
+            placeholder: '[{"subscription": "sub1", "filter": "attributes.source == \\"orders\\""}]',
+            rows: 6,
+          },
+        ],
+      },
+      {
+        id: 'messageSchemas',
+        title: 'Message Schemas',
+        description: 'Define message schemas for topics',
+        fields: [
+          {
+            id: 'messageSchemas',
+            label: 'Schema Definitions (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"topic": "events", "format": "avro", "schema": "..."}]',
+            placeholder: '[{"topic": "events", "format": "avro", "schema": "{\\"type\\": \\"record\\"}"}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'sampleMessages',
+        title: 'Sample Messages',
+        description: 'Example messages for testing',
+        fields: [
+          {
+            id: 'sampleMessages',
+            label: 'Sample Messages (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"topic": "events", "message": "...", "attributes": {...}}]',
+            placeholder: '[{"topic": "events", "message": "{\\"event\\": \\"order.created\\"}", "attributes": {"source": "api"}}]',
+            rows: 8,
           },
         ],
       },

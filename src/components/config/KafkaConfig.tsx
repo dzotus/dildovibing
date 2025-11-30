@@ -4,6 +4,8 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Trash2 } from 'lucide-react';
 
 interface KafkaConfigProps {
@@ -12,9 +14,19 @@ interface KafkaConfigProps {
 
 interface KafkaConfig {
   brokers?: string[];
-  topics?: Array<{ name: string; partitions: number; replication: number }>;
+  topics?: Array<{ 
+    name: string; 
+    partitions: number; 
+    replication: number;
+    messageSchema?: string;
+    retentionHours?: number;
+    compression?: string;
+  }>;
   groupId?: string;
   clientId?: string;
+  messageSchemas?: Array<{ topic: string; schema: string; format: string }>;
+  consumerGroups?: Array<{ groupId: string; topics: string[]; strategy: string }>;
+  sampleMessages?: Array<{ topic: string; message: string }>;
 }
 
 export function KafkaConfig({ componentId }: KafkaConfigProps) {
@@ -25,9 +37,12 @@ export function KafkaConfig({ componentId }: KafkaConfigProps) {
 
   const config = (node.data.config as any) || {} as KafkaConfig;
   const brokers = config.brokers || ['localhost:9092'];
-  const topics = config.topics || [{ name: 'default-topic', partitions: 3, replication: 1 }];
+  const topics = config.topics || [{ name: 'default-topic', partitions: 3, replication: 1, compression: 'gzip', retentionHours: 168 }];
   const groupId = config.groupId || 'default-group';
   const clientId = config.clientId || 'default-client';
+  const messageSchemas = config.messageSchemas || [];
+  const consumerGroups = config.consumerGroups || [];
+  const sampleMessages = config.sampleMessages || [];
 
   const updateConfig = (updates: Partial<KafkaConfig>) => {
     updateNode(componentId, {
@@ -178,6 +193,245 @@ export function KafkaConfig({ componentId }: KafkaConfigProps) {
                       onChange={(e) => updateTopic(index, 'replication', parseInt(e.target.value) || 1)}
                     />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor={`topic-compression-${index}`}>Compression</Label>
+                    <Select
+                      value={topic.compression || 'none'}
+                      onValueChange={(value) => updateTopic(index, 'compression', value)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">None</SelectItem>
+                        <SelectItem value="gzip">Gzip</SelectItem>
+                        <SelectItem value="snappy">Snappy</SelectItem>
+                        <SelectItem value="lz4">LZ4</SelectItem>
+                        <SelectItem value="zstd">Zstd</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor={`topic-retention-${index}`}>Retention (hours)</Label>
+                    <Input
+                      id={`topic-retention-${index}`}
+                      type="number"
+                      min="1"
+                      value={topic.retentionHours || 168}
+                      onChange={(e) => updateTopic(index, 'retentionHours', parseInt(e.target.value) || 168)}
+                      placeholder="168"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Message Schemas */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Message Schemas</h3>
+              <p className="text-sm text-muted-foreground">Define message schemas for topics (Avro, JSON Schema, Protobuf)</p>
+            </div>
+            <Button size="sm" onClick={() => updateConfig({ messageSchemas: [...messageSchemas, { topic: '', schema: '', format: 'avro' }] })} variant="outline">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Schema
+            </Button>
+          </div>
+
+          <div className="space-y-4">
+            {messageSchemas.map((schema, index) => (
+              <div key={index} className="border border-border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Schema {index + 1}</Label>
+                  <Button size="sm" variant="ghost" onClick={() => updateConfig({ messageSchemas: messageSchemas.filter((_, i) => i !== index) })}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Topic</Label>
+                    <Input
+                      value={schema.topic}
+                      onChange={(e) => {
+                        const updated = [...messageSchemas];
+                        updated[index].topic = e.target.value;
+                        updateConfig({ messageSchemas: updated });
+                      }}
+                      placeholder="topic-name"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Format</Label>
+                    <Select
+                      value={schema.format}
+                      onValueChange={(value) => {
+                        const updated = [...messageSchemas];
+                        updated[index].format = value;
+                        updateConfig({ messageSchemas: updated });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="avro">Avro</SelectItem>
+                        <SelectItem value="json-schema">JSON Schema</SelectItem>
+                        <SelectItem value="protobuf">Protobuf</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Schema Definition</Label>
+                  <Textarea
+                    value={schema.schema}
+                    onChange={(e) => {
+                      const updated = [...messageSchemas];
+                      updated[index].schema = e.target.value;
+                      updateConfig({ messageSchemas: updated });
+                    }}
+                    placeholder='{"type": "record", "name": "User", "fields": [{"name": "id", "type": "int"}]}'
+                    rows={6}
+                    className="font-mono text-sm"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Consumer Groups */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Consumer Groups</h3>
+              <p className="text-sm text-muted-foreground">Configure consumer groups and their processing strategies</p>
+            </div>
+            <Button size="sm" onClick={() => updateConfig({ consumerGroups: [...consumerGroups, { groupId: '', topics: [], strategy: 'earliest' }] })} variant="outline">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Group
+            </Button>
+          </div>
+
+          <div className="space-y-4">
+            {consumerGroups.map((group, index) => (
+              <div key={index} className="border border-border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Consumer Group {index + 1}</Label>
+                  <Button size="sm" variant="ghost" onClick={() => updateConfig({ consumerGroups: consumerGroups.filter((_, i) => i !== index) })}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Group ID</Label>
+                    <Input
+                      value={group.groupId}
+                      onChange={(e) => {
+                        const updated = [...consumerGroups];
+                        updated[index].groupId = e.target.value;
+                        updateConfig({ consumerGroups: updated });
+                      }}
+                      placeholder="consumer-group-1"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Offset Strategy</Label>
+                    <Select
+                      value={group.strategy}
+                      onValueChange={(value) => {
+                        const updated = [...consumerGroups];
+                        updated[index].strategy = value;
+                        updateConfig({ consumerGroups: updated });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="earliest">Earliest</SelectItem>
+                        <SelectItem value="latest">Latest</SelectItem>
+                        <SelectItem value="none">None</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label>Subscribed Topics</Label>
+                  <Input
+                    value={group.topics.join(', ')}
+                    onChange={(e) => {
+                      const updated = [...consumerGroups];
+                      updated[index].topics = e.target.value.split(',').map(t => t.trim()).filter(t => t);
+                      updateConfig({ consumerGroups: updated });
+                    }}
+                    placeholder="topic1, topic2, topic3"
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <Separator />
+
+        {/* Sample Messages */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-foreground">Sample Messages</h3>
+              <p className="text-sm text-muted-foreground">Example messages for testing and documentation</p>
+            </div>
+            <Button size="sm" onClick={() => updateConfig({ sampleMessages: [...sampleMessages, { topic: '', message: '' }] })} variant="outline">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Sample
+            </Button>
+          </div>
+
+          <div className="space-y-4">
+            {sampleMessages.map((sample, index) => (
+              <div key={index} className="border border-border rounded-lg p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Sample {index + 1}</Label>
+                  <Button size="sm" variant="ghost" onClick={() => updateConfig({ sampleMessages: sampleMessages.filter((_, i) => i !== index) })}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  <Label>Topic</Label>
+                  <Input
+                    value={sample.topic}
+                    onChange={(e) => {
+                      const updated = [...sampleMessages];
+                      updated[index].topic = e.target.value;
+                      updateConfig({ sampleMessages: updated });
+                    }}
+                    placeholder="topic-name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Message (JSON)</Label>
+                  <Textarea
+                    value={sample.message}
+                    onChange={(e) => {
+                      const updated = [...sampleMessages];
+                      updated[index].message = e.target.value;
+                      updateConfig({ sampleMessages: updated });
+                    }}
+                    placeholder='{"id": 1, "name": "John Doe", "email": "john@example.com"}'
+                    rows={4}
+                    className="font-mono text-sm"
+                  />
                 </div>
               </div>
             ))}

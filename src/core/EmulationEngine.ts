@@ -1,4 +1,5 @@
 import { CanvasNode, CanvasConnection } from '@/types';
+import { prometheusExporter } from './PrometheusMetricsExporter';
 
 /**
  * Component runtime state with real-time metrics
@@ -210,6 +211,9 @@ export class EmulationEngine {
     for (const connection of this.connections) {
       this.updateConnectionMetrics(connection);
     }
+    
+    // Update Prometheus exporter with latest metrics
+    prometheusExporter.updateMetrics(this.metrics, this.connectionMetrics, this.nodes);
   }
 
   /**

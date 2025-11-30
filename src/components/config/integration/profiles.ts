@@ -91,6 +91,51 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
           },
         ],
       },
+      {
+        id: 'endpoints',
+        title: 'API Endpoints',
+        description: 'Define API endpoints and their configurations',
+        fields: [
+          {
+            id: 'endpoints',
+            label: 'Endpoints (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"path": "/users", "method": "GET", "upstream": "http://users:8080"}]',
+            placeholder: '[{"path": "/users", "method": "GET", "upstream": "http://users:8080", "plugins": ["rate-limiting"]}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'transformations',
+        title: 'Request/Response Transformations',
+        description: 'Define transformations for requests and responses',
+        fields: [
+          {
+            id: 'transformations',
+            label: 'Transformations (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"route": "/api", "request": "...", "response": "..."}]',
+            placeholder: '[{"route": "/api", "request": "add_header(\'X-Custom\', \'value\')", "response": "..."}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'plugins',
+        title: 'Plugin Configurations',
+        description: 'Advanced plugin configurations',
+        fields: [
+          {
+            id: 'pluginConfigs',
+            label: 'Plugin Configs (JSON)',
+            type: 'textarea',
+            description: 'JSON object: {"rate-limiting": {...}, "cors": {...}}',
+            placeholder: '{"rate-limiting": {"minute": 100}, "cors": {"origins": ["*"]}}',
+            rows: 8,
+          },
+        ],
+      },
     ],
   },
   apigee: {
@@ -144,6 +189,36 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
             label: 'JWT Issuer',
             type: 'text',
             placeholder: 'issuer.example.com',
+          },
+        ],
+      },
+      {
+        id: 'policies',
+        title: 'Policies Configuration',
+        description: 'Define API policies and their configurations',
+        fields: [
+          {
+            id: 'policies',
+            label: 'Policies (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "quota", "config": {...}}]',
+            placeholder: '[{"name": "quota", "config": {"limit": 1000}}, {"name": "spike-arrest", "config": {"rate": 10}}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'transformations',
+        title: 'Request/Response Transformations',
+        description: 'Define transformations for requests and responses',
+        fields: [
+          {
+            id: 'transformations',
+            label: 'Transformations (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"flow": "preflow", "type": "javascript", "script": "..."}]',
+            placeholder: '[{"flow": "preflow", "type": "javascript", "script": "context.setVariable(\'custom\', \'value\');"}]',
+            rows: 8,
           },
         ],
       },
@@ -212,6 +287,36 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
             id: 'auditLogging',
             label: 'Audit Logging',
             type: 'toggle',
+          },
+        ],
+      },
+      {
+        id: 'flows',
+        title: 'Integration Flows',
+        description: 'Define integration flows and their configurations',
+        fields: [
+          {
+            id: 'flows',
+            label: 'Flows (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "order-processing", "connectors": [...], "transformations": [...]}]',
+            placeholder: '[{"name": "order-processing", "connectors": ["Salesforce", "SAP"], "transformations": [{"type": "dataweave", "script": "..."}]}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'connectorConfigs',
+        title: 'Connector Configurations',
+        description: 'Detailed connector configurations',
+        fields: [
+          {
+            id: 'connectorConfigs',
+            label: 'Connector Configs (JSON)',
+            type: 'textarea',
+            description: 'JSON object: {"Salesforce": {...}, "SAP": {...}}',
+            placeholder: '{"Salesforce": {"url": "...", "credentials": "..."}, "SAP": {"host": "...", "port": 3000}}',
+            rows: 8,
           },
         ],
       },
@@ -288,6 +393,51 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
           },
         ],
       },
+      {
+        id: 'schema',
+        title: 'GraphQL Schema Definition',
+        description: 'Define or import GraphQL schema',
+        fields: [
+          {
+            id: 'schemaDefinition',
+            label: 'Schema (SDL)',
+            type: 'textarea',
+            description: 'GraphQL Schema Definition Language',
+            placeholder: 'type Query {\n  users: [User!]!\n}\n\ntype User {\n  id: ID!\n  name: String!\n}',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'resolvers',
+        title: 'Resolvers Configuration',
+        description: 'Define resolvers and their data sources',
+        fields: [
+          {
+            id: 'resolvers',
+            label: 'Resolvers (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"field": "users", "dataSource": "http://users:8080/graphql"}]',
+            placeholder: '[{"field": "users", "dataSource": "http://users:8080/graphql", "cache": true}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'Persisted Queries',
+        description: 'Define persisted queries for optimization',
+        fields: [
+          {
+            id: 'persistedQueries',
+            label: 'Persisted Queries (JSON)',
+            type: 'textarea',
+            description: 'JSON object: {"query1": "query { users { id } }"}',
+            placeholder: '{"getUsers": "query { users { id name } }", "getUser": "query($id: ID!) { user(id: $id) { id name } }"}',
+            rows: 8,
+          },
+        ],
+      },
     ],
   },
   'bff-service': {
@@ -360,6 +510,36 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
           },
         ],
       },
+      {
+        id: 'aggregations',
+        title: 'Data Aggregations',
+        description: 'Define how to aggregate data from multiple upstreams',
+        fields: [
+          {
+            id: 'aggregations',
+            label: 'Aggregations (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"endpoint": "/dashboard", "upstreams": [...], "merge": "..."}]',
+            placeholder: '[{"endpoint": "/dashboard", "upstreams": ["catalog", "cart", "profile"], "merge": "combine"}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'transformations',
+        title: 'Response Transformations',
+        description: 'Define transformations for aggregated responses',
+        fields: [
+          {
+            id: 'transformations',
+            label: 'Transformations (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"endpoint": "/api", "transform": "..."}]',
+            placeholder: '[{"endpoint": "/api", "transform": "map(data => ({ id: data.id, name: data.name }))"}]',
+            rows: 8,
+          },
+        ],
+      },
     ],
   },
   'webhook-relay': {
@@ -420,6 +600,36 @@ export const INTEGRATION_PROFILES: Record<string, ComponentProfile> = {
             label: 'Transform Template',
             type: 'textarea',
             placeholder: '{ "payload": {{raw}} }',
+          },
+        ],
+      },
+      {
+        id: 'webhookEndpoints',
+        title: 'Webhook Endpoints',
+        description: 'Define multiple webhook endpoints and their configurations',
+        fields: [
+          {
+            id: 'webhookEndpoints',
+            label: 'Endpoints (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"path": "/github", "target": "...", "secret": "..."}]',
+            placeholder: '[{"path": "/github", "target": "http://ci:8080/webhook", "secret": "github-secret", "events": ["push", "pull_request"]}]',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'transformations',
+        title: 'Webhook Transformations',
+        description: 'Define transformations for different webhook sources',
+        fields: [
+          {
+            id: 'transformations',
+            label: 'Transformations (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"source": "github", "transform": "..."}]',
+            placeholder: '[{"source": "github", "transform": "map(event => ({ type: event.type, repo: event.repository.name }))"}]',
+            rows: 8,
           },
         ],
       },

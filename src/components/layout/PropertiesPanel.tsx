@@ -3,12 +3,15 @@ import { Separator } from '@/components/ui/separator';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useTabStore } from '@/store/useTabStore';
 import { ConnectionPropertiesPanel } from '@/components/config/ConnectionPropertiesPanel';
-import { Settings2, X } from 'lucide-react';
+import { Settings2, X, ExternalLink } from 'lucide-react';
 
 export function PropertiesPanel() {
   const { selectedNodeId, nodes, updateNode, selectNode, connections, updateConnection, selectedConnectionId, selectConnection } = useCanvasStore();
+  const { addTab } = useTabStore();
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const selectedConnection = connections.find((c) => c.id === selectedConnectionId);
 
@@ -35,14 +38,23 @@ export function PropertiesPanel() {
             <Settings2 className="h-4 w-4 text-muted-foreground" />
             <h2 className="text-sm font-semibold text-foreground">Connection</h2>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={() => selectConnection(null)}
-          >
-            <X className="h-4 w-4" />
-          </Button>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => selectConnection(null)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Close properties panel</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
 
         <ScrollArea className="flex-1">
@@ -64,14 +76,23 @@ export function PropertiesPanel() {
           <Settings2 className="h-4 w-4 text-muted-foreground" />
           <h2 className="text-sm font-semibold text-foreground">Properties</h2>
         </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-7 w-7"
-          onClick={() => selectNode(null)}
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => selectNode(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>Close properties panel</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       <ScrollArea className="flex-1">
@@ -151,9 +172,33 @@ export function PropertiesPanel() {
 
           <div>
             <h3 className="text-xs font-semibold mb-2">Configuration</h3>
-            <Button variant="outline" size="sm" className="w-full">
-              Open Configuration Panel
-            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full"
+                    onClick={() => {
+                      if (selectedNode) {
+                        addTab({
+                          title: `${selectedNode.data.label} Config`,
+                          type: 'component',
+                          componentId: selectedNode.id,
+                          componentType: selectedNode.type,
+                        });
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5 mr-2" />
+                    Open Configuration Panel
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Open detailed configuration in a new tab</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
           </div>
         </div>
       </ScrollArea>

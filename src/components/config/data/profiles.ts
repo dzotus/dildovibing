@@ -1,0 +1,641 @@
+import { ComponentProfile } from '@/components/config/shared/types';
+
+export const DATA_PROFILES: Record<string, ComponentProfile> = {
+  postgres: {
+    id: 'postgres',
+    title: 'PostgreSQL Database',
+    description: 'Configure PostgreSQL connection, schemas, and performance settings',
+    defaults: {
+      host: 'localhost',
+      port: 5432,
+      database: 'postgres',
+      username: 'postgres',
+      password: '',
+      maxConnections: 100,
+      poolSize: 20,
+      schema: '',
+      sslMode: 'prefer',
+      queryTimeout: 30,
+      commonQueries: '',
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'host', label: 'Host', type: 'text', placeholder: 'localhost' },
+          { id: 'port', label: 'Port', type: 'number', placeholder: '5432' },
+          { id: 'database', label: 'Database Name', type: 'text', placeholder: 'postgres' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: 'postgres' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          {
+            id: 'sslMode',
+            label: 'SSL Mode',
+            type: 'select',
+            options: [
+              { value: 'disable', label: 'Disable' },
+              { value: 'allow', label: 'Allow' },
+              { value: 'prefer', label: 'Prefer' },
+              { value: 'require', label: 'Require' },
+              { value: 'verify-ca', label: 'Verify CA' },
+              { value: 'verify-full', label: 'Verify Full' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          { id: 'maxConnections', label: 'Max Connections', type: 'number', placeholder: '100' },
+          { id: 'poolSize', label: 'Connection Pool Size', type: 'number', placeholder: '20' },
+          { id: 'queryTimeout', label: 'Query Timeout (seconds)', type: 'number', placeholder: '30' },
+        ],
+      },
+      {
+        id: 'schema',
+        title: 'Schema Definition',
+        fields: [
+          {
+            id: 'schema',
+            label: 'SQL Schema',
+            type: 'textarea',
+            placeholder: 'CREATE TABLE users (\n  id SERIAL PRIMARY KEY,\n  username VARCHAR(50),\n  email VARCHAR(100)\n);',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'tables',
+        title: 'Database Tables',
+        description: 'Define tables, columns, and relationships',
+        fields: [
+          {
+            id: 'tables',
+            label: 'Tables (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "columns": [...], "indexes": [...]}]',
+            placeholder: '[{"name": "users", "columns": [{"name": "id", "type": "SERIAL", "primary": true}, {"name": "username", "type": "VARCHAR(50)"}], "indexes": [{"columns": ["username"], "unique": true}]}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'SQL Queries',
+        fields: [
+          {
+            id: 'commonQueries',
+            label: 'Common Queries',
+            type: 'textarea',
+            placeholder: 'SELECT * FROM users WHERE active = true;\nINSERT INTO users (username, email) VALUES (\'user1\', \'user1@example.com\');',
+            rows: 8,
+          },
+        ],
+      },
+      {
+        id: 'views',
+        title: 'Database Views',
+        description: 'Define views for data access',
+        fields: [
+          {
+            id: 'views',
+            label: 'Views (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "active_users", "query": "SELECT * FROM users WHERE active = true"}]',
+            placeholder: '[{"name": "active_users", "query": "SELECT * FROM users WHERE active = true"}, {"name": "user_stats", "query": "SELECT COUNT(*) FROM users"}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  mongodb: {
+    id: 'mongodb',
+    title: 'MongoDB Database',
+    description: 'Configure MongoDB connection, collections, and replica sets',
+    defaults: {
+      connectionString: 'mongodb://localhost:27017',
+      database: 'mydb',
+      username: '',
+      password: '',
+      authSource: 'admin',
+      replicaSet: '',
+      maxPoolSize: 10,
+      minPoolSize: 1,
+      readPreference: 'primary',
+      writeConcern: 'majority',
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'connectionString', label: 'Connection String', type: 'text', placeholder: 'mongodb://localhost:27017' },
+          { id: 'database', label: 'Database Name', type: 'text', placeholder: 'mydb' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: '' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          { id: 'authSource', label: 'Auth Database', type: 'text', placeholder: 'admin' },
+          { id: 'replicaSet', label: 'Replica Set Name', type: 'text', placeholder: '' },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          { id: 'maxPoolSize', label: 'Max Pool Size', type: 'number', placeholder: '10' },
+          { id: 'minPoolSize', label: 'Min Pool Size', type: 'number', placeholder: '1' },
+          {
+            id: 'readPreference',
+            label: 'Read Preference',
+            type: 'select',
+            options: [
+              { value: 'primary', label: 'Primary' },
+              { value: 'primaryPreferred', label: 'Primary Preferred' },
+              { value: 'secondary', label: 'Secondary' },
+              { value: 'secondaryPreferred', label: 'Secondary Preferred' },
+              { value: 'nearest', label: 'Nearest' },
+            ],
+          },
+          {
+            id: 'writeConcern',
+            label: 'Write Concern',
+            type: 'select',
+            options: [
+              { value: 'majority', label: 'Majority' },
+              { value: '1', label: '1' },
+              { value: '2', label: '2' },
+              { value: '3', label: '3' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'collections',
+        title: 'Collections & Documents',
+        description: 'Define collections and their document structures',
+        fields: [
+          {
+            id: 'collections',
+            label: 'Collections (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "schema": {...}, "indexes": [...]}]',
+            placeholder: '[{"name": "users", "schema": {"id": "ObjectId", "username": "String", "email": "String"}, "indexes": [{"fields": {"username": 1}, "unique": true}]}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'aggregations',
+        title: 'Aggregation Pipelines',
+        description: 'Define MongoDB aggregation pipelines',
+        fields: [
+          {
+            id: 'aggregations',
+            label: 'Aggregation Pipelines (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "user_stats", "pipeline": [...]}]',
+            placeholder: '[{"name": "user_stats", "pipeline": [{"$match": {"active": true}}, {"$group": {"_id": "$role", "count": {"$sum": 1}}}]}]',
+            rows: 10,
+          },
+        ],
+      },
+    ],
+  },
+  redis: {
+    id: 'redis',
+    title: 'Redis Cache',
+    description: 'Configure Redis connection, persistence, and clustering',
+    defaults: {
+      host: 'localhost',
+      port: 6379,
+      password: '',
+      database: 0,
+      maxClients: 10000,
+      persistence: 'rdb',
+      ttl: 3600,
+      clusterMode: false,
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'host', label: 'Host', type: 'text', placeholder: 'localhost' },
+          { id: 'port', label: 'Port', type: 'number', placeholder: '6379' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          { id: 'database', label: 'Database Index', type: 'number', placeholder: '0' },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          { id: 'maxClients', label: 'Max Clients', type: 'number', placeholder: '10000' },
+          { id: 'ttl', label: 'Default TTL (seconds)', type: 'number', placeholder: '3600' },
+          {
+            id: 'persistence',
+            label: 'Persistence Mode',
+            type: 'select',
+            options: [
+              { value: 'none', label: 'None' },
+              { value: 'rdb', label: 'RDB' },
+              { value: 'aof', label: 'AOF' },
+              { value: 'both', label: 'RDB + AOF' },
+            ],
+          },
+          { id: 'clusterMode', label: 'Cluster Mode', type: 'toggle' },
+        ],
+      },
+      {
+        id: 'dataStructures',
+        title: 'Data Structures & Keys',
+        description: 'Define Redis keys and data structures',
+        fields: [
+          {
+            id: 'dataStructures',
+            label: 'Data Structures (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"key": "user:1", "type": "hash", "fields": {...}}]',
+            placeholder: '[{"key": "user:1", "type": "hash", "fields": {"name": "John", "email": "john@example.com"}}, {"key": "session:abc", "type": "string", "value": "...", "ttl": 3600}]',
+            rows: 10,
+          },
+        ],
+      },
+      {
+        id: 'patterns',
+        title: 'Key Patterns & Commands',
+        description: 'Define key patterns and common commands',
+        fields: [
+          {
+            id: 'patterns',
+            label: 'Patterns & Commands (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"pattern": "user:*", "commands": ["GET", "SET"]}]',
+            placeholder: '[{"pattern": "user:*", "commands": ["GET", "SET", "EXPIRE"], "description": "User data keys"}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  cassandra: {
+    id: 'cassandra',
+    title: 'Apache Cassandra',
+    description: 'Configure Cassandra cluster, keyspaces, and consistency levels',
+    defaults: {
+      contactPoints: ['localhost:9042'],
+      keyspace: 'mykeyspace',
+      username: '',
+      password: '',
+      consistencyLevel: 'QUORUM',
+      replicationFactor: 3,
+      datacenter: 'datacenter1',
+      localDc: 'datacenter1',
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'contactPoints', label: 'Contact Points', type: 'list', placeholder: 'localhost:9042' },
+          { id: 'keyspace', label: 'Keyspace', type: 'text', placeholder: 'mykeyspace' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: '' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          { id: 'localDc', label: 'Local Datacenter', type: 'text', placeholder: 'datacenter1' },
+        ],
+      },
+      {
+        id: 'cluster',
+        title: 'Cluster Settings',
+        fields: [
+          {
+            id: 'consistencyLevel',
+            label: 'Consistency Level',
+            type: 'select',
+            options: [
+              { value: 'ONE', label: 'ONE' },
+              { value: 'TWO', label: 'TWO' },
+              { value: 'THREE', label: 'THREE' },
+              { value: 'QUORUM', label: 'QUORUM' },
+              { value: 'ALL', label: 'ALL' },
+              { value: 'LOCAL_QUORUM', label: 'LOCAL_QUORUM' },
+            ],
+          },
+          { id: 'replicationFactor', label: 'Replication Factor', type: 'number', placeholder: '3' },
+          { id: 'datacenter', label: 'Datacenter Name', type: 'text', placeholder: 'datacenter1' },
+        ],
+      },
+      {
+        id: 'tables',
+        title: 'Tables & Schema',
+        description: 'Define tables with partition keys and clustering columns',
+        fields: [
+          {
+            id: 'tables',
+            label: 'Tables (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "partitionKey": [...], "clusteringColumns": [...]}]',
+            placeholder: '[{"name": "users", "partitionKey": ["user_id"], "clusteringColumns": [{"name": "created_at", "order": "DESC"}], "columns": [{"name": "user_id", "type": "UUID"}, {"name": "username", "type": "TEXT"}]}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'CQL Queries',
+        description: 'Define common CQL queries',
+        fields: [
+          {
+            id: 'queries',
+            label: 'Queries (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "get_user", "query": "SELECT * FROM users WHERE user_id = ?"}]',
+            placeholder: '[{"name": "get_user", "query": "SELECT * FROM users WHERE user_id = ?"}, {"name": "get_recent", "query": "SELECT * FROM users WHERE user_id = ? AND created_at > ?"}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  clickhouse: {
+    id: 'clickhouse',
+    title: 'ClickHouse',
+    description: 'Configure ClickHouse cluster, tables, and query settings',
+    defaults: {
+      host: 'localhost',
+      port: 8123,
+      database: 'default',
+      username: 'default',
+      password: '',
+      cluster: '',
+      maxConnections: 10,
+      compression: true,
+      queryTimeout: 300,
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'host', label: 'Host', type: 'text', placeholder: 'localhost' },
+          { id: 'port', label: 'Port', type: 'number', placeholder: '8123' },
+          { id: 'database', label: 'Database', type: 'text', placeholder: 'default' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: 'default' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          { id: 'cluster', label: 'Cluster Name', type: 'text', placeholder: '' },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          { id: 'maxConnections', label: 'Max Connections', type: 'number', placeholder: '10' },
+          { id: 'queryTimeout', label: 'Query Timeout (seconds)', type: 'number', placeholder: '300' },
+          { id: 'compression', label: 'Enable Compression', type: 'toggle' },
+        ],
+      },
+      {
+        id: 'tables',
+        title: 'Tables & Partitions',
+        description: 'Define tables with engines and partition keys',
+        fields: [
+          {
+            id: 'tables',
+            label: 'Tables (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "events", "engine": "MergeTree", "partitionBy": "toYYYYMM(date)"}]',
+            placeholder: '[{"name": "events", "engine": "MergeTree", "partitionBy": "toYYYYMM(date)", "orderBy": ["date", "user_id"], "columns": [{"name": "date", "type": "Date"}, {"name": "user_id", "type": "UInt64"}]}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'SQL Queries',
+        description: 'Define common SQL queries',
+        fields: [
+          {
+            id: 'queries',
+            label: 'Queries (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "daily_stats", "query": "SELECT ..."}]',
+            placeholder: '[{"name": "daily_stats", "query": "SELECT toDate(date) as day, count() as events FROM events GROUP BY day"}, {"name": "user_events", "query": "SELECT * FROM events WHERE user_id = ?"}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  snowflake: {
+    id: 'snowflake',
+    title: 'Snowflake Data Warehouse',
+    description: 'Configure Snowflake account, warehouse, and database settings',
+    defaults: {
+      account: 'myaccount.snowflakecomputing.com',
+      warehouse: 'COMPUTE_WH',
+      database: 'MYDB',
+      schema: 'PUBLIC',
+      username: '',
+      password: '',
+      role: 'ACCOUNTADMIN',
+      timeout: 60,
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'account', label: 'Account URL', type: 'text', placeholder: 'myaccount.snowflakecomputing.com' },
+          { id: 'warehouse', label: 'Warehouse', type: 'text', placeholder: 'COMPUTE_WH' },
+          { id: 'database', label: 'Database', type: 'text', placeholder: 'MYDB' },
+          { id: 'schema', label: 'Schema', type: 'text', placeholder: 'PUBLIC' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: '' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+          { id: 'role', label: 'Role', type: 'text', placeholder: 'ACCOUNTADMIN' },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          { id: 'timeout', label: 'Query Timeout (seconds)', type: 'number', placeholder: '60' },
+        ],
+      },
+      {
+        id: 'tables',
+        title: 'Tables & Views',
+        description: 'Define tables, views, and their schemas',
+        fields: [
+          {
+            id: 'tables',
+            label: 'Tables (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "columns": [...], "warehouse": "COMPUTE_WH"}]',
+            placeholder: '[{"name": "users", "columns": [{"name": "id", "type": "NUMBER"}, {"name": "username", "type": "VARCHAR(50)"}], "warehouse": "COMPUTE_WH"}, {"name": "user_stats", "type": "view", "query": "SELECT ..."}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'SQL Queries',
+        description: 'Define common SQL queries',
+        fields: [
+          {
+            id: 'queries',
+            label: 'Queries (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "get_users", "query": "SELECT * FROM users"}]',
+            placeholder: '[{"name": "get_users", "query": "SELECT * FROM users WHERE active = true"}, {"name": "user_analytics", "query": "SELECT COUNT(*) FROM users GROUP BY region"}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  elasticsearch: {
+    id: 'elasticsearch',
+    title: 'Elasticsearch',
+    description: 'Configure Elasticsearch cluster, indices, and search settings',
+    defaults: {
+      nodes: ['http://localhost:9200'],
+      username: '',
+      password: '',
+      index: 'myindex',
+      shards: 5,
+      replicas: 1,
+      refreshInterval: '1s',
+      maxResultWindow: 10000,
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'nodes', label: 'Node URLs', type: 'list', placeholder: 'http://localhost:9200' },
+          { id: 'username', label: 'Username', type: 'text', placeholder: '' },
+          { id: 'password', label: 'Password', type: 'password', placeholder: '••••••••' },
+        ],
+      },
+      {
+        id: 'index',
+        title: 'Index Settings',
+        fields: [
+          { id: 'index', label: 'Index Name', type: 'text', placeholder: 'myindex' },
+          { id: 'shards', label: 'Number of Shards', type: 'number', placeholder: '5' },
+          { id: 'replicas', label: 'Number of Replicas', type: 'number', placeholder: '1' },
+          { id: 'refreshInterval', label: 'Refresh Interval', type: 'text', placeholder: '1s' },
+          { id: 'maxResultWindow', label: 'Max Result Window', type: 'number', placeholder: '10000' },
+        ],
+      },
+      {
+        id: 'indices',
+        title: 'Indices & Mappings',
+        description: 'Define indices with their mappings and settings',
+        fields: [
+          {
+            id: 'indices',
+            label: 'Indices (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "mapping": {...}, "settings": {...}}]',
+            placeholder: '[{"name": "users", "mapping": {"properties": {"id": {"type": "keyword"}, "name": {"type": "text"}, "age": {"type": "integer"}}}, "settings": {"number_of_shards": 5, "number_of_replicas": 1}}]',
+            rows: 12,
+          },
+        ],
+      },
+      {
+        id: 'queries',
+        title: 'Search Queries',
+        description: 'Define common search queries',
+        fields: [
+          {
+            id: 'queries',
+            label: 'Queries (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "search_users", "query": {...}}]',
+            placeholder: '[{"name": "search_users", "query": {"match": {"name": "john"}}}, {"name": "filter_active", "query": {"term": {"active": true}}}]',
+            rows: 8,
+          },
+        ],
+      },
+    ],
+  },
+  's3-datalake': {
+    id: 's3-datalake',
+    title: 'S3 Data Lake',
+    description: 'Configure S3 buckets, paths, and access policies',
+    defaults: {
+      endpoint: 'https://s3.amazonaws.com',
+      bucket: 'my-datalake',
+      region: 'us-east-1',
+      accessKeyId: '',
+      secretAccessKey: '',
+      pathPrefix: '',
+      encryption: 'AES256',
+      versioning: false,
+    },
+    sections: [
+      {
+        id: 'connection',
+        title: 'Connection',
+        fields: [
+          { id: 'endpoint', label: 'S3 Endpoint', type: 'text', placeholder: 'https://s3.amazonaws.com' },
+          { id: 'bucket', label: 'Bucket Name', type: 'text', placeholder: 'my-datalake' },
+          { id: 'region', label: 'Region', type: 'text', placeholder: 'us-east-1' },
+          { id: 'accessKeyId', label: 'Access Key ID', type: 'text', placeholder: '' },
+          { id: 'secretAccessKey', label: 'Secret Access Key', type: 'password', placeholder: '••••••••' },
+          { id: 'pathPrefix', label: 'Path Prefix', type: 'text', placeholder: '' },
+        ],
+      },
+      {
+        id: 'storage',
+        title: 'Storage Settings',
+        fields: [
+          {
+            id: 'encryption',
+            label: 'Encryption',
+            type: 'select',
+            options: [
+              { value: 'none', label: 'None' },
+              { value: 'AES256', label: 'AES256' },
+              { value: 'aws:kms', label: 'AWS KMS' },
+            ],
+          },
+          { id: 'versioning', label: 'Enable Versioning', type: 'toggle' },
+        ],
+      },
+      {
+        id: 'partitions',
+        title: 'Data Partitions & Structure',
+        description: 'Define partition structure and data organization',
+        fields: [
+          {
+            id: 'partitions',
+            label: 'Partitions (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"path": "year=2024/month=01/", "format": "parquet", "schema": {...}}]',
+            placeholder: '[{"path": "year=2024/month=01/", "format": "parquet", "schema": {"fields": [{"name": "id", "type": "string"}, {"name": "timestamp", "type": "timestamp"}]}}, {"path": "raw/", "format": "json"}]',
+            rows: 10,
+          },
+        ],
+      },
+      {
+        id: 'dataCatalog',
+        title: 'Data Catalog',
+        description: 'Define data catalog entries and metadata',
+        fields: [
+          {
+            id: 'catalog',
+            label: 'Catalog (JSON)',
+            type: 'textarea',
+            description: 'JSON array: [{"name": "users", "path": "users/", "format": "parquet", "columns": [...]}]',
+            placeholder: '[{"name": "users", "path": "users/", "format": "parquet", "columns": [{"name": "id", "type": "string"}, {"name": "name", "type": "string"}]}, {"name": "events", "path": "events/", "format": "json"}]',
+            rows: 10,
+          },
+        ],
+      },
+    ],
+  },
+};
+

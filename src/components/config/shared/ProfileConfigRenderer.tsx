@@ -81,12 +81,21 @@ export function ProfileConfigRenderer({
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
           />
         );
+      case 'password':
+        return (
+          <Input
+            type="password"
+            value={typeof value === 'string' ? value : ''}
+            placeholder={field.placeholder}
+            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+          />
+        );
       case 'textarea':
         return (
           <Textarea
             value={typeof value === 'string' ? value : ''}
             placeholder={field.placeholder}
-            rows={4}
+            rows={field.rows || 4}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
           />
         );
