@@ -89,6 +89,19 @@
   ::selection {
     @apply bg-primary/30 text-foreground;
   }
+
+  /* Disable all transitions for Radix ScrollArea scrollbars */
+  [data-radix-scroll-area-scrollbar] {
+    transition: none !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0ms !important;
+  }
+
+  [data-radix-scroll-area-thumb] {
+    transition: none !important;
+    transition-delay: 0ms !important;
+    transition-duration: 0ms !important;
+  }
 }
 
 @layer utilities {

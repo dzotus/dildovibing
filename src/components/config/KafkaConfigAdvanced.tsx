@@ -263,16 +263,10 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Connected
-            </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              Settings
-            </Button>
-          </div>
+          <Badge variant="outline" className="gap-2">
+            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+            Connected
+          </Badge>
         </div>
 
         <Separator />

@@ -54,21 +54,61 @@ export function ConnectionLine({
     return () => clearInterval(interval);
   }, [isRunning, connection.id, getConnectionMetrics, getConnectionMessages]);
 
-  // Calculate center points of nodes (accounting for node size ~140px)
-  const sourceX = sourceNode.position.x + 70;
-  const sourceY = sourceNode.position.y + 70;
-  const targetX = targetNode.position.x + 70;
-  const targetY = targetNode.position.y + 70;
+  // Node dimensions
+  const nodeWidth = 140;
+  const nodeHeight = 100; // approximate height with padding
+  const nodeHalfWidth = nodeWidth / 2;
+  const nodeHalfHeight = nodeHeight / 2;
+
+  // Calculate center points of nodes
+  const sourceCenterX = sourceNode.position.x + nodeHalfWidth;
+  const sourceCenterY = sourceNode.position.y + nodeHalfHeight;
+  const targetCenterX = targetNode.position.x + nodeHalfWidth;
+  const targetCenterY = targetNode.position.y + nodeHalfHeight;
+
+  // Calculate angle between centers
+  const angle = Math.atan2(targetCenterY - sourceCenterY, targetCenterX - sourceCenterX);
+
+  // Calculate intersection points with node edges
+  const getEdgePoint = (centerX: number, centerY: number, angle: number, isSource: boolean) => {
+    const absAngle = Math.abs(angle);
+    const edgeAngle = Math.atan2(nodeHalfHeight, nodeHalfWidth);
+    
+    let x, y;
+    
+    // Determine which edge the line intersects
+    if (absAngle < edgeAngle || absAngle > Math.PI - edgeAngle) {
+      // Intersects left or right edge
+      const sign = isSource ? 1 : -1;
+      x = centerX + sign * nodeHalfWidth * Math.sign(Math.cos(angle));
+      y = centerY + sign * nodeHalfWidth * Math.tan(angle) * Math.sign(Math.cos(angle));
+    } else {
+      // Intersects top or bottom edge
+      const sign = isSource ? 1 : -1;
+      x = centerX + sign * nodeHalfHeight / Math.tan(angle) * Math.sign(Math.sin(angle));
+      y = centerY + sign * nodeHalfHeight * Math.sign(Math.sin(angle));
+    }
+    
+    return { x, y };
+  };
+
+  const sourceEdge = getEdgePoint(sourceCenterX, sourceCenterY, angle, true);
+  const targetEdge = getEdgePoint(targetCenterX, targetCenterY, angle, false);
+
+  const sourceX = sourceEdge.x;
+  const sourceY = sourceEdge.y;
+  const targetX = targetEdge.x;
+  const targetY = targetEdge.y;
 
   // Create bezier curve for smoother connections
   const deltaX = targetX - sourceX;
   const deltaY = targetY - sourceY;
-  const controlPointOffset = Math.abs(deltaX) * 0.3;
+  const controlPointOffset = Math.min(Math.abs(deltaX), Math.abs(deltaY)) * 0.3 + 30;
 
   const path = `
     M ${sourceX},${sourceY}
-    C ${sourceX + controlPointOffset},${sourceY}
-      ${targetX - controlPointOffset},${targetY}
+    C ${sourceX + controlPointOffset * Math.sign(deltaX)},${sourceY}
+      ${targetX - controlPointOffset * Math.sign(deltaX)},${targetY}
       ${targetX},${targetY}
   `;
 
@@ -123,8 +163,11 @@ export function ConnectionLine({
     onContextMenu?.(e);
   };
 
-  // Animation for traffic flow
-  const dashOffset = isRunning && metrics ? metrics.effectiveThroughput % 20 : 0;
+  // Animation for traffic flow (speed based on throughput, clamped)
+  const dashOffset =
+    isRunning && metrics && metrics.effectiveThroughput > 0
+      ? (metrics.effectiveThroughput % 40) / 2
+      : 0;
 
   return (
     <g>
@@ -141,7 +184,7 @@ export function ConnectionLine({
         onMouseLeave={() => setIsHovered(false)}
       />
       
-      {/* Traffic flow animation (dashed line moving along connection) - only for active connections */}
+      {/* Traffic flow animation (subtle dashed overlay) - only for active connections */}
       {isRunning && metrics && metrics.effectiveThroughput > 0 && metrics.traffic > 0 && (
         <path
           d={path}
@@ -238,10 +281,10 @@ export function ConnectionLine({
         }}
       />
       
-      {/* Connection metadata label - show real metrics when running, config when not */}
-      {isRunning && metrics ? (
+      {/* Connection metadata label - minimal, only when useful */}
+      {isRunning && metrics && (metrics.effectiveThroughput > 0 || metrics.traffic > 0) ? (
         <g>
-          {/* Real latency from metrics (includes network latency from config) - always show */}
+          {/* Latency or label */}
           <text
             x={(sourceX + targetX) / 2}
             y={(sourceY + targetY) / 2 - 10 / zoom}
@@ -253,90 +296,38 @@ export function ConnectionLine({
           >
             {connection.label || `${metrics.latency.toFixed(1)}ms`}
           </text>
-          
-          {/* Real traffic/throughput (affected by bandwidth) - only show if active */}
-          {(metrics.effectiveThroughput > 0 || metrics.traffic > 0) && (
-            <>
-              <text
-                x={(sourceX + targetX) / 2}
-                y={(sourceY + targetY) / 2 + 8 / zoom}
-                fill="hsl(var(--muted-foreground))"
-                fontSize={Math.max(7, 9 / zoom)}
-                textAnchor="middle"
-                style={{ pointerEvents: 'none', userSelect: 'none' }}
-              >
-                {metrics.traffic > 0 ? `${metrics.traffic.toFixed(1)} KB/s` : `${metrics.effectiveThroughput.toFixed(0)} msg/s`}
-              </text>
-              
-              {/* Show bandwidth limit if it's constraining throughput */}
-              {connection.data?.bandwidthMbps && metrics.traffic > 0 && (
-                <text
-                  x={(sourceX + targetX) / 2}
-                  y={(sourceY + targetY) / 2 + 20 / zoom}
-                  fill="hsl(var(--muted-foreground))"
-                  fontSize={Math.max(6, 8 / zoom)}
-                  textAnchor="middle"
-                  style={{ pointerEvents: 'none', userSelect: 'none', opacity: 0.7 }}
-                >
-                  Limit: {connection.data.bandwidthMbps}Mbps
-                </text>
-              )}
-            </>
-          )}
-          
-          {/* Interaction metrics overlay - only show for active connections */}
-          {(metrics.effectiveThroughput > 0 || metrics.traffic > 0) && (
-            <g>
-              {/* Backpressure indicator */}
-              {metrics.backpressure > 0.5 && (
-                <text
-                  x={(sourceX + targetX) / 2}
-                  y={(sourceY + targetY) / 2 + (metrics.traffic > 0 ? 32 : 20) / zoom}
-                  fill="hsl(25 95% 53%)"
-                  fontSize={Math.max(7, 8 / zoom)}
-                  textAnchor="middle"
-                  fontWeight="600"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  ⚠ Backpressure {(metrics.backpressure * 100).toFixed(0)}%
-                </text>
-              )}
-              
-              {/* Bottleneck indicator */}
-              {metrics.bottleneck && (
-                <text
-                  x={(sourceX + targetX) / 2}
-                  y={(sourceY + targetY) / 2 + (metrics.backpressure > 0.5 ? 50 : (metrics.traffic > 0 ? 32 : 20)) / zoom}
-                  fill="hsl(0 84% 60%)"
-                  fontSize={Math.max(7, 8 / zoom)}
-                  textAnchor="middle"
-                  fontWeight="700"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  🚨 BOTTLENECK
-                </text>
-              )}
-              
-              {/* Dependency indicator */}
-              {metrics.throughputDependency > 0.7 && !metrics.bottleneck && (
-                <text
-                  x={(sourceX + targetX) / 2}
-                  y={(sourceY + targetY) / 2 + (metrics.traffic > 0 ? 32 : 20) / zoom}
-                  fill="hsl(142 76% 36%)"
-                  fontSize={Math.max(7, 8 / zoom)}
-                  textAnchor="middle"
-                  fontWeight="500"
-                  style={{ pointerEvents: 'none', userSelect: 'none' }}
-                >
-                  High Dependency {(metrics.throughputDependency * 100).toFixed(0)}%
-                </text>
-              )}
-            </g>
+
+          {/* Throughput or traffic */}
+          <text
+            x={(sourceX + targetX) / 2}
+            y={(sourceY + targetY) / 2 + 8 / zoom}
+            fill="hsl(var(--muted-foreground))"
+            fontSize={Math.max(7, 9 / zoom)}
+            textAnchor="middle"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {metrics.traffic > 0
+              ? `${metrics.traffic.toFixed(1)} KB/s`
+              : `${metrics.effectiveThroughput.toFixed(0)} msg/s`}
+          </text>
+
+          {/* Optional bandwidth limit if it's constraining */}
+          {connection.data?.bandwidthMbps && metrics.traffic > 0 && (
+            <text
+              x={(sourceX + targetX) / 2}
+              y={(sourceY + targetY) / 2 + 20 / zoom}
+              fill="hsl(var(--muted-foreground))"
+              fontSize={Math.max(6, 8 / zoom)}
+              textAnchor="middle"
+              style={{ pointerEvents: 'none', userSelect: 'none', opacity: 0.7 }}
+            >
+              Limit: {connection.data.bandwidthMbps}Mbps
+            </text>
           )}
         </g>
       ) : connection.label ? (
         <g>
-          {/* Show only label when not running */}
+          {/* Show only label when not running or no activity */}
           <text
             x={(sourceX + targetX) / 2}
             y={(sourceY + targetY) / 2 - 10 / zoom}

@@ -11,14 +11,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-interface GroupNameDialogProps {
+interface CollectionNameDialogProps {
   open: boolean;
   initialName?: string;
   onConfirm: (name: string) => void;
   onCancel: () => void;
 }
 
-export function GroupNameDialog({ open, initialName = '', onConfirm, onCancel }: GroupNameDialogProps) {
+export function CollectionNameDialog({ open, initialName = '', onConfirm, onCancel }: CollectionNameDialogProps) {
   const [name, setName] = React.useState(initialName);
 
   React.useEffect(() => {
@@ -37,15 +37,15 @@ export function GroupNameDialog({ open, initialName = '', onConfirm, onCancel }:
     <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onCancel()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{initialName ? 'Rename Group' : 'Create Group'}</DialogTitle>
+          <DialogTitle>{initialName ? 'Rename Collection' : 'Create Collection'}</DialogTitle>
           <DialogDescription>
-            {initialName ? 'Enter a new name for the group' : 'Enter a name for the new group'}
+            {initialName ? 'Enter a new name for the collection' : 'Enter a name for the new collection'}
           </DialogDescription>
         </DialogHeader>
         <div className="py-4">
-          <Label htmlFor="group-name">Group Name</Label>
+          <Label htmlFor="collection-name">Collection Name</Label>
           <Input
-            id="group-name"
+            id="collection-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => {

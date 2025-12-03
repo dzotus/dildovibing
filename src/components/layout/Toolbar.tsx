@@ -3,16 +3,12 @@ import { Separator } from '@/components/ui/separator';
 import { EmulationPanel } from '@/components/emulation/EmulationPanel';
 import { ComponentSearch } from '@/components/canvas/ComponentSearch';
 import {
-  MousePointer2,
-  Move,
-  Workflow,
   ZoomIn,
   ZoomOut,
   Maximize2,
   Save,
   Download,
   Upload,
-  Play,
   Settings,
   Undo2,
   Redo2,
@@ -43,8 +39,24 @@ import { Input } from '@/components/ui/input';
 import { GroupNameDialog } from '@/components/ui/group-name-dialog';
 
 export function Toolbar() {
-  const { zoom, setZoom, diagramName, setDiagramName, saveDiagram, loadDiagramState, undo, redo, selectedNodeId, createGroupFromSelection, autoGroupByConnections } =
-    useCanvasStore();
+  const {
+    zoom,
+    setZoom,
+    diagramName,
+    setDiagramName,
+    saveDiagram,
+    loadDiagramState,
+    undo,
+    redo,
+    selectedNodeId,
+    createGroupFromSelection,
+    autoGroupByConnections,
+    nodes,
+    pan,
+    setPan,
+    viewportWidth,
+    viewportHeight,
+  } = useCanvasStore();
   const { canUndo, canRedo } = useHistoryStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
@@ -54,7 +66,49 @@ export function Toolbar() {
 
   const handleZoomIn = () => setZoom(Math.min(zoom + 0.1, 2));
   const handleZoomOut = () => setZoom(Math.max(zoom - 0.1, 0.5));
-  const handleZoomReset = () => setZoom(1);
+  const handleZoomReset = () => {
+    const allNodes = nodes;
+    if (!allNodes.length) {
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      return;
+    }
+
+    // Compute world bounds of all nodes (including size 140x140)
+    const padding = 100;
+    const xs1 = allNodes.map((n) => n.position.x);
+    const ys1 = allNodes.map((n) => n.position.y);
+    const xs2 = allNodes.map((n) => n.position.x + 140);
+    const ys2 = allNodes.map((n) => n.position.y + 140);
+
+    const minX = Math.min(...xs1) - padding;
+    const minY = Math.min(...ys1) - padding;
+    const maxX = Math.max(...xs2) + padding;
+    const maxY = Math.max(...ys2) + padding;
+
+    const worldWidth = maxX - minX;
+    const worldHeight = maxY - minY;
+
+    const vw = viewportWidth || window.innerWidth;
+    const vh = viewportHeight || (window.innerHeight - 56);
+
+    const scaleX = vw / worldWidth;
+    const scaleY = vh / worldHeight;
+    let newZoom = Math.min(scaleX, scaleY);
+    newZoom = Math.min(Math.max(newZoom, 0.2), 2.5);
+
+    // Center bounds in viewport (canvas viewport coordinates)
+    const worldCenterX = minX + worldWidth / 2;
+    const worldCenterY = minY + worldHeight / 2;
+    const viewCenterX = vw / 2;
+    const viewCenterY = vh / 2;
+
+    const newPanX = viewCenterX - worldCenterX * newZoom;
+    const newPanY = viewCenterY - worldCenterY * newZoom;
+
+    setZoom(newZoom);
+    setPan({ x: newPanX, y: newPanY });
+  };
 
   const handleSave = () => {
     saveDiagram();
@@ -139,6 +193,12 @@ export function Toolbar() {
 
   return (
     <>
+      <GroupNameDialog
+        open={showGroupNameDialog}
+        onConfirm={handleGroupNameConfirm}
+        onCancel={() => setShowGroupNameDialog(false)}
+      />
+
       <div className="h-14 bg-toolbar-bg border-b border-border flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
           <button
@@ -151,17 +211,7 @@ export function Toolbar() {
           </button>
           <Separator orientation="vertical" className="h-6 mx-2" />
 
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" className="h-9 w-9" title="Select">
-              <MousePointer2 className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-9 w-9" title="Pan">
-              <Move className="h-4 w-4" />
-            </Button>
-            <Button variant="ghost" size="icon" className="h-9 w-9" title="Connect">
-              <Workflow className="h-4 w-4" />
-            </Button>
-          </div>
+          {/* Tool mode buttons were decorative and Connect mode is removed as requested */}
 
           <Separator orientation="vertical" className="h-6 mx-2" />
 
@@ -332,7 +382,7 @@ export function Toolbar() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Diagram name"
-              onKeyPress={(e) => {
+              onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   handleRenameSave();
                 }

@@ -21,15 +21,15 @@ export function GroupDeleteDialog({ open, groupName, onConfirm, onCancel }: Grou
     <AlertDialog open={open} onOpenChange={(isOpen) => !isOpen && onCancel()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Удалить группу?</AlertDialogTitle>
+          <AlertDialogTitle>Delete Group?</AlertDialogTitle>
           <AlertDialogDescription>
-            Вы уверены, что хотите удалить группу "{groupName}"? Это действие нельзя отменить.
+            Are you sure you want to delete the group "{groupName}"? This action cannot be undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={onCancel}>Отмена</AlertDialogCancel>
+          <AlertDialogCancel onClick={onCancel}>Cancel</AlertDialogCancel>
           <AlertDialogAction onClick={onConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-            Удалить
+            Delete
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>

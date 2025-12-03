@@ -75,23 +75,23 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
   return (
     <div className="space-y-4">
       <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">Соединение</h3>
+        <h3 className="text-sm font-semibold text-foreground">Connection</h3>
         <div className="text-xs text-muted-foreground space-y-1">
-          <div>От: {connection.source}</div>
-          <div>К: {connection.target}</div>
-          <div>Тип: {connection.type}</div>
+          <div>From: {connection.source}</div>
+          <div>To: {connection.target}</div>
+          <div>Type: {connection.type}</div>
         </div>
       </div>
 
       <div className="border-t border-border pt-4 space-y-4">
         {/* Network Parameters Section */}
         <div>
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Сетевые параметры</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Network Parameters</h4>
 
           {/* Latency */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Задержка (ms)</Label>
+              <Label className="text-xs">Latency (ms)</Label>
               <span className="text-xs font-mono text-primary">{config.latencyMs ?? 0}</span>
             </div>
             <Slider
@@ -114,7 +114,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           {/* Bandwidth */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Пропускная способность (Mbps)</Label>
+              <Label className="text-xs">Bandwidth (Mbps)</Label>
               <span className="text-xs font-mono text-primary">{config.bandwidthMbps ?? 1000}</span>
             </div>
             <Slider
@@ -137,7 +137,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           {/* Packet Loss */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Потеря пакетов (%)</Label>
+              <Label className="text-xs">Packet Loss (%)</Label>
               <span className="text-xs font-mono text-primary">{config.packetLossPercent ?? 0}</span>
             </div>
             <Slider
@@ -161,7 +161,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           {/* Jitter */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Дрожание (ms)</Label>
+              <Label className="text-xs">Jitter (ms)</Label>
               <span className="text-xs font-mono text-primary">{config.jitterMs ?? 0}</span>
             </div>
             <Slider
@@ -184,11 +184,11 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
 
         {/* Traffic Characteristics Section */}
         <div className="border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Характеристики трафика</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Traffic Characteristics</h4>
 
           {/* Priority Level */}
           <div className="space-y-2 mb-4">
-            <Label className="text-xs">Уровень приоритета</Label>
+            <Label className="text-xs">Priority Level</Label>
             <Select
               value={config.priorityLevel || 'medium'}
               onValueChange={(value) => updateConfig({ priorityLevel: value as any })}
@@ -197,10 +197,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="low">Низкий</SelectItem>
-                <SelectItem value="medium">Средний</SelectItem>
-                <SelectItem value="high">Высокий</SelectItem>
-                <SelectItem value="critical">Критический</SelectItem>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="critical">Critical</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -208,7 +208,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           {/* Retry Count */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Количество повторов</Label>
+              <Label className="text-xs">Retry Count</Label>
               <span className="text-xs font-mono text-primary">{config.retryCount ?? 3}</span>
             </div>
             <Slider
@@ -231,7 +231,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           {/* Timeout */}
           <div className="space-y-2 mb-4">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Таймаут (ms)</Label>
+              <Label className="text-xs">Timeout (ms)</Label>
               <span className="text-xs font-mono text-primary">{config.timeoutMs ?? 30000}</span>
             </div>
             <Slider
@@ -254,10 +254,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
 
         {/* Monitoring Section */}
         <div className="border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Мониторинг</h4>
+          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Monitoring</h4>
 
           <div className="flex items-center justify-between p-3 bg-accent/20 rounded-md">
-            <Label className="text-xs cursor-pointer">Включить мониторинг</Label>
+            <Label className="text-xs cursor-pointer">Enable Monitoring</Label>
             <Switch
               checked={config.enableMonitoring ?? false}
               onCheckedChange={(value) => updateConfig({ enableMonitoring: value })}
@@ -269,13 +269,13 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
         <Card className="bg-card/50 border-border/50 p-3 mt-4">
           <div className="text-xs space-y-1 text-muted-foreground">
             <div className="flex justify-between">
-              <span>Эффективная пропускная способность:</span>
+              <span>Effective Bandwidth:</span>
               <span className="font-mono">
                 {Math.max(1, (config.bandwidthMbps ?? 1000) * (1 - (config.packetLossPercent ?? 0) / 100)).toFixed(2)} Mbps
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Эффективная задержка:</span>
+              <span>Effective Latency:</span>
               <span className="font-mono">{((config.latencyMs ?? 0) + (config.jitterMs ?? 0) / 2).toFixed(0)} ms</span>
             </div>
           </div>
@@ -288,11 +288,11 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
               <TabsList className="grid w-full grid-cols-2">
                 <TabsTrigger value="active" className="text-xs">
                   <Activity className="h-3 w-3 mr-1" />
-                  Активные ({messages.length})
+                  Active ({messages.length})
                 </TabsTrigger>
                 <TabsTrigger value="history" className="text-xs">
                   <FileText className="h-3 w-3 mr-1" />
-                  История ({messageHistory.length})
+                  History ({messageHistory.length})
                 </TabsTrigger>
               </TabsList>
 
@@ -300,7 +300,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                 {messages.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground text-xs">
                     <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>Нет активных сообщений</p>
+                    <p>No active messages</p>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -325,9 +325,9 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                               </Badge>
                             </div>
                             <div className="text-xs text-muted-foreground space-y-0.5">
-                              <div>Размер: {(msg.size / 1024).toFixed(2)} KB</div>
+                              <div>Size: {(msg.size / 1024).toFixed(2)} KB</div>
                               {msg.latency && (
-                                <div>Задержка: {msg.latency.toFixed(0)} ms</div>
+                                <div>Latency: {msg.latency.toFixed(0)} ms</div>
                               )}
                             </div>
                             {msg.error && (
@@ -341,7 +341,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                         {msg.payload && (
                           <details className="mt-2">
                             <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
-                              Показать данные
+                              Show Data
                             </summary>
                             <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
                               {JSON.stringify(msg.payload, null, 2)}
@@ -358,7 +358,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                 {messageHistory.length === 0 ? (
                   <div className="text-center py-6 text-muted-foreground text-xs">
                     <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                    <p>История пуста</p>
+                    <p>History is empty</p>
                   </div>
                 ) : (
                   <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -385,9 +385,9 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                               </span>
                             </div>
                             <div className="text-xs text-muted-foreground space-y-0.5">
-                              <div>Размер: {(msg.size / 1024).toFixed(2)} KB</div>
+                              <div>Size: {(msg.size / 1024).toFixed(2)} KB</div>
                               {msg.latency && (
-                                <div>Задержка: {msg.latency.toFixed(0)} ms</div>
+                                <div>Latency: {msg.latency.toFixed(0)} ms</div>
                               )}
                             </div>
                             {msg.error && (
@@ -401,7 +401,7 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                         {msg.payload && (
                           <details className="mt-2">
                             <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
-                              Показать данные
+                              Show Data
                             </summary>
                             <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
                               {JSON.stringify(msg.payload, null, 2)}

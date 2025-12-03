@@ -249,7 +249,13 @@ export function DiagnosticsPanel() {
               </div>
             ) : (
               filteredProblems.map((problem, index) => (
-                <Card key={index} className="border-l-4 border-l-red-500">
+                <Card key={index} className={`border-l-4 ${
+                  problem.severity === 'critical' 
+                    ? 'border-l-red-500' 
+                    : problem.severity === 'warning' 
+                    ? 'border-l-yellow-500' 
+                    : 'border-l-blue-500'
+                }`}>
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-2">

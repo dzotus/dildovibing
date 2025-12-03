@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ComponentGroup as ComponentGroupType } from '@/types';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { GroupContextMenu } from './GroupContextMenu';
@@ -17,6 +17,9 @@ export function ComponentGroup({ group, zoom }: ComponentGroupProps) {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useState<{ x: number; y: number }>({ x: 0, y: 0 })[0];
+  const initialPositionsRef = useState<Record<string, { x: number; y: number }>>({})[0];
   
   // Calculate group bounds from nodes
   const bounds = useMemo(() => {
@@ -48,10 +51,59 @@ export function ComponentGroup({ group, zoom }: ComponentGroupProps) {
     e.preventDefault();
     e.stopPropagation();
     selectGroup(group.id);
-    if (onContextMenu) {
-      onContextMenu(group.id, e.clientX, e.clientY);
-    }
+    setContextMenu({ x: e.clientX, y: e.clientY });
   };
+
+  const handleBackgroundMouseDown = (e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    selectGroup(group.id);
+
+    // Start dragging entire group
+    setIsDragging(true);
+    dragStartRef.x = e.clientX;
+    dragStartRef.y = e.clientY;
+
+    // Capture initial positions of nodes in this group
+    const groupNodes = nodes.filter((node) => group.nodeIds.includes(node.id));
+    groupNodes.forEach((node) => {
+      initialPositionsRef[node.id] = { ...node.position };
+    });
+  };
+
+  // Global mousemove/mouseup handlers for group drag
+  useEffect(() => {
+    if (!isDragging) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const dx = (e.clientX - dragStartRef.x) / zoom;
+      const dy = (e.clientY - dragStartRef.y) / zoom;
+
+      // Move all nodes in the group
+      group.nodeIds.forEach((nodeId) => {
+        const initial = initialPositionsRef[nodeId];
+        if (!initial) return;
+        useCanvasStore.getState().updateNode(nodeId, {
+          position: {
+            x: initial.x + dx,
+            y: initial.y + dy,
+          },
+        }, true);
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDragging, dragStartRef, initialPositionsRef, group.nodeIds, zoom]);
 
   const handleDelete = () => {
     setShowDeleteDialog(true);
@@ -98,67 +150,78 @@ export function ComponentGroup({ group, zoom }: ComponentGroupProps) {
             cursor: 'pointer',
             transition: 'all 0.2s',
           }}
+          onMouseDown={handleBackgroundMouseDown}
+          onContextMenu={handleContextMenu}
+        />
+
+        {/* Group label - fixed position at top-left */}
+        <g
           onClick={(e) => {
             e.stopPropagation();
             selectGroup(group.id);
           }}
           onContextMenu={handleContextMenu}
-        />
-
-      {/* Group label - fixed position at top-left */}
-      <g
-        onClick={(e) => {
-          e.stopPropagation();
-          selectGroup(group.id);
-        }}
-        onContextMenu={handleContextMenu}
-        style={{ cursor: 'pointer' }}
-      >
-        <rect
-          x={bounds.x + 10 / zoom}
-          y={bounds.y + 10 / zoom}
-          width={Math.max(100, (group.name.length * 7 + 30) / zoom)}
-          height={28 / zoom}
-          fill={groupColor}
-          fillOpacity={0.95}
-          rx={4 / zoom}
-          ry={4 / zoom}
-        />
-        <text
-          x={bounds.x + 15 / zoom}
-          y={bounds.y + 27 / zoom}
-          fill="white"
-          fontSize={12 / zoom}
-          fontWeight="600"
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
+          style={{ cursor: 'pointer' }}
         >
-          {group.name}
-        </text>
-        <text
-          x={bounds.x + 15 / zoom + (group.name.length * 7) / zoom + 5 / zoom}
-          y={bounds.y + 27 / zoom}
-          fill="white"
-          fontSize={10 / zoom}
-          style={{ pointerEvents: 'none', userSelect: 'none' }}
-        >
-          ({group.nodeIds.length})
-        </text>
+          <rect
+            x={bounds.x + 10 / zoom}
+            y={bounds.y + 10 / zoom}
+            width={Math.max(100, (group.name.length * 7 + 30) / zoom)}
+            height={28 / zoom}
+            fill={groupColor}
+            fillOpacity={0.95}
+            rx={4 / zoom}
+            ry={4 / zoom}
+          />
+          <text
+            x={bounds.x + 15 / zoom}
+            y={bounds.y + 27 / zoom}
+            fill="white"
+            fontSize={12 / zoom}
+            fontWeight="600"
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            {group.name}
+          </text>
+          <text
+            x={bounds.x + 15 / zoom + (group.name.length * 7) / zoom + 5 / zoom}
+            y={bounds.y + 27 / zoom}
+            fill="white"
+            fontSize={10 / zoom}
+            style={{ pointerEvents: 'none', userSelect: 'none' }}
+          >
+            ({group.nodeIds.length})
+          </text>
+        </g>
       </g>
-    </g>
 
-    <GroupDeleteDialog
-      open={showDeleteDialog}
-      groupName={group.name}
-      onConfirm={handleDeleteConfirm}
-      onCancel={() => setShowDeleteDialog(false)}
-    />
+      {/* Context menu for group */}
+      {contextMenu && (
+        <GroupContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onDelete={handleDelete}
+          onRename={handleRename}
+          onCopyId={handleCopyId}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
 
-    <GroupNameDialog
-      open={showRenameDialog}
-      initialName={group.name}
-      onConfirm={handleRenameConfirm}
-      onCancel={() => setShowRenameDialog(false)}
-    />
+      {/* Delete confirmation dialog */}
+      <GroupDeleteDialog
+        open={showDeleteDialog}
+        groupName={group.name}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setShowDeleteDialog(false)}
+      />
+
+      {/* Rename dialog */}
+      <GroupNameDialog
+        open={showRenameDialog}
+        initialName={group.name}
+        onConfirm={handleRenameConfirm}
+        onCancel={() => setShowRenameDialog(false)}
+      />
     </>
   );
 }

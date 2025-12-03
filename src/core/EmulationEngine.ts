@@ -79,6 +79,7 @@ export class EmulationEngine {
   private isRunning: boolean = false;
   private simulationTime: number = 0;
   private baseTime: number = Date.now();
+  private pausedTime: number = 0; // Time accumulated before pause
   private updateInterval: number = 100; // ms
   private intervalId: NodeJS.Timeout | null = null;
   
@@ -224,7 +225,8 @@ export class EmulationEngine {
     if (this.isRunning) return;
     
     this.isRunning = true;
-    this.baseTime = Date.now();
+    // Continue from where we paused, not from 0
+    this.baseTime = Date.now() - this.pausedTime;
     
     // Start data flow engine
     dataFlowEngine.start();
@@ -238,7 +240,12 @@ export class EmulationEngine {
    * Stop the emulation simulation
    */
   public stop() {
+    if (!this.isRunning) return;
+    
     this.isRunning = false;
+    // Save current simulation time so we can resume later
+    this.pausedTime = this.simulationTime;
+    
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
@@ -246,6 +253,17 @@ export class EmulationEngine {
     
     // Stop data flow engine
     dataFlowEngine.stop();
+  }
+  
+  /**
+   * Reset the simulation to initial state
+   */
+  public resetSimulation() {
+    this.stop();
+    this.simulationTime = 0;
+    this.pausedTime = 0;
+    this.baseTime = Date.now();
+    this.initializeMetrics();
   }
 
   /**
@@ -354,6 +372,9 @@ export class EmulationEngine {
     let totalCascadeLatency = 0;
     let totalDependencyWeight = 0;
     
+    // Store base latency before cascade effects (the latency set by component-specific simulation)
+    const baseLatency = metrics.latency;
+    
     for (const conn of incomingConnections) {
       const sourceMetrics = this.metrics.get(conn.source);
       const connMetrics = this.connectionMetrics.get(conn.id);
@@ -369,9 +390,10 @@ export class EmulationEngine {
       const cascadeError = sourceMetrics.errorRate * weight * 0.3; // 30% of source errors cascade
       totalCascadeErrorRate += cascadeError * weight;
       
-      // Cascade latency: delays from source add to target latency
-      // If source is slow, target waits for it
-      const cascadeLatency = sourceMetrics.latency * weight * 0.2; // 20% of source latency cascades
+      // Cascade latency: use only the BASE latency portion from source to avoid accumulation
+      // We estimate base latency as min(sourceLatency, 500) to avoid using already-accumulated values
+      const sourceBaseLatency = Math.min(sourceMetrics.latency, 500);
+      const cascadeLatency = sourceBaseLatency * weight * 0.2; // 20% of source latency cascades
       totalCascadeLatency += cascadeLatency * weight;
       
       // If source is down or critical, significantly affect target
@@ -388,12 +410,21 @@ export class EmulationEngine {
       totalCascadeLatency /= totalDependencyWeight;
     }
     
+    // Cap cascade latency to prevent unbounded growth
+    const maxCascadeLatency = 500; // Maximum 500ms of cascade latency
+    totalCascadeLatency = Math.min(totalCascadeLatency, maxCascadeLatency);
+    
     // Apply cascade effects to metrics
     // Error rate: add cascade errors (capped at reasonable level)
     metrics.errorRate = Math.min(1, metrics.errorRate + totalCascadeErrorRate);
     
-    // Latency: add cascade delays
-    metrics.latency += totalCascadeLatency;
+    // Latency: add cascade delays to base latency (not accumulated)
+    // This ensures latency = baseLatency + cascadeEffect, not infinite accumulation
+    metrics.latency = baseLatency + totalCascadeLatency;
+    
+    // Cap total latency to a reasonable maximum
+    const maxTotalLatency = 10000; // Maximum 10 seconds
+    metrics.latency = Math.min(metrics.latency, maxTotalLatency);
     
     // Utilization: if dependencies are slow, this component may wait
     // This increases effective utilization

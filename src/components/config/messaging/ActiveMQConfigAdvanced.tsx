@@ -474,7 +474,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                   value={queue.name}
                                   onChange={(e) => updateQueue(index, 'name', e.target.value)}
                                   onBlur={() => setEditingQueueIndex(null)}
-                                  onKeyPress={(e) => {
+                                  onKeyDown={(e) => {
                                     if (e.key === 'Enter') setEditingQueueIndex(null);
                                   }}
                                   className="h-7"
@@ -565,7 +565,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                   value={topic.name}
                                   onChange={(e) => updateTopic(index, 'name', e.target.value)}
                                   onBlur={() => setEditingTopicIndex(null)}
-                                  onKeyPress={(e) => {
+                                  onKeyDown={(e) => {
                                     if (e.key === 'Enter') setEditingTopicIndex(null);
                                   }}
                                   className="h-7"

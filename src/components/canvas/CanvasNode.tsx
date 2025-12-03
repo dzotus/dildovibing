@@ -51,8 +51,8 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     (metrics.utilization && metrics.utilization > 0.01)
   );
   
-  // Heat map color based on utilization - only for connected components with activity
-  const getHeatMapColor = () => {
+  // Heat map border color based on utilization - only for connected components with activity
+  const getHeatMapBorderColor = () => {
     if (!isRunning || !metrics || !hasConnections || !hasActivity) return '';
     
     const utilization = metrics.utilization || 0;
@@ -62,13 +62,13 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     const heatValue = Math.min(1, utilization * 0.7 + errorRate * 0.3);
     
     if (heatValue > 0.8) {
-      return 'bg-red-500/20 border-red-500/30';
+      return 'border-red-500';
     } else if (heatValue > 0.6) {
-      return 'bg-orange-500/20 border-orange-500/30';
+      return 'border-orange-500';
     } else if (heatValue > 0.4) {
-      return 'bg-yellow-500/20 border-yellow-500/30';
+      return 'border-yellow-500';
     } else if (heatValue > 0.2) {
-      return 'bg-green-500/20 border-green-500/30';
+      return 'border-green-500';
     }
     return '';
   };
@@ -122,7 +122,7 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
       switch (componentState.state) {
         case 'disabled':
         case 'failed':
-          return 'border-red-500 border-2 opacity-50';
+          return 'border-red-500 border-2';
         case 'degraded':
           return 'border-yellow-500 border-2';
         case 'enabled':
@@ -150,13 +150,6 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     }
   };
   
-  // Get background opacity for disabled/failed components
-  const getOpacity = () => {
-    if (componentState && (componentState.state === 'disabled' || componentState.state === 'failed')) {
-      return 'opacity-50';
-    }
-    return '';
-  };
 
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
@@ -204,20 +197,20 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   }, [node.id, updateNode, startDragOperation, endDragOperation]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 0) {
-      // Multi-select with Ctrl/Cmd
-      const multiSelect = e.ctrlKey || e.metaKey;
-      selectNode(node.id, multiSelect);
-      
-      dragOffsetRef.current = {
-        x: e.clientX - node.position.x,
-        y: e.clientY - node.position.y,
-      };
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
-      isPointerDownRef.current = true;
-      dragInitiatedRef.current = false;
-      e.stopPropagation();
-    }
+    if (e.button !== 0) return;
+
+    // Multi-select with Ctrl/Cmd
+    const multiSelect = e.ctrlKey || e.metaKey;
+    selectNode(node.id, multiSelect);
+
+    dragOffsetRef.current = {
+      x: e.clientX - node.position.x,
+      y: e.clientY - node.position.y,
+    };
+    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    isPointerDownRef.current = true;
+    dragInitiatedRef.current = false;
+    e.stopPropagation();
   };
 
   const handleDoubleClick = (e: React.MouseEvent) => {
@@ -254,7 +247,7 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
 
   const handleDelete = () => {
     deleteNode(node.id);
-    toast.success('Элемент удалён');
+    toast.success('Element deleted');
   };
 
   const handleDuplicate = () => {
@@ -273,12 +266,12 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     }
 
     addNode(duplicatedNode);
-    toast.success('Элемент дублирован');
+    toast.success('Element duplicated');
   };
 
   const handleCopyId = () => {
     navigator.clipboard.writeText(node.id);
-    toast.success('ID скопирован в буфер обмена');
+    toast.success('ID copied to clipboard');
   };
 
   const handleConnectionPointMouseDown = (e: React.MouseEvent) => {
@@ -289,6 +282,14 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   const handleConnectionPointMouseUp = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (isConnecting) {
+      onConnectionEnd?.();
+    }
+  };
+
+  // Allow connection to complete when mouse is released anywhere on the node
+  const handleNodeMouseUp = (e: React.MouseEvent) => {
+    if (isConnecting) {
+      e.stopPropagation();
       onConnectionEnd?.();
     }
   };
@@ -307,6 +308,7 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
           top: `${node.position.y}px`,
         }}
         onMouseDown={handleMouseDown}
+        onMouseUp={handleNodeMouseUp}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         onKeyDown={handleKeyDown}
@@ -316,10 +318,9 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
           className={cn(
             "bg-card border-2 rounded-lg p-4 min-w-[140px] relative",
             getBorderColor(),
-            getHeatMapColor(),
+            getHeatMapBorderColor(),
             "hover:border-primary/50 transition-colors",
             componentStatus?.criticalPath && "shadow-lg shadow-purple-500/20",
-            getOpacity(),
             isHighlighted && "ring-4 ring-yellow-400 ring-offset-2 animate-pulse"
           )}
         >
@@ -349,13 +350,13 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
             className="absolute -right-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary border-2 border-card cursor-crosshair hover:scale-125 transition-transform"
             onMouseDown={handleConnectionPointMouseDown}
             onMouseUp={handleConnectionPointMouseUp}
-            title="Создать соединение"
+            title="Create connection"
           />
           <div
             className="absolute -left-2 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-primary border-2 border-card cursor-crosshair hover:scale-125 transition-transform"
             onMouseDown={handleConnectionPointMouseDown}
             onMouseUp={handleConnectionPointMouseUp}
-            title="Создать соединение"
+            title="Create connection"
           />
         </div>
       </div>

@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { useComponentStateStore } from '@/store/useComponentStateStore';
 import { ComponentState } from '@/core/ComponentStateEngine';
 import { 
@@ -14,7 +15,8 @@ import {
   RotateCcw,
   Activity,
   TrendingDown,
-  AlertCircle
+  AlertCircle,
+  HelpCircle
 } from 'lucide-react';
 import { useEmulationStore } from '@/store/useEmulationStore';
 
@@ -89,6 +91,51 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
             <CardTitle className="text-sm flex items-center gap-2">
               <Activity className="w-4 h-4" />
               Component State Control
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full">
+                    <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 text-xs" align="start">
+                  <div className="space-y-2">
+                    <h4 className="font-semibold text-sm">Component States</h4>
+                    <div className="space-y-1.5">
+                      <div className="flex items-start gap-2">
+                        <Power className="w-3.5 h-3.5 text-green-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <span className="font-medium text-green-500">Enabled</span>
+                          <span className="text-muted-foreground"> — normal operation</span>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <PowerOff className="w-3.5 h-3.5 text-gray-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <span className="font-medium text-gray-500">Disabled</span>
+                          <span className="text-muted-foreground"> — turned off. Throughput=0, Errors=100%</span>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 text-yellow-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <span className="font-medium text-yellow-500">Degraded</span>
+                          <span className="text-muted-foreground"> — partial failure. Throughput ↓50%, Latency ↑2x, Errors ↑10%</span>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <XCircle className="w-3.5 h-3.5 text-red-500 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <span className="font-medium text-red-500">Failed</span>
+                          <span className="text-muted-foreground"> — crashed. Same as Disabled but indicates failure</span>
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-muted-foreground pt-1 border-t border-border">
+                      Use to simulate failures and test architecture resilience.
+                    </p>
+                  </div>
+                </PopoverContent>
+              </Popover>
             </CardTitle>
             <CardDescription className="text-xs mt-1">
               Manually control component operational state

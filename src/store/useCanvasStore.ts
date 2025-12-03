@@ -8,10 +8,13 @@ interface CanvasStore extends DiagramState {
   selectedConnectionId: string | null;
   selectedGroupId: string | null;
   diagramName: string;
+  viewportWidth: number;
+  viewportHeight: number;
   addNode: (node: CanvasNode) => void;
   updateNode: (id: string, updates: Partial<CanvasNode>, skipHistory?: boolean) => void;
   deleteNode: (id: string) => void;
   selectNode: (id: string | null, multiSelect?: boolean) => void;
+  selectNodesByIds: (ids: string[]) => void;
   addConnection: (connection: CanvasConnection) => void;
   updateConnection: (id: string, updates: Partial<CanvasConnection>) => void;
   deleteConnection: (id: string) => void;
@@ -27,6 +30,7 @@ interface CanvasStore extends DiagramState {
   autoGroupByConnections: () => void;
   setZoom: (zoom: number) => void;
   setPan: (pan: { x: number; y: number }) => void;
+  setViewportSize: (size: { width: number; height: number }) => void;
   resetCanvas: () => void;
   setDiagramName: (name: string) => void;
   loadDiagramState: (state: DiagramState, skipHistory?: boolean) => void;
@@ -79,6 +83,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     selectedNodeId: null,
     selectedConnectionId: null,
     diagramName: savedDiagram?.name || 'Untitled Diagram',
+    viewportWidth: 0,
+    viewportHeight: 0,
 
     getDiagramState,
 
@@ -145,6 +151,15 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
           })),
         };
       }),
+
+    selectNodesByIds: (ids) =>
+      set((state) => ({
+        selectedNodeId: ids.length > 0 ? ids[0] : null,
+        nodes: state.nodes.map((node) => ({
+          ...node,
+          selected: ids.includes(node.id),
+        })),
+      })),
 
     addConnection: (connection) =>
       set((state) => {
@@ -369,6 +384,12 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         saveDiagramToStorage({ ...state, pan }, state.diagramName);
         return { pan };
       }),
+
+    setViewportSize: (size) =>
+      set(() => ({
+        viewportWidth: size.width,
+        viewportHeight: size.height,
+      })),
 
     setDiagramName: (name) =>
       set((state) => {

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useEmulationStore } from '@/store/useEmulationStore';
 import { useUIStore } from '@/store/useUIStore';
@@ -10,12 +10,89 @@ import { HeatMapLegend } from '@/components/emulation/HeatMapLegend';
 import { DataPathVisualization } from './DataPathVisualization';
 import { CanvasMinimap } from './CanvasMinimap';
 import { ComponentGroup } from './ComponentGroup';
-import { GroupContextMenu } from './GroupContextMenu';
-import { toast } from 'sonner';
+
+// Compact connection context menu component
+function ConnectionContextMenu({
+  x,
+  y,
+  onDelete,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        onClose();
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={menuRef}
+      className="fixed bg-card border border-border rounded-md shadow-lg py-0.5 z-50 min-w-[120px]"
+      style={{
+        left: `${x}px`,
+        top: `${y}px`,
+      }}
+    >
+      <button
+        className="w-full px-2 py-1 text-xs text-left hover:bg-accent transition-colors"
+        onClick={onDelete}
+      >
+        Delete Connection
+      </button>
+      <button
+        className="w-full px-2 py-1 text-xs text-left hover:bg-accent transition-colors"
+        onClick={onClose}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
 
 export function Canvas() {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const { nodes, connections, groups = [], addNode, addConnection, deleteConnection, zoom, pan, setPan, setZoom, selectNode, selectConnection, selectGroup, selectedConnectionId, selectedNodeId } = useCanvasStore();
+  const {
+    nodes,
+    connections,
+    groups = [],
+    addNode,
+    addConnection,
+    deleteConnection,
+    zoom,
+    pan,
+    setPan,
+    setZoom,
+    selectNode,
+    selectConnection,
+    selectGroup,
+    selectNodesByIds,
+    selectedConnectionId,
+    selectedNodeId,
+    setViewportSize,
+  } = useCanvasStore();
   const { isRunning } = useEmulationStore();
   const { showMinimap, showHeatMapLegend } = useUIStore();
   const [isPanning, setIsPanning] = useState(false);
@@ -28,11 +105,38 @@ export function Canvas() {
     x: number;
     y: number;
   } | null>(null);
-  const [contextMenuGroup, setContextMenuGroup] = useState<{
-    groupId: string;
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
+  const [selectionRect, setSelectionRect] = useState<{
     x: number;
     y: number;
+    width: number;
+    height: number;
   } | null>(null);
+
+  // Track viewport size so other parts (e.g. toolbar) can fit all nodes correctly
+  useEffect(() => {
+    if (!canvasRef.current) return;
+
+    const updateSize = () => {
+      if (!canvasRef.current) return;
+      const rect = canvasRef.current.getBoundingClientRect();
+      setViewportSize({ width: rect.width, height: rect.height });
+    };
+
+    updateSize();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateSize();
+    });
+    resizeObserver.observe(canvasRef.current);
+
+    window.addEventListener('resize', updateSize);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateSize);
+    };
+  }, [setViewportSize]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -66,14 +170,29 @@ export function Canvas() {
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 1 || (e.button === 0 && e.ctrlKey)) {
+    const isPrimary = e.button === 0;
+    const isMiddle = e.button === 1;
+
+    // Pan with middle mouse or Ctrl + left mouse
+    if (isMiddle || (isPrimary && e.ctrlKey)) {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
       e.preventDefault();
-    } else if (e.button === 0 && !isConnecting) {
-      // Deselect nodes and connections when clicking on canvas
+      return;
+    }
+
+    // Lasso/select with plain left-click on empty space
+    if (isPrimary && !isConnecting && !e.ctrlKey && !e.metaKey) {
+      if (canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const x = (e.clientX - rect.left - pan.x) / zoom;
+        const y = (e.clientY - rect.top - pan.y) / zoom;
+        setSelectionStart({ x, y });
+        setSelectionRect({ x, y, width: 0, height: 0 });
+      }
       selectNode(null);
       selectConnection(null);
+      selectGroup(null);
     }
   };
 
@@ -89,6 +208,34 @@ export function Canvas() {
         x: (e.clientX - rect.left - pan.x) / zoom,
         y: (e.clientY - rect.top - pan.y) / zoom,
       });
+    } else if (selectionStart && canvasRef.current) {
+      const rect = canvasRef.current.getBoundingClientRect();
+      const currentX = (e.clientX - rect.left - pan.x) / zoom;
+      const currentY = (e.clientY - rect.top - pan.y) / zoom;
+      const x = Math.min(selectionStart.x, currentX);
+      const y = Math.min(selectionStart.y, currentY);
+      const width = Math.abs(currentX - selectionStart.x);
+      const height = Math.abs(currentY - selectionStart.y);
+      const newRect = { x, y, width, height };
+      setSelectionRect(newRect);
+
+      // Update selected nodes based on lasso
+      const selectedIds = nodes
+        .filter((node) => {
+          const nx1 = node.position.x;
+          const ny1 = node.position.y;
+          const nx2 = node.position.x + 140;
+          const ny2 = node.position.y + 140;
+          const intersects =
+            nx2 >= newRect.x &&
+            nx1 <= newRect.x + newRect.width &&
+            ny2 >= newRect.y &&
+            ny1 <= newRect.y + newRect.height;
+          return intersects;
+        })
+        .map((n) => n.id);
+
+      selectNodesByIds(selectedIds);
     }
   };
 
@@ -98,6 +245,10 @@ export function Canvas() {
       setIsConnecting(false);
       setConnectionStart(null);
       setTempLineEnd(null);
+    }
+    if (selectionStart) {
+      setSelectionStart(null);
+      setSelectionRect(null);
     }
   };
 
@@ -137,9 +288,30 @@ export function Canvas() {
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey) {
+    if (e.ctrlKey && canvasRef.current) {
       e.preventDefault();
-      // Zoom will be handled by toolbar for now
+
+      const { left, top, width, height } = canvasRef.current.getBoundingClientRect();
+
+      // Mouse position relative to canvas
+      const mouseX = e.clientX - left;
+      const mouseY = e.clientY - top;
+
+      // World coordinates before zoom
+      const worldX = (mouseX - pan.x) / zoom;
+      const worldY = (mouseY - pan.y) / zoom;
+
+      // Determine zoom delta (smooth, clamped)
+      const zoomFactor = 1 + Math.min(Math.max(-e.deltaY / 500, -0.5), 0.5); // between ~0.5x and 1.5x per tick
+      let newZoom = zoom * zoomFactor;
+      newZoom = Math.min(Math.max(newZoom, 0.3), 2.5); // clamp between 0.3 and 2.5
+
+      // Recompute pan so that the point under cursor stays under cursor
+      const newPanX = mouseX - worldX * newZoom;
+      const newPanY = mouseY - worldY * newZoom;
+
+      setZoom(newZoom);
+      setPan({ x: newPanX, y: newPanY });
     }
   };
 
@@ -154,7 +326,9 @@ export function Canvas() {
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onWheel={handleWheel}
-      style={{ cursor: isPanning ? 'grabbing' : isConnecting ? 'crosshair' : 'default' }}
+      style={{
+        cursor: isPanning ? 'grabbing' : isConnecting ? 'crosshair' : 'default',
+      }}
     >
       <div
         style={{
@@ -165,6 +339,18 @@ export function Canvas() {
           position: 'relative',
         }}
       >
+        {/* Lasso selection rectangle */}
+        {selectionRect && (
+          <div
+            className="absolute border-2 border-primary/60 bg-primary/10 pointer-events-none"
+            style={{
+              left: selectionRect.x,
+              top: selectionRect.y,
+              width: selectionRect.width,
+              height: selectionRect.height,
+            }}
+          />
+        )}
         {/* SVG layer for connections */}
         <svg
           style={{
@@ -218,12 +404,7 @@ export function Canvas() {
           {groups && groups.length > 0 && (
             <g style={{ pointerEvents: 'auto' }}>
               {groups.map((group) => (
-                <ComponentGroup 
-                  key={group.id} 
-                  group={group} 
-                  zoom={zoom}
-                  onContextMenu={(groupId, x, y) => setContextMenuGroup({ groupId, x, y })}
-                />
+                <ComponentGroup key={group.id} group={group} zoom={zoom} />
               ))}
             </g>
           )}
@@ -304,63 +485,14 @@ export function Canvas() {
 
       {/* Connection context menu */}
       {contextMenuConnection && (
-        <div
-          className="fixed bg-card border border-border rounded-md shadow-lg py-1 z-50"
-          style={{
-            left: `${contextMenuConnection.x}px`,
-            top: `${contextMenuConnection.y}px`,
-          }}
-        >
-          <button
-            className="w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
-            onClick={handleDeleteConnection}
-          >
-            Удалить соединение
-          </button>
-          <button
-            className="w-full px-4 py-2 text-sm text-left hover:bg-accent transition-colors"
-            onClick={() => setContextMenuConnection(null)}
-          >
-            Отмена
-          </button>
-        </div>
+        <ConnectionContextMenu
+          x={contextMenuConnection.x}
+          y={contextMenuConnection.y}
+          onDelete={handleDeleteConnection}
+          onClose={() => setContextMenuConnection(null)}
+        />
       )}
 
-      {/* Group context menu */}
-      {contextMenuGroup && (() => {
-        const group = groups.find(g => g.id === contextMenuGroup.groupId);
-        if (!group) return null;
-        
-        const handleGroupDelete = () => {
-          const { deleteGroup, selectGroup } = useCanvasStore.getState();
-          deleteGroup(group.id);
-          selectGroup(null);
-          setContextMenuGroup(null);
-          toast.success('Group deleted');
-        };
-
-        const handleGroupRename = () => {
-          // Will be handled by GroupPropertiesPanel
-          setContextMenuGroup(null);
-        };
-
-        const handleGroupCopyId = () => {
-          navigator.clipboard.writeText(group.id);
-          toast.success('Group ID copied to clipboard');
-          setContextMenuGroup(null);
-        };
-
-        return (
-          <GroupContextMenu
-            x={contextMenuGroup.x}
-            y={contextMenuGroup.y}
-            onDelete={handleGroupDelete}
-            onRename={handleGroupRename}
-            onCopyId={handleGroupCopyId}
-            onClose={() => setContextMenuGroup(null)}
-          />
-        );
-      })()}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useTabStore } from '@/store/useTabStore';
 import { ConnectionPropertiesPanel } from '@/components/config/ConnectionPropertiesPanel';
 import { ComponentStateControl } from '@/components/config/ComponentStateControl';
 import { ProblemFilters } from '@/components/emulation/ProblemFilters';
@@ -16,6 +17,7 @@ import { Settings2, X } from 'lucide-react';
 
 export function PropertiesPanel() {
   const { selectedNodeId, nodes, updateNode, selectNode, connections, updateConnection, selectedConnectionId, selectConnection, selectedGroupId, groups, selectGroup } = useCanvasStore();
+  const { addTab } = useTabStore();
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
   const selectedConnection = connections.find((c) => c.id === selectedConnectionId);
   const selectedGroup = groups.find((g) => g.id === selectedGroupId);
@@ -256,7 +258,19 @@ export function PropertiesPanel() {
 
           <div>
             <h3 className="text-xs font-semibold mb-2">Configuration</h3>
-            <Button variant="outline" size="sm" className="w-full">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              className="w-full"
+              onClick={() => {
+                addTab({
+                  title: `${selectedNode!.data.label} Config`,
+                  type: 'component',
+                  componentId: selectedNode!.id,
+                  componentType: selectedNode!.type,
+                });
+              }}
+            >
               Open Configuration Panel
             </Button>
           </div>

@@ -74,11 +74,15 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
   },
 
   reset: () => {
-    emulationEngine.stop();
+    emulationEngine.resetSimulation();
     const pollInterval = (emulationEngine as any)._pollInterval;
     if (pollInterval) {
       clearInterval(pollInterval);
     }
+    
+    // Reset data flow store
+    useDataFlowStore.getState().stop();
+    
     set({ 
       isRunning: false, 
       simulationTime: 0,

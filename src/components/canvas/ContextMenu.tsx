@@ -88,7 +88,7 @@ export function ContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
+      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-0.5 min-w-[120px]"
       style={{
         left: `${position.x}px`,
         top: `${position.y}px`,
@@ -96,25 +96,25 @@ export function ContextMenu({
     >
       <button
         onClick={handleDuplicate}
-        className="w-full px-4 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2 py-1 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Layers className="w-4 h-4" />
-        Дублировать
+        <Layers className="w-3.5 h-3.5" />
+        Duplicate
       </button>
       <button
         onClick={handleCopyId}
-        className="w-full px-4 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2 py-1 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Copy className="w-4 h-4" />
-        Копировать ID
+        <Copy className="w-3.5 h-3.5" />
+        Copy ID
       </button>
-      <div className="border-t border-border my-1" />
+      <div className="border-t border-border my-0.5" />
       <button
         onClick={handleDelete}
-        className="w-full px-4 py-2 text-sm text-destructive hover:bg-destructive hover:text-destructive-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive hover:text-destructive-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Trash2 className="w-4 h-4" />
-        Удалить
+        <Trash2 className="w-3.5 h-3.5" />
+        Delete
       </button>
     </div>
   );
