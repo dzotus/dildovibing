@@ -1,11 +1,17 @@
 import { useState, useEffect, useRef } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useTabStore } from '@/store/useTabStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { useDependencyStore } from '@/store/useDependencyStore';
+import { useComponentStateStore } from '@/store/useComponentStateStore';
+import { useUIStore } from '@/store/useUIStore';
 import { CanvasNode as CanvasNodeType } from '@/types';
 import { COMPONENT_LIBRARY } from '@/data/components';
 import { ContextMenu } from './ContextMenu';
 import { toast } from 'sonner';
 import { deepClone } from '@/lib/deepClone';
+import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface CanvasNodeProps {
   node: CanvasNodeType;
@@ -15,7 +21,7 @@ interface CanvasNodeProps {
 }
 
 export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnecting = false }: CanvasNodeProps) {
-  const { selectNode, updateNode, deleteNode, addNode, startDragOperation, endDragOperation } = useCanvasStore();
+  const { selectNode, updateNode, deleteNode, addNode, startDragOperation, endDragOperation, connections } = useCanvasStore();
   const { addTab } = useTabStore();
   const [isDragging, setIsDragging] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
@@ -25,6 +31,132 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   const dragInitiatedRef = useRef(false);
 
   const component = COMPONENT_LIBRARY.find((c) => c.type === node.type);
+  const { isRunning, getComponentMetrics } = useEmulationStore();
+  const componentStatus = useDependencyStore((state) => state.getComponentStatus(node.id));
+  const componentState = useComponentStateStore((state) => state.getComponentState(node.id));
+  const metrics = isRunning ? getComponentMetrics(node.id) : undefined;
+  const { highlightedNodeId } = useUIStore();
+  const isHighlighted = highlightedNodeId === node.id;
+  
+  // Check if component has connections
+  const hasConnections = connections.some(
+    conn => conn.source === node.id || conn.target === node.id
+  );
+  
+  // Check if component has activity (throughput > 0 or errors)
+  // Only consider it active if metrics are significantly above zero
+  const hasActivity = metrics && (
+    (metrics.throughput && metrics.throughput > 0.1) || 
+    (metrics.errorRate && metrics.errorRate > 0.001) ||
+    (metrics.utilization && metrics.utilization > 0.01)
+  );
+  
+  // Heat map color based on utilization - only for connected components with activity
+  const getHeatMapColor = () => {
+    if (!isRunning || !metrics || !hasConnections || !hasActivity) return '';
+    
+    const utilization = metrics.utilization || 0;
+    const errorRate = metrics.errorRate || 0;
+    
+    // Combine utilization and error rate for heat map
+    const heatValue = Math.min(1, utilization * 0.7 + errorRate * 0.3);
+    
+    if (heatValue > 0.8) {
+      return 'bg-red-500/20 border-red-500/30';
+    } else if (heatValue > 0.6) {
+      return 'bg-orange-500/20 border-orange-500/30';
+    } else if (heatValue > 0.4) {
+      return 'bg-yellow-500/20 border-yellow-500/30';
+    } else if (heatValue > 0.2) {
+      return 'bg-green-500/20 border-green-500/30';
+    }
+    return '';
+  };
+  
+  // Get health indicator - only show for connected components or manual state
+  const getHealthIndicator = () => {
+    if (!isRunning) return null;
+    
+    // Manual state always shows
+    if (componentState) {
+      switch (componentState.state) {
+        case 'disabled':
+        case 'failed':
+          return <PowerOff className="text-red-500" size={16} />;
+        case 'degraded':
+          return <AlertTriangle className="text-yellow-500" size={16} />;
+        case 'enabled':
+          break; // Use health status
+      }
+    }
+    
+    // Only show health for connected components with activity
+    if (!hasConnections || !hasActivity) return null;
+    if (!componentStatus) return null;
+    
+    const health = componentStatus.health;
+    const size = 16;
+    
+    switch (health) {
+      case 'healthy':
+        return <CheckCircle2 className="text-green-500" size={size} />;
+      case 'degraded':
+        return <AlertTriangle className="text-yellow-500" size={size} />;
+      case 'critical':
+        return <AlertCircle className="text-orange-500" size={size} />;
+      case 'down':
+        return <XCircle className="text-red-500" size={size} />;
+      default:
+        return null;
+    }
+  };
+  
+  // Get border color based on health, critical path, and manual state
+  const getBorderColor = () => {
+    if (!isRunning) {
+      return node.selected ? 'border-primary' : 'border-border';
+    }
+    
+    // Manual state takes priority
+    if (componentState) {
+      switch (componentState.state) {
+        case 'disabled':
+        case 'failed':
+          return 'border-red-500 border-2 opacity-50';
+        case 'degraded':
+          return 'border-yellow-500 border-2';
+        case 'enabled':
+          break; // Use health status
+      }
+    }
+    
+    if (!componentStatus) {
+      return node.selected ? 'border-primary' : 'border-border';
+    }
+    
+    if (componentStatus.criticalPath) {
+      return 'border-purple-500 border-2';
+    }
+    
+    switch (componentStatus.health) {
+      case 'down':
+        return 'border-red-500 border-2';
+      case 'critical':
+        return 'border-orange-500';
+      case 'degraded':
+        return 'border-yellow-500';
+      default:
+        return node.selected ? 'border-primary' : 'border-border';
+    }
+  };
+  
+  // Get background opacity for disabled/failed components
+  const getOpacity = () => {
+    if (componentState && (componentState.state === 'disabled' || componentState.state === 'failed')) {
+      return 'opacity-50';
+    }
+    return '';
+  };
 
   useEffect(() => {
     const handleGlobalMouseMove = (e: MouseEvent) => {
@@ -73,7 +205,9 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button === 0) {
-      selectNode(node.id);
+      // Multi-select with Ctrl/Cmd
+      const multiSelect = e.ctrlKey || e.metaKey;
+      selectNode(node.id, multiSelect);
       
       dragOffsetRef.current = {
         x: e.clientX - node.position.x,
@@ -179,12 +313,30 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
         tabIndex={0}
       >
         <div
-          className={`
-            bg-card border-2 rounded-lg p-4 min-w-[140px] relative
-            ${node.selected ? 'border-primary' : 'border-border'}
-            hover:border-primary/50 transition-colors
-          `}
+          className={cn(
+            "bg-card border-2 rounded-lg p-4 min-w-[140px] relative",
+            getBorderColor(),
+            getHeatMapColor(),
+            "hover:border-primary/50 transition-colors",
+            componentStatus?.criticalPath && "shadow-lg shadow-purple-500/20",
+            getOpacity(),
+            isHighlighted && "ring-4 ring-yellow-400 ring-offset-2 animate-pulse"
+          )}
         >
+          {/* Health indicator */}
+          {isRunning && componentStatus && (
+            <div className="absolute -top-2 -right-2 bg-card rounded-full p-0.5 border border-border">
+              {getHealthIndicator()}
+            </div>
+          )}
+          
+          {/* Critical path indicator */}
+          {isRunning && componentStatus?.criticalPath && (
+            <div className="absolute -top-1 left-1/2 -translate-x-1/2 bg-purple-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-semibold">
+              CRITICAL
+            </div>
+          )}
+          
           <div className="flex flex-col items-center gap-2 select-none">
             <div className="text-3xl select-none pointer-events-none">{component?.icon}</div>
             <div className="text-sm font-medium text-center text-foreground select-none pointer-events-none">

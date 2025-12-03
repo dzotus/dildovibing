@@ -108,9 +108,19 @@ export interface Tab {
   active: boolean;
 }
 
+export interface ComponentGroup {
+  id: string;
+  name: string;
+  nodeIds: string[];
+  color?: string;
+  position?: { x: number; y: number };
+  size?: { width: number; height: number };
+}
+
 export interface DiagramState {
   nodes: CanvasNode[];
   connections: CanvasConnection[];
+  groups: ComponentGroup[];
   zoom: number;
   pan: { x: number; y: number };
 }

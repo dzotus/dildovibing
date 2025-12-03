@@ -1,15 +1,23 @@
 import { useRef, useState } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useEmulationStore } from '@/store/useEmulationStore';
+import { useUIStore } from '@/store/useUIStore';
 import { CanvasNode as CanvasNodeType, ComponentType, CanvasConnection } from '@/types';
 import { CanvasNode } from './CanvasNode';
 import { ConnectionLine } from './ConnectionLine';
 import { MetricsOverlay } from '@/components/emulation/MetricsOverlay';
+import { HeatMapLegend } from '@/components/emulation/HeatMapLegend';
+import { DataPathVisualization } from './DataPathVisualization';
+import { CanvasMinimap } from './CanvasMinimap';
+import { ComponentGroup } from './ComponentGroup';
+import { GroupContextMenu } from './GroupContextMenu';
+import { toast } from 'sonner';
 
 export function Canvas() {
   const canvasRef = useRef<HTMLDivElement>(null);
-  const { nodes, connections, addNode, addConnection, deleteConnection, zoom, pan, setPan, selectNode, selectConnection, selectedConnectionId } = useCanvasStore();
+  const { nodes, connections, groups = [], addNode, addConnection, deleteConnection, zoom, pan, setPan, setZoom, selectNode, selectConnection, selectGroup, selectedConnectionId, selectedNodeId } = useCanvasStore();
   const { isRunning } = useEmulationStore();
+  const { showMinimap, showHeatMapLegend } = useUIStore();
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [isConnecting, setIsConnecting] = useState(false);
@@ -17,6 +25,11 @@ export function Canvas() {
   const [tempLineEnd, setTempLineEnd] = useState<{ x: number; y: number } | null>(null);
   const [contextMenuConnection, setContextMenuConnection] = useState<{
     connectionId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [contextMenuGroup, setContextMenuGroup] = useState<{
+    groupId: string;
     x: number;
     y: number;
   } | null>(null);
@@ -165,40 +178,55 @@ export function Canvas() {
           }}
         >
           <defs>
+            {/* Fixed size arrow markers - не зависят от strokeWidth */}
             <marker
               id="arrowhead-default"
-              markerWidth="10"
-              markerHeight="10"
-              refX="9"
-              refY="3"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
               orient="auto"
-              markerUnits="strokeWidth"
+              markerUnits="userSpaceOnUse"
             >
-              <path d="M0,0 L0,6 L9,3 z" fill="hsl(var(--border))" />
+              <path d="M0,0 L0,8 L8,4 z" fill="hsl(var(--border))" stroke="none" />
             </marker>
             <marker
               id="arrowhead-selected"
               markerWidth="10"
               markerHeight="10"
-              refX="9"
-              refY="3"
+              refX="8"
+              refY="5"
               orient="auto"
-              markerUnits="strokeWidth"
+              markerUnits="userSpaceOnUse"
             >
-              <path d="M0,0 L0,6 L9,3 z" fill="hsl(var(--primary))" />
+              <path d="M0,0 L0,10 L10,5 z" fill="hsl(var(--primary))" stroke="none" />
             </marker>
             <marker
               id="arrowhead-bottleneck"
-              markerWidth="10"
-              markerHeight="10"
-              refX="9"
-              refY="3"
+              markerWidth="12"
+              markerHeight="12"
+              refX="10"
+              refY="6"
               orient="auto"
-              markerUnits="strokeWidth"
+              markerUnits="userSpaceOnUse"
             >
-              <path d="M0,0 L0,6 L9,3 z" fill="hsl(0 84% 60%)" />
+              <path d="M0,0 L0,12 L12,6 z" fill="hsl(0 84% 60%)" stroke="none" />
             </marker>
           </defs>
+
+          {/* Groups layer - behind connections */}
+          {groups && groups.length > 0 && (
+            <g style={{ pointerEvents: 'auto' }}>
+              {groups.map((group) => (
+                <ComponentGroup 
+                  key={group.id} 
+                  group={group} 
+                  zoom={zoom}
+                  onContextMenu={(groupId, x, y) => setContextMenuGroup({ groupId, x, y })}
+                />
+              ))}
+            </g>
+          )}
 
           <g style={{ pointerEvents: 'auto' }}>
             {/* Render connections */}
@@ -265,13 +293,14 @@ export function Canvas() {
         ))}
       </div>
 
-      {/* Mini info */}
-      <div className="absolute bottom-4 left-4 bg-card/90 backdrop-blur-sm rounded-md px-3 py-2 text-xs text-muted-foreground border border-border">
-        <div>Zoom: {Math.round(zoom * 100)}%</div>
-        <div>Pan: ({Math.round(pan.x)}, {Math.round(pan.y)})</div>
-        <div>Nodes: {nodes.length}</div>
-        <div>Connections: {connections.length}</div>
-      </div>
+      {/* Heat Map Legend */}
+      <HeatMapLegend isVisible={showHeatMapLegend} />
+
+      {/* Minimap - bottom left, non-interactive */}
+      <CanvasMinimap isVisible={showMinimap} />
+
+      {/* Data Path Visualization */}
+      <DataPathVisualization selectedNodeId={selectedNodeId} highlightPath={true} />
 
       {/* Connection context menu */}
       {contextMenuConnection && (
@@ -296,6 +325,42 @@ export function Canvas() {
           </button>
         </div>
       )}
+
+      {/* Group context menu */}
+      {contextMenuGroup && (() => {
+        const group = groups.find(g => g.id === contextMenuGroup.groupId);
+        if (!group) return null;
+        
+        const handleGroupDelete = () => {
+          const { deleteGroup, selectGroup } = useCanvasStore.getState();
+          deleteGroup(group.id);
+          selectGroup(null);
+          setContextMenuGroup(null);
+          toast.success('Group deleted');
+        };
+
+        const handleGroupRename = () => {
+          // Will be handled by GroupPropertiesPanel
+          setContextMenuGroup(null);
+        };
+
+        const handleGroupCopyId = () => {
+          navigator.clipboard.writeText(group.id);
+          toast.success('Group ID copied to clipboard');
+          setContextMenuGroup(null);
+        };
+
+        return (
+          <GroupContextMenu
+            x={contextMenuGroup.x}
+            y={contextMenuGroup.y}
+            onDelete={handleGroupDelete}
+            onRename={handleGroupRename}
+            onCopyId={handleGroupCopyId}
+            onClose={() => setContextMenuGroup(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

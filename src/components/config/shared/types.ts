@@ -2,7 +2,6 @@ export type ConfigFieldValue = string | number | boolean | string[];
 
 export type ConfigFieldType =
   | 'text'
-  | 'password'
   | 'number'
   | 'select'
   | 'toggle'
@@ -26,7 +25,6 @@ export interface ConfigField {
   step?: number;
   options?: ConfigFieldOption[];
   defaultListItem?: string;
-  rows?: number;
 }
 
 export interface ConfigSection {

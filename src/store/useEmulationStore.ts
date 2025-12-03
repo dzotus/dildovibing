@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import { emulationEngine, ComponentMetrics, ConnectionMetrics } from '@/core/EmulationEngine';
 import { CanvasNode, CanvasConnection } from '@/types';
+import { useDataFlowStore } from './useDataFlowStore';
+import { useCanvasStore } from './useCanvasStore';
+import { useAlertStore } from './useAlertStore';
+import { useDependencyStore } from './useDependencyStore';
 
 interface EmulationStore {
   isRunning: boolean;
@@ -35,11 +39,17 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
       componentMetrics: new Map(emulationEngine.getAllComponentMetrics().map(m => [m.id, m])),
       connectionMetrics: new Map(emulationEngine.getAllConnectionMetrics().map(m => [m.id, m])),
     });
+    
+    // Initialize data flow store with nodes and connections
+    useDataFlowStore.getState().initialize(nodes, connections);
   },
 
   start: () => {
     emulationEngine.start();
     set({ isRunning: true });
+    
+    // Start data flow
+    useDataFlowStore.getState().start();
     
     // Setup polling for metrics updates
     const pollInterval = setInterval(() => {
@@ -56,6 +66,10 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
     if (pollInterval) {
       clearInterval(pollInterval);
     }
+    
+    // Stop data flow
+    useDataFlowStore.getState().stop();
+    
     set({ isRunning: false });
   },
 
@@ -78,6 +92,12 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
   },
 
   updateMetrics: () => {
+    // Get current nodes and connections from canvas store
+    const { nodes, connections } = useCanvasStore.getState();
+    
+    // Update emulation engine with current state
+    emulationEngine.updateNodesAndConnections(nodes, connections);
+    
     set(state => ({
       simulationTime: emulationEngine.getSimulationTime(),
       componentMetrics: new Map(
@@ -87,6 +107,15 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
         emulationEngine.getAllConnectionMetrics().map(m => [m.id, m])
       ),
     }));
+    
+    // Update data flow messages
+    useDataFlowStore.getState().updateMessages(nodes, connections);
+    
+    // Update dependency analysis
+    useDependencyStore.getState().updateAnalysis();
+    
+    // Update alerts
+    useAlertStore.getState().updateAlerts();
   },
 
   getComponentMetrics: (nodeId) => {

@@ -4,7 +4,13 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { useDataFlowStore } from '@/store/useDataFlowStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { useState, useEffect } from 'react';
+import { Activity, Database, FileText, AlertCircle } from 'lucide-react';
 
 interface ConnectionPropertiesPanelProps {
   connection: CanvasConnection;
@@ -13,6 +19,27 @@ interface ConnectionPropertiesPanelProps {
 
 export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPropertiesPanelProps) {
   const config = connection.data || {};
+  const { isRunning } = useEmulationStore();
+  const { getConnectionMessages, getMessageHistory } = useDataFlowStore();
+  const [messages, setMessages] = useState<any[]>([]);
+  const [messageHistory, setMessageHistory] = useState<any[]>([]);
+  
+  useEffect(() => {
+    if (!isRunning) {
+      setMessages([]);
+      setMessageHistory([]);
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      const connMessages = getConnectionMessages(connection.id);
+      const history = getMessageHistory(50).filter(m => m.connectionId === connection.id);
+      setMessages(connMessages);
+      setMessageHistory(history);
+    }, 200);
+    
+    return () => clearInterval(interval);
+  }, [isRunning, connection.id, getConnectionMessages, getMessageHistory]);
 
   const updateConfig = (updates: Partial<ConnectionConfig>) => {
     const newData = { ...config, ...updates };
@@ -253,6 +280,142 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
             </div>
           </div>
         </Card>
+
+        {/* Data Flow Section */}
+        {isRunning && (
+          <div className="border-t border-border pt-4 mt-4">
+            <Tabs defaultValue="active" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="active" className="text-xs">
+                  <Activity className="h-3 w-3 mr-1" />
+                  Активные ({messages.length})
+                </TabsTrigger>
+                <TabsTrigger value="history" className="text-xs">
+                  <FileText className="h-3 w-3 mr-1" />
+                  История ({messageHistory.length})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="active" className="mt-4 space-y-2">
+                {messages.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground text-xs">
+                    <Activity className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>Нет активных сообщений</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {messages.map((msg, idx) => (
+                      <Card key={msg.id || idx} className="p-2 border-border/50">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant="outline" className="text-xs">
+                                {msg.format}
+                              </Badge>
+                              <Badge 
+                                variant={
+                                  msg.status === 'delivered' ? 'default' :
+                                  msg.status === 'failed' ? 'destructive' :
+                                  msg.status === 'transformed' ? 'secondary' :
+                                  'outline'
+                                }
+                                className="text-xs"
+                              >
+                                {msg.status}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground space-y-0.5">
+                              <div>Размер: {(msg.size / 1024).toFixed(2)} KB</div>
+                              {msg.latency && (
+                                <div>Задержка: {msg.latency.toFixed(0)} ms</div>
+                              )}
+                            </div>
+                            {msg.error && (
+                              <div className="text-xs text-destructive mt-1 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {msg.error}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {msg.payload && (
+                          <details className="mt-2">
+                            <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                              Показать данные
+                            </summary>
+                            <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
+                              {JSON.stringify(msg.payload, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="history" className="mt-4 space-y-2">
+                {messageHistory.length === 0 ? (
+                  <div className="text-center py-6 text-muted-foreground text-xs">
+                    <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>История пуста</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {messageHistory.map((msg, idx) => (
+                      <Card key={msg.id || idx} className="p-2 border-border/50">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant="outline" className="text-xs">
+                                {msg.format}
+                              </Badge>
+                              <Badge 
+                                variant={
+                                  msg.status === 'delivered' ? 'default' :
+                                  msg.status === 'failed' ? 'destructive' :
+                                  'outline'
+                                }
+                                className="text-xs"
+                              >
+                                {msg.status}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {new Date(msg.timestamp).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <div className="text-xs text-muted-foreground space-y-0.5">
+                              <div>Размер: {(msg.size / 1024).toFixed(2)} KB</div>
+                              {msg.latency && (
+                                <div>Задержка: {msg.latency.toFixed(0)} ms</div>
+                              )}
+                            </div>
+                            {msg.error && (
+                              <div className="text-xs text-destructive mt-1 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {msg.error}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {msg.payload && (
+                          <details className="mt-2">
+                            <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                              Показать данные
+                            </summary>
+                            <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
+                              {JSON.stringify(msg.payload, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </div>
+        )}
       </div>
     </div>
   );

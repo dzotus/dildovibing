@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { EmulationPanel } from '@/components/emulation/EmulationPanel';
+import { ComponentSearch } from '@/components/canvas/ComponentSearch';
 import {
   MousePointer2,
   Move,
@@ -15,9 +16,14 @@ import {
   Settings,
   Undo2,
   Redo2,
+  Map,
+  Activity,
+  Layers,
+  Sparkles,
 } from 'lucide-react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useHistoryStore } from '@/store/useHistoryStore';
+import { useUIStore } from '@/store/useUIStore';
 import {
   exportDiagramAsJSON,
   importDiagramFromJSON,
@@ -34,14 +40,17 @@ import {
 } from '@/components/ui/alert-dialog';
 import { useState } from 'react';
 import { Input } from '@/components/ui/input';
+import { GroupNameDialog } from '@/components/ui/group-name-dialog';
 
 export function Toolbar() {
-  const { zoom, setZoom, diagramName, setDiagramName, saveDiagram, loadDiagramState, undo, redo } =
+  const { zoom, setZoom, diagramName, setDiagramName, saveDiagram, loadDiagramState, undo, redo, selectedNodeId, createGroupFromSelection, autoGroupByConnections } =
     useCanvasStore();
   const { canUndo, canRedo } = useHistoryStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [newName, setNewName] = useState(diagramName);
+  const [showGroupNameDialog, setShowGroupNameDialog] = useState(false);
+  const { showMinimap, toggleMinimap, showHeatMapLegend, toggleHeatMapLegend } = useUIStore();
 
   const handleZoomIn = () => setZoom(Math.min(zoom + 0.1, 2));
   const handleZoomOut = () => setZoom(Math.max(zoom - 0.1, 0.5));
@@ -75,10 +84,11 @@ export function Toolbar() {
 
       // Load the imported diagram
       loadDiagramState({
-        nodes: diagram.nodes,
-        connections: diagram.connections,
-        zoom: diagram.zoom,
-        pan: diagram.pan,
+        nodes: diagram.nodes || [],
+        connections: diagram.connections || [],
+        groups: diagram.groups || [],
+        zoom: diagram.zoom || 1,
+        pan: diagram.pan || { x: 0, y: 0 },
       });
 
       // Update diagram name
@@ -102,6 +112,29 @@ export function Toolbar() {
       toast.success('Diagram renamed');
     }
     setShowRenameDialog(false);
+  };
+
+  const handleCreateGroup = () => {
+    const { nodes } = useCanvasStore.getState();
+    const selectedNodes = nodes.filter((n) => n.selected || n.id === selectedNodeId);
+    
+    if (selectedNodes.length === 0) {
+      toast.error('Select at least one component to create a group');
+      return;
+    }
+    
+    setShowGroupNameDialog(true);
+  };
+
+  const handleGroupNameConfirm = (name: string) => {
+    createGroupFromSelection(name);
+    toast.success(`Group "${name}" created`);
+    setShowGroupNameDialog(false);
+  };
+
+  const handleAutoGroup = () => {
+    autoGroupByConnections();
+    toast.success('Groups created automatically from connections');
   };
 
   return (
@@ -154,6 +187,10 @@ export function Toolbar() {
               <Redo2 className="h-4 w-4" />
             </Button>
           </div>
+
+          <Separator orientation="vertical" className="h-6 mx-2" />
+
+          <ComponentSearch />
         </div>
 
         <div className="flex items-center gap-2">
@@ -222,7 +259,50 @@ export function Toolbar() {
 
           <Separator orientation="vertical" className="h-6" />
 
+          {/* Group controls */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            title="Create group from selection"
+            onClick={handleCreateGroup}
+            disabled={!selectedNodeId}
+          >
+            <Layers className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9"
+            title="Auto-group by connections"
+            onClick={handleAutoGroup}
+          >
+            <Sparkles className="h-4 w-4" />
+          </Button>
+
+          <Separator orientation="vertical" className="h-6" />
+
           <EmulationPanel />
+
+          <Button 
+            variant={showMinimap ? "default" : "ghost"} 
+            size="icon" 
+            className="h-9 w-9" 
+            title={showMinimap ? "Hide minimap" : "Show minimap"}
+            onClick={toggleMinimap}
+          >
+            <Map className="h-4 w-4" />
+          </Button>
+
+          <Button 
+            variant={showHeatMapLegend ? "default" : "ghost"} 
+            size="icon" 
+            className="h-9 w-9" 
+            title={showHeatMapLegend ? "Hide heat map legend" : "Show heat map legend"}
+            onClick={toggleHeatMapLegend}
+          >
+            <Activity className="h-4 w-4" />
+          </Button>
 
           <Button variant="ghost" size="icon" className="h-9 w-9" title="Settings">
             <Settings className="h-4 w-4" />

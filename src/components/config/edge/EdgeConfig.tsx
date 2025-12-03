@@ -1,6 +1,6 @@
-import { ProfileConfigRenderer } from '@/components/config/shared/ProfileConfigRenderer';
+import { ComponentType } from '@/types';
+import { ProfileConfigRenderer } from '../shared/ProfileConfigRenderer';
 import { EDGE_PROFILES } from './profiles';
-import type { ComponentType } from '@/types';
 
 interface EdgeConfigProps {
   componentId: string;
@@ -13,10 +13,7 @@ export function EdgeConfig({ componentId, componentType }: EdgeConfigProps) {
       componentId={componentId}
       componentType={componentType}
       profiles={EDGE_PROFILES}
-      emptyState={{
-        title: 'Edge Component Configuration',
-        description: 'Configuration panel not available for this edge component type',
-      }}
+      emptyState="Конфигурация для edge компонента пока недоступна."
     />
   );
 }
