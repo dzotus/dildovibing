@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Copy, Layers, ArrowUp, ArrowDown, ChevronUp, ChevronDown, FolderPlus } from 'lucide-react';
+import { Trash2, Copy, Layers, ArrowUp, ArrowDown, ChevronUp, ChevronDown, FolderPlus, FolderMinus } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -12,6 +12,7 @@ interface ContextMenuProps {
   onBringForward?: () => void;
   onSendBackward?: () => void;
   onAddToGroup?: () => void;
+  onRemoveFromGroup?: () => void;
   onClose: () => void;
 }
 
@@ -26,6 +27,7 @@ export function ContextMenu({
   onBringForward,
   onSendBackward,
   onAddToGroup,
+  onRemoveFromGroup,
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -94,6 +96,11 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleRemoveFromGroup = () => {
+    onRemoveFromGroup?.();
+    onClose();
+  };
+
   return (
     <div
       ref={menuRef}
@@ -117,16 +124,27 @@ export function ContextMenu({
         <Copy className="w-3.5 h-3.5" />
         Copy ID
       </button>
-      {onAddToGroup && (
+      {(onAddToGroup || onRemoveFromGroup) && (
         <>
           <div className="border-t border-border my-0.5" />
-          <button
-            onClick={handleAddToGroup}
-            className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
-          >
-            <FolderPlus className="w-3.5 h-3.5" />
-            Add to Group
-          </button>
+          {onRemoveFromGroup && (
+            <button
+              onClick={handleRemoveFromGroup}
+              className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <FolderMinus className="w-3.5 h-3.5" />
+              Remove from Group
+            </button>
+          )}
+          {onAddToGroup && (
+            <button
+              onClick={handleAddToGroup}
+              className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              Add to Group
+            </button>
+          )}
         </>
       )}
       <div className="border-t border-border my-0.5" />

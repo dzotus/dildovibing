@@ -16,6 +16,184 @@ import { ContextMenu } from './ContextMenu';
 import { deepClone } from '@/lib/deepClone';
 import { toast } from 'sonner';
 
+// Add to Group Dialog component
+function AddToGroupDialog({
+  nodeId,
+  x,
+  y,
+  onClose,
+}: {
+  nodeId: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const { groups, addNodeToGroup } = useCanvasStore();
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dialogRef.current && !dialogRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+
+    const handleEscapeKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscapeKey);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={dialogRef}
+      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
+      style={{
+        left: `${x}px`,
+        top: `${y}px`,
+      }}
+    >
+      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-b border-border">
+        Add to Group
+      </div>
+      <div className="max-h-60 overflow-y-auto">
+        {(() => {
+          const availableGroups = groups.filter(group => !group.nodeIds.includes(nodeId));
+          return availableGroups.length > 0 ? (
+            availableGroups.map((group) => (
+              <button
+                key={group.id}
+                onClick={() => {
+                  addNodeToGroup(group.id, nodeId);
+                  toast.success(`Added to "${group.name}"`);
+                  onClose();
+                }}
+                className="w-full px-2 py-1.5 text-xs text-left text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+              >
+                <div
+                  className="w-3 h-3 rounded border border-border flex-shrink-0"
+                  style={{ backgroundColor: group.color || 'hsl(var(--primary))' }}
+                />
+                <span className="truncate flex-1">{group.name}</span>
+              </button>
+            ))
+          ) : (
+            <div className="px-2 py-4 text-xs text-muted-foreground text-center">
+              {groups.length === 0 ? 'No groups available' : 'Already in all groups'}
+            </div>
+          );
+        })()}
+      </div>
+      <div className="border-t border-border mt-1">
+        <button
+          onClick={onClose}
+          className="w-full px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Remove from Group Dialog component
+function RemoveFromGroupDialog({
+  nodeId,
+  x,
+  y,
+  onClose,
+}: {
+  nodeId: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const { groups, removeNodeFromGroup } = useCanvasStore();
+
+  // Filter groups that contain this node
+  const nodeGroups = groups.filter(group => group.nodeIds.includes(nodeId));
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dialogRef.current && !dialogRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    };
+
+    const handleEscapeKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscapeKey);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscapeKey);
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      ref={dialogRef}
+      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
+      style={{
+        left: `${x}px`,
+        top: `${y}px`,
+      }}
+    >
+      <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-b border-border">
+        Remove from Group
+      </div>
+      <div className="max-h-60 overflow-y-auto">
+        {nodeGroups.length > 0 ? (
+          nodeGroups.map((group) => (
+            <button
+              key={group.id}
+              onClick={() => {
+                removeNodeFromGroup(group.id, nodeId);
+                toast.success(`Removed from "${group.name}"`);
+                onClose();
+              }}
+              className="w-full px-2 py-1.5 text-xs text-left text-destructive hover:bg-destructive/10 hover:text-destructive flex items-center gap-2 transition-colors"
+            >
+              <div
+                className="w-3 h-3 rounded border border-border flex-shrink-0"
+                style={{ backgroundColor: group.color || 'hsl(var(--primary))' }}
+              />
+              <span className="truncate flex-1">{group.name}</span>
+            </button>
+          ))
+        ) : (
+          <div className="px-2 py-4 text-xs text-muted-foreground text-center">
+            Not in any groups
+          </div>
+        )}
+      </div>
+      <div className="border-t border-border mt-1">
+        <button
+          onClick={onClose}
+          className="w-full px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Compact connection context menu component
 function ConnectionContextMenu({
   x,
@@ -128,6 +306,7 @@ export function Canvas() {
     canvasBounds,
     canvasChunks,
     addNodeToGroup,
+    removeNodeFromGroup,
   } = useCanvasStore();
   const { isRunning } = useEmulationStore();
   const { showMinimap, showHeatMapLegend, showRuler } = useUIStore();
@@ -154,6 +333,11 @@ export function Canvas() {
     height: number;
   } | null>(null);
   const [showAddToGroupDialog, setShowAddToGroupDialog] = useState<{
+    nodeId: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [showRemoveFromGroupDialog, setShowRemoveFromGroupDialog] = useState<{
     nodeId: string;
     x: number;
     y: number;
@@ -716,6 +900,24 @@ export function Canvas() {
           setContextMenuNode(null);
         };
 
+        // Find all groups this node belongs to
+        const nodeGroups = groups.filter(g => g.nodeIds.includes(node.id));
+        const hasGroups = nodeGroups.length >= 1;
+        const hasMultipleGroups = nodeGroups.length >= 2;
+        
+        const handleRemoveFromGroup = () => {
+          if (hasMultipleGroups) {
+            // If in multiple groups, show dialog to choose which one
+            setShowRemoveFromGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+            setContextMenuNode(null);
+          } else if (nodeGroups.length === 1) {
+            // If in only one group, remove immediately
+            removeNodeFromGroup(nodeGroups[0].id, node.id);
+            toast.success(`Removed from "${nodeGroups[0].name}"`);
+            setContextMenuNode(null);
+          }
+        };
+
         return (
           <ContextMenu
             x={contextMenuNode.x}
@@ -728,6 +930,7 @@ export function Canvas() {
             onBringForward={handleBringForward}
             onSendBackward={handleSendBackward}
             onAddToGroup={handleAddToGroup}
+            onRemoveFromGroup={hasGroups ? handleRemoveFromGroup : undefined}
             onClose={() => setContextMenuNode(null)}
           />
         );
@@ -735,59 +938,22 @@ export function Canvas() {
 
       {/* Add to Group Dialog */}
       {showAddToGroupDialog && (
-        <div
-          className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
-          style={{
-            left: `${showAddToGroupDialog.x}px`,
-            top: `${showAddToGroupDialog.y}px`,
-          }}
-        >
-          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-b border-border">
-            Add to Group
-          </div>
-          <div className="max-h-60 overflow-y-auto">
-            {groups.length > 0 ? (
-              groups.map((group) => {
-                const isInGroup = group.nodeIds.includes(showAddToGroupDialog.nodeId);
-                return (
-                  <button
-                    key={group.id}
-                    onClick={() => {
-                      if (isInGroup) {
-                        toast.info('Component is already in this group');
-                      } else {
-                        addNodeToGroup(group.id, showAddToGroupDialog.nodeId);
-                        toast.success(`Added to "${group.name}"`);
-                      }
-                      setShowAddToGroupDialog(null);
-                    }}
-                    disabled={isInGroup}
-                    className="w-full px-2 py-1.5 text-xs text-left text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div
-                      className="w-3 h-3 rounded border border-border flex-shrink-0"
-                      style={{ backgroundColor: group.color || 'hsl(var(--primary))' }}
-                    />
-                    <span className="truncate">{group.name}</span>
-                    {isInGroup && <span className="text-xs text-muted-foreground ml-auto">(in group)</span>}
-                  </button>
-                );
-              })
-            ) : (
-              <div className="px-2 py-4 text-xs text-muted-foreground text-center">
-                No groups available
-              </div>
-            )}
-          </div>
-          <div className="border-t border-border mt-1">
-            <button
-              onClick={() => setShowAddToGroupDialog(null)}
-              className="w-full px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <AddToGroupDialog
+          nodeId={showAddToGroupDialog.nodeId}
+          x={showAddToGroupDialog.x}
+          y={showAddToGroupDialog.y}
+          onClose={() => setShowAddToGroupDialog(null)}
+        />
+      )}
+
+      {/* Remove from Group Dialog */}
+      {showRemoveFromGroupDialog && (
+        <RemoveFromGroupDialog
+          nodeId={showRemoveFromGroupDialog.nodeId}
+          x={showRemoveFromGroupDialog.x}
+          y={showRemoveFromGroupDialog.y}
+          onClose={() => setShowRemoveFromGroupDialog(null)}
+        />
       )}
 
     </div>

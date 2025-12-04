@@ -61,20 +61,20 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
   const groupNodes = nodes.filter((node) => group.nodeIds.includes(node.id));
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
       <div>
         <Label htmlFor="group-name" className="text-xs font-medium">
           Group Name
         </Label>
-        <div className="flex items-center gap-2 mt-1.5">
+        <div className="flex items-center gap-1.5 mt-1">
           <Input
             id="group-name"
             value={group.name}
             onChange={(e) => updateGroup(group.id, { name: e.target.value })}
-            className="flex-1"
+            className="flex-1 h-8 text-xs"
           />
-          <Button variant="ghost" size="icon" className="h-9 w-9" onClick={handleDelete}>
-            <Trash2 className="h-4 w-4 text-destructive" />
+          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleDelete}>
+            <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>
         </div>
       </div>
@@ -112,18 +112,18 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
       <Separator />
 
       <div>
-        <Label className="text-xs font-medium mb-2 block">Color</Label>
-        <div className="flex items-center gap-2">
+        <Label className="text-xs font-medium mb-1.5 block">Color</Label>
+        <div className="flex items-center gap-1.5">
           <input
             type="color"
             value={group.color || '#3b82f6'}
             onChange={(e) => updateGroup(group.id, { color: e.target.value })}
-            className="w-12 h-9 rounded border border-border cursor-pointer"
+            className="w-10 h-8 rounded border border-border cursor-pointer"
           />
           <Input
             value={group.color || '#3b82f6'}
             onChange={(e) => updateGroup(group.id, { color: e.target.value })}
-            className="flex-1 font-mono text-xs"
+            className="flex-1 font-mono text-xs h-8"
             placeholder="#3b82f6"
           />
         </div>
@@ -132,7 +132,7 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
       <Separator />
 
       <div>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-1.5">
           <Label className="text-xs font-medium">
             Components ({group.nodeIds.length})
           </Label>
@@ -157,20 +157,20 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
             Add
           </Button>
         </div>
-        <div className="space-y-2 max-h-60 overflow-y-auto">
+        <div className="space-y-1.5 max-h-48 overflow-y-auto">
           {groupNodes.map((node) => (
             <div
               key={node.id}
-              className="flex items-center justify-between p-2 bg-secondary/50 rounded border border-border"
+              className="flex items-center justify-between p-1.5 bg-secondary/50 rounded border border-border"
             >
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium truncate">{node.data?.label || node.type}</div>
-                <div className="text-xs text-muted-foreground truncate">{node.type}</div>
+                <div className="text-xs font-medium truncate">{node.data?.label || node.type}</div>
+                <div className="text-[10px] text-muted-foreground truncate">{node.type}</div>
               </div>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-7 w-7 flex-shrink-0"
+                className="h-6 w-6 flex-shrink-0"
                 onClick={() => handleRemoveNode(node.id)}
                 title="Remove from group"
               >
@@ -179,7 +179,7 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
             </div>
           ))}
           {groupNodes.length === 0 && (
-            <div className="text-sm text-muted-foreground text-center py-4">
+            <div className="text-xs text-muted-foreground text-center py-3">
               No components in group
             </div>
           )}
@@ -188,9 +188,9 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
 
       <Separator />
 
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
         <span>Group ID:</span>
-        <code className="font-mono bg-secondary/50 px-2 py-1 rounded">{group.id}</code>
+        <code className="font-mono bg-secondary/50 px-1.5 py-0.5 rounded text-[10px]">{group.id}</code>
       </div>
 
       {/* Add Components Dialog */}

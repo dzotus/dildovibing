@@ -84,17 +84,17 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
   };
 
   return (
-    <Card className="border-2">
-      <CardHeader>
+    <Card className="border">
+      <CardHeader className="p-3 pb-2">
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-sm flex items-center gap-2">
-              <Activity className="w-4 h-4" />
-              Component State Control
+            <CardTitle className="text-xs flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5" />
+              Component State
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-5 w-5 rounded-full">
-                    <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Button variant="ghost" size="icon" className="h-4 w-4 rounded-full">
+                    <HelpCircle className="w-3 h-3 text-muted-foreground" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-72 text-xs" align="start">
@@ -137,78 +137,78 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
                 </PopoverContent>
               </Popover>
             </CardTitle>
-            <CardDescription className="text-xs mt-1">
-              Manually control component operational state
+            <CardDescription className="text-[10px] mt-0.5">
+              Control operational state
             </CardDescription>
           </div>
           {currentState && (
-            <Badge variant="outline" className={getStateColor(state)}>
+            <Badge variant="outline" className={`${getStateColor(state)} text-[10px] px-1.5 py-0.5`}>
               {getStateIcon(state)}
-              <span className="ml-1">{state.toUpperCase()}</span>
+              <span className="ml-0.5">{state.toUpperCase()}</span>
             </Badge>
           )}
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="p-3 pt-2 space-y-3">
         {/* State buttons */}
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid grid-cols-2 gap-1.5">
           <Button
             variant={state === 'enabled' ? 'default' : 'outline'}
             size="sm"
             onClick={() => handleSetState('enabled')}
-            className="flex items-center gap-2"
+            className="flex items-center gap-1.5 h-7 text-xs"
             disabled={!isRunning}
           >
-            <Power className="w-4 h-4" />
+            <Power className="w-3.5 h-3.5" />
             Enabled
           </Button>
           <Button
             variant={state === 'disabled' ? 'destructive' : 'outline'}
             size="sm"
             onClick={() => handleSetState('disabled')}
-            className="flex items-center gap-2"
+            className="flex items-center gap-1.5 h-7 text-xs"
             disabled={!isRunning}
           >
-            <PowerOff className="w-4 h-4" />
+            <PowerOff className="w-3.5 h-3.5" />
             Disabled
           </Button>
           <Button
             variant={state === 'degraded' ? 'default' : 'outline'}
             size="sm"
             onClick={() => handleSetState('degraded')}
-            className="flex items-center gap-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-600 dark:text-yellow-400"
+            className="flex items-center gap-1.5 h-7 text-xs bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-600 dark:text-yellow-400"
             disabled={!isRunning}
           >
-            <AlertTriangle className="w-4 h-4" />
+            <AlertTriangle className="w-3.5 h-3.5" />
             Degraded
           </Button>
           <Button
             variant={state === 'failed' ? 'destructive' : 'outline'}
             size="sm"
             onClick={() => handleSetState('failed')}
-            className="flex items-center gap-2"
+            className="flex items-center gap-1.5 h-7 text-xs"
             disabled={!isRunning}
           >
-            <XCircle className="w-4 h-4" />
+            <XCircle className="w-3.5 h-3.5" />
             Failed
           </Button>
         </div>
 
         {/* Degraded state configuration */}
         {state === 'degraded' && (
-          <div className="space-y-4 p-3 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
-            <div className="flex items-center gap-2 mb-2">
-              <TrendingDown className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
+          <div className="space-y-2.5 p-2.5 bg-yellow-500/10 rounded-lg border border-yellow-500/20">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <TrendingDown className="w-3.5 h-3.5 text-yellow-600 dark:text-yellow-400" />
               <Label className="text-xs font-semibold text-yellow-600 dark:text-yellow-400">
                 Degradation Settings
               </Label>
             </div>
 
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-xs">Degradation Level</Label>
-                  <span className="text-xs text-muted-foreground">{(degradedLevel * 100).toFixed(0)}%</span>
+                  <span className="text-[10px] text-muted-foreground">{(degradedLevel * 100).toFixed(0)}%</span>
                 </div>
                 <Slider
                   value={[degradedLevel]}
@@ -226,7 +226,7 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-xs">Failure Rate</Label>
-                  <span className="text-xs text-muted-foreground">{(failureRate * 100).toFixed(0)}%</span>
+                  <span className="text-[10px] text-muted-foreground">{(failureRate * 100).toFixed(0)}%</span>
                 </div>
                 <Slider
                   value={[failureRate]}
@@ -244,7 +244,7 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-xs">Latency Multiplier</Label>
-                  <span className="text-xs text-muted-foreground">{latencyMultiplier.toFixed(1)}x</span>
+                  <span className="text-[10px] text-muted-foreground">{latencyMultiplier.toFixed(1)}x</span>
                 </div>
                 <Slider
                   value={[latencyMultiplier]}
@@ -262,7 +262,7 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-xs">Throughput Multiplier</Label>
-                  <span className="text-xs text-muted-foreground">{(throughputMultiplier * 100).toFixed(0)}%</span>
+                  <span className="text-[10px] text-muted-foreground">{(throughputMultiplier * 100).toFixed(0)}%</span>
                 </div>
                 <Slider
                   value={[throughputMultiplier]}
@@ -286,17 +286,17 @@ export function ComponentStateControl({ componentId, componentLabel }: Component
             variant="outline"
             size="sm"
             onClick={handleReset}
-            className="w-full flex items-center gap-2"
+            className="w-full flex items-center gap-1.5 h-7 text-xs"
             disabled={!isRunning}
           >
-            <RotateCcw className="w-4 h-4" />
+            <RotateCcw className="w-3.5 h-3.5" />
             Reset to Normal
           </Button>
         )}
 
         {!isRunning && (
-          <div className="flex items-center gap-2 p-2 bg-muted rounded text-xs text-muted-foreground">
-            <AlertCircle className="w-4 h-4" />
+          <div className="flex items-center gap-1.5 p-1.5 bg-muted rounded text-[10px] text-muted-foreground">
+            <AlertCircle className="w-3.5 h-3.5" />
             Start emulation to control component state
           </div>
         )}
