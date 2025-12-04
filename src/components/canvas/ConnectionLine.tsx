@@ -4,6 +4,7 @@ import { useEmulationStore } from '@/store/useEmulationStore';
 import { useDataFlowStore } from '@/store/useDataFlowStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useIsPathHighlighted } from './DataPathVisualization';
+import { getConnectionPoints } from '@/utils/connectionPoints';
 
 interface ConnectionLineProps {
   connection: CanvasConnection;
@@ -28,10 +29,15 @@ export function ConnectionLine({
   const [isHovered, setIsHovered] = useState(false);
   const { isRunning, getConnectionMetrics } = useEmulationStore();
   const { getConnectionMessages } = useDataFlowStore();
-  const { selectedNodeId } = useCanvasStore();
+  const { selectedNodeId, connections } = useCanvasStore();
   const [metrics, setMetrics] = useState<ReturnType<typeof getConnectionMetrics>>();
   const [dataMessages, setDataMessages] = useState<any[]>([]);
   const isPathHighlighted = useIsPathHighlighted(connection.id);
+  
+  // Check if there's a reverse connection (bidirectional)
+  const hasReverseConnection = connections.some(
+    conn => conn.source === connection.target && conn.target === connection.source
+  );
 
   // Update metrics when emulation is running
   useEffect(() => {
@@ -60,51 +66,81 @@ export function ConnectionLine({
   const nodeHalfWidth = nodeWidth / 2;
   const nodeHalfHeight = nodeHeight / 2;
 
-  // Calculate center points of nodes
-  const sourceCenterX = sourceNode.position.x + nodeHalfWidth;
-  const sourceCenterY = sourceNode.position.y + nodeHalfHeight;
-  const targetCenterX = targetNode.position.x + nodeHalfWidth;
-  const targetCenterY = targetNode.position.y + nodeHalfHeight;
-
-  // Calculate angle between centers
-  const angle = Math.atan2(targetCenterY - sourceCenterY, targetCenterX - sourceCenterX);
-
-  // Calculate intersection points with node edges
-  const getEdgePoint = (centerX: number, centerY: number, angle: number, isSource: boolean) => {
-    const absAngle = Math.abs(angle);
-    const edgeAngle = Math.atan2(nodeHalfHeight, nodeHalfWidth);
+  // Use connection points if available, otherwise fall back to edge intersection
+  let sourceX: number, sourceY: number, targetX: number, targetY: number;
+  
+  if (connection.sourcePort !== undefined && connection.targetPort !== undefined) {
+    // Use saved connection points
+    const sourcePoints = getConnectionPoints(
+      sourceNode.position.x,
+      sourceNode.position.y,
+      nodeWidth,
+      nodeHeight,
+      16
+    );
+    const targetPoints = getConnectionPoints(
+      targetNode.position.x,
+      targetNode.position.y,
+      nodeWidth,
+      nodeHeight,
+      16
+    );
     
-    let x, y;
+    const sourcePoint = sourcePoints[connection.sourcePort];
+    const targetPoint = targetPoints[connection.targetPort];
     
-    // Determine which edge the line intersects
-    if (absAngle < edgeAngle || absAngle > Math.PI - edgeAngle) {
-      // Intersects left or right edge
-      const sign = isSource ? 1 : -1;
-      x = centerX + sign * nodeHalfWidth * Math.sign(Math.cos(angle));
-      y = centerY + sign * nodeHalfWidth * Math.tan(angle) * Math.sign(Math.cos(angle));
-    } else {
-      // Intersects top or bottom edge
-      const sign = isSource ? 1 : -1;
-      x = centerX + sign * nodeHalfHeight / Math.tan(angle) * Math.sign(Math.sin(angle));
-      y = centerY + sign * nodeHalfHeight * Math.sign(Math.sin(angle));
-    }
-    
-    return { x, y };
-  };
+    sourceX = sourcePoint.x;
+    sourceY = sourcePoint.y;
+    targetX = targetPoint.x;
+    targetY = targetPoint.y;
+  } else {
+    // Fallback to old edge intersection logic for backward compatibility
+    const sourceCenterX = sourceNode.position.x + nodeHalfWidth;
+    const sourceCenterY = sourceNode.position.y + nodeHalfHeight;
+    const targetCenterX = targetNode.position.x + nodeHalfWidth;
+    const targetCenterY = targetNode.position.y + nodeHalfHeight;
 
-  const sourceEdge = getEdgePoint(sourceCenterX, sourceCenterY, angle, true);
-  const targetEdge = getEdgePoint(targetCenterX, targetCenterY, angle, false);
+    // Calculate angle between centers
+    const angle = Math.atan2(targetCenterY - sourceCenterY, targetCenterX - sourceCenterX);
 
-  const sourceX = sourceEdge.x;
-  const sourceY = sourceEdge.y;
-  const targetX = targetEdge.x;
-  const targetY = targetEdge.y;
+    // Calculate intersection points with node edges
+    const getEdgePoint = (centerX: number, centerY: number, angle: number, isSource: boolean) => {
+      const absAngle = Math.abs(angle);
+      const edgeAngle = Math.atan2(nodeHalfHeight, nodeHalfWidth);
+      
+      let x, y;
+      
+      // Determine which edge the line intersects
+      if (absAngle < edgeAngle || absAngle > Math.PI - edgeAngle) {
+        // Intersects left or right edge
+        const sign = isSource ? 1 : -1;
+        x = centerX + sign * nodeHalfWidth * Math.sign(Math.cos(angle));
+        y = centerY + sign * nodeHalfWidth * Math.tan(angle) * Math.sign(Math.cos(angle));
+      } else {
+        // Intersects top or bottom edge
+        const sign = isSource ? 1 : -1;
+        x = centerX + sign * nodeHalfHeight / Math.tan(angle) * Math.sign(Math.sin(angle));
+        y = centerY + sign * nodeHalfHeight * Math.sign(Math.sin(angle));
+      }
+      
+      return { x, y };
+    };
+
+    const sourceEdge = getEdgePoint(sourceCenterX, sourceCenterY, angle, true);
+    const targetEdge = getEdgePoint(targetCenterX, targetCenterY, angle, false);
+
+    sourceX = sourceEdge.x;
+    sourceY = sourceEdge.y;
+    targetX = targetEdge.x;
+    targetY = targetEdge.y;
+  }
 
   // Create bezier curve for smoother connections
   const deltaX = targetX - sourceX;
   const deltaY = targetY - sourceY;
   const controlPointOffset = Math.min(Math.abs(deltaX), Math.abs(deltaY)) * 0.3 + 30;
 
+  // No need for offset with connection points - they are already separated
   const path = `
     M ${sourceX},${sourceY}
     C ${sourceX + controlPointOffset * Math.sign(deltaX)},${sourceY}

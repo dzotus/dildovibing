@@ -154,45 +154,38 @@ export function ComponentGroup({ group, zoom }: ComponentGroupProps) {
           onContextMenu={handleContextMenu}
         />
 
-        {/* Group label - fixed position at top-left */}
-        <g
-          onClick={(e) => {
-            e.stopPropagation();
-            selectGroup(group.id);
-          }}
-          onContextMenu={handleContextMenu}
-          style={{ cursor: 'pointer' }}
-        >
-          <rect
-            x={bounds.x + 10 / zoom}
-            y={bounds.y + 10 / zoom}
-            width={Math.max(100, (group.name.length * 7 + 30) / zoom)}
-            height={28 / zoom}
-            fill={groupColor}
-            fillOpacity={0.95}
-            rx={4 / zoom}
-            ry={4 / zoom}
-          />
-          <text
-            x={bounds.x + 15 / zoom}
-            y={bounds.y + 27 / zoom}
-            fill="white"
-            fontSize={12 / zoom}
-            fontWeight="600"
-            style={{ pointerEvents: 'none', userSelect: 'none' }}
+        {/* Group label - fixed position at top-left (only if showName is true or undefined) */}
+        {(group.showName !== false) && (
+          <g
+            onClick={(e) => {
+              e.stopPropagation();
+              selectGroup(group.id);
+            }}
+            onContextMenu={handleContextMenu}
+            style={{ cursor: 'pointer' }}
           >
-            {group.name}
-          </text>
-          <text
-            x={bounds.x + 15 / zoom + (group.name.length * 7) / zoom + 5 / zoom}
-            y={bounds.y + 27 / zoom}
-            fill="white"
-            fontSize={10 / zoom}
-            style={{ pointerEvents: 'none', userSelect: 'none' }}
-          >
-            ({group.nodeIds.length})
-          </text>
-        </g>
+            <rect
+              x={bounds.x + 10 / zoom}
+              y={bounds.y + 10 / zoom}
+              width={Math.max(100, (group.name.length * 7 + 20) / zoom)}
+              height={28 / zoom}
+              fill={groupColor}
+              fillOpacity={0.95}
+              rx={4 / zoom}
+              ry={4 / zoom}
+            />
+            <text
+              x={bounds.x + 15 / zoom}
+              y={bounds.y + 27 / zoom}
+              fill="white"
+              fontSize={12 / zoom}
+              fontWeight="600"
+              style={{ pointerEvents: 'none', userSelect: 'none' }}
+            >
+              {group.name}
+            </text>
+          </g>
+        )}
       </g>
 
       {/* Context menu for group */}

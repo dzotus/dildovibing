@@ -4,11 +4,21 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { ComponentGroup } from '@/types';
 import { GroupDeleteDialog } from '@/components/ui/alert-dialog-group';
 import { GroupNameDialog } from '@/components/ui/group-name-dialog';
-import { Trash2, X } from 'lucide-react';
+import { Trash2, X, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface GroupPropertiesPanelProps {
@@ -16,9 +26,11 @@ interface GroupPropertiesPanelProps {
 }
 
 export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
-  const { nodes, updateGroup, deleteGroup, removeNodeFromGroup, selectGroup } = useCanvasStore();
+  const { nodes, updateGroup, deleteGroup, removeNodeFromGroup, addNodeToGroup, selectGroup } = useCanvasStore();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [showAddNodeDialog, setShowAddNodeDialog] = useState(false);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
 
   const handleRename = () => {
     setShowRenameDialog(true);
@@ -83,6 +95,22 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
 
       <Separator />
 
+      <div className="flex items-center space-x-2">
+        <Checkbox
+          id="show-name"
+          checked={group.showName !== false}
+          onCheckedChange={(checked) => updateGroup(group.id, { showName: checked !== false })}
+        />
+        <Label
+          htmlFor="show-name"
+          className="text-xs font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+        >
+          Show name on canvas
+        </Label>
+      </div>
+
+      <Separator />
+
       <div>
         <Label className="text-xs font-medium mb-2 block">Color</Label>
         <div className="flex items-center gap-2">
@@ -104,9 +132,31 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
       <Separator />
 
       <div>
-        <Label className="text-xs font-medium mb-2 block">
-          Components ({group.nodeIds.length})
-        </Label>
+        <div className="flex items-center justify-between mb-2">
+          <Label className="text-xs font-medium">
+            Components ({group.nodeIds.length})
+          </Label>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 text-xs"
+            onClick={() => {
+              const allNodes = useCanvasStore.getState().nodes;
+              const availableNodes = allNodes.filter(n => !group.nodeIds.includes(n.id));
+              
+              if (availableNodes.length === 0) {
+                toast.info('All components are already in this group');
+                return;
+              }
+              
+              setSelectedNodeIds(new Set());
+              setShowAddNodeDialog(true);
+            }}
+          >
+            <Plus className="h-3 w-3 mr-1" />
+            Add
+          </Button>
+        </div>
         <div className="space-y-2 max-h-60 overflow-y-auto">
           {groupNodes.map((node) => (
             <div
@@ -142,6 +192,92 @@ export function GroupPropertiesPanel({ group }: GroupPropertiesPanelProps) {
         <span>Group ID:</span>
         <code className="font-mono bg-secondary/50 px-2 py-1 rounded">{group.id}</code>
       </div>
+
+      {/* Add Components Dialog */}
+      <Dialog open={showAddNodeDialog} onOpenChange={setShowAddNodeDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add Components to Group</DialogTitle>
+            <DialogDescription>
+              Select components to add to "{group.name}"
+            </DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-96">
+            <div className="space-y-2 py-2">
+              {nodes
+                .filter(node => !group.nodeIds.includes(node.id))
+                .map((node) => (
+                  <div
+                    key={node.id}
+                    className="flex items-center space-x-2 p-2 rounded border border-border hover:bg-secondary/50 cursor-pointer"
+                    onClick={() => {
+                      const newSelected = new Set(selectedNodeIds);
+                      if (newSelected.has(node.id)) {
+                        newSelected.delete(node.id);
+                      } else {
+                        newSelected.add(node.id);
+                      }
+                      setSelectedNodeIds(newSelected);
+                    }}
+                  >
+                    <Checkbox
+                      checked={selectedNodeIds.has(node.id)}
+                      onCheckedChange={(checked) => {
+                        const newSelected = new Set(selectedNodeIds);
+                        if (checked) {
+                          newSelected.add(node.id);
+                        } else {
+                          newSelected.delete(node.id);
+                        }
+                        setSelectedNodeIds(newSelected);
+                      }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">
+                        {node.data?.label || node.type}
+                      </div>
+                      <div className="text-xs text-muted-foreground truncate">
+                        {node.type}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              {nodes.filter(node => !group.nodeIds.includes(node.id)).length === 0 && (
+                <div className="text-sm text-muted-foreground text-center py-4">
+                  All components are already in this group
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowAddNodeDialog(false);
+                setSelectedNodeIds(new Set());
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (selectedNodeIds.size === 0) {
+                  toast.error('Select at least one component');
+                  return;
+                }
+                selectedNodeIds.forEach(nodeId => {
+                  addNodeToGroup(group.id, nodeId);
+                });
+                toast.success(`${selectedNodeIds.size} component(s) added to group`);
+                setShowAddNodeDialog(false);
+                setSelectedNodeIds(new Set());
+              }}
+            >
+              Add Selected ({selectedNodeIds.size})
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

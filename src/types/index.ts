@@ -32,6 +32,7 @@ export interface CanvasNode {
     config?: ComponentConfig;
   };
   selected?: boolean;
+  zIndex?: number; // For z-order management (higher = on top)
 }
 
 export interface ComponentConfig {
@@ -78,6 +79,8 @@ export interface CanvasConnection {
   label?: string;
   data?: ConnectionConfig;
   selected?: boolean;
+  sourcePort?: number; // Index of connection point on source node (0-15)
+  targetPort?: number; // Index of connection point on target node (0-15)
 }
 
 export interface ConnectionConfig {
@@ -115,6 +118,7 @@ export interface ComponentGroup {
   color?: string;
   position?: { x: number; y: number };
   size?: { width: number; height: number };
+  showName?: boolean; // Whether to show group name on canvas
 }
 
 export interface DiagramState {

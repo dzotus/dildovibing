@@ -3,6 +3,20 @@ import { CanvasNode, CanvasConnection, DiagramState, ComponentGroup } from '@/ty
 import { saveDiagramToStorage, loadDiagramFromStorage } from '@/utils/persistence';
 import { useHistoryStore } from './useHistoryStore';
 
+interface CanvasBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface CanvasChunk {
+  x: number; // Grid X coordinate
+  y: number; // Grid Y coordinate
+}
+
+const CHUNK_SIZE = 2000; // Fixed size of each canvas chunk
+
 interface CanvasStore extends DiagramState {
   selectedNodeId: string | null;
   selectedConnectionId: string | null;
@@ -10,6 +24,9 @@ interface CanvasStore extends DiagramState {
   diagramName: string;
   viewportWidth: number;
   viewportHeight: number;
+  canvasBounds: CanvasBounds;
+  canvasChunks: CanvasChunk[];
+  updateCanvasBounds: () => void;
   addNode: (node: CanvasNode) => void;
   updateNode: (id: string, updates: Partial<CanvasNode>, skipHistory?: boolean) => void;
   deleteNode: (id: string) => void;
@@ -40,6 +57,11 @@ interface CanvasStore extends DiagramState {
   getDiagramState: () => DiagramState;
   startDragOperation: (nodeId: string) => void;
   endDragOperation: () => void;
+  // Z-index management
+  bringToFront: (nodeId: string) => void;
+  sendToBack: (nodeId: string) => void;
+  bringForward: (nodeId: string) => void;
+  sendBackward: (nodeId: string) => void;
 }
 
 const initialState: DiagramState = {
@@ -48,6 +70,74 @@ const initialState: DiagramState = {
   groups: [],
   zoom: 1,
   pan: { x: 0, y: 0 },
+};
+
+const NODE_SIZE = 140;
+const CANVAS_PADDING = 200;
+
+// Helper to get chunk coordinates from world coordinates
+const getChunkCoords = (worldX: number, worldY: number): CanvasChunk => {
+  return {
+    x: Math.floor(worldX / CHUNK_SIZE),
+    y: Math.floor(worldY / CHUNK_SIZE),
+  };
+};
+
+// Helper to calculate required canvas chunks from nodes
+const calculateCanvasChunks = (nodes: CanvasNode[]): CanvasChunk[] => {
+  if (nodes.length === 0) {
+    // Default: one chunk at origin
+    return [{ x: 0, y: 0 }];
+  }
+
+  const chunks = new Set<string>();
+  
+  // Add chunks for all nodes (including their size)
+  nodes.forEach(node => {
+    const topLeft = getChunkCoords(node.position.x, node.position.y);
+    const bottomRight = getChunkCoords(
+      node.position.x + NODE_SIZE + CANVAS_PADDING,
+      node.position.y + NODE_SIZE + CANVAS_PADDING
+    );
+    
+    // Add all chunks in the bounding box
+    for (let x = topLeft.x; x <= bottomRight.x; x++) {
+      for (let y = topLeft.y; y <= bottomRight.y; y++) {
+        chunks.add(`${x},${y}`);
+      }
+    }
+  });
+
+  return Array.from(chunks).map(key => {
+    const [x, y] = key.split(',').map(Number);
+    return { x, y };
+  });
+};
+
+// Helper to calculate canvas bounds from chunks
+const calculateCanvasBounds = (chunks: CanvasChunk[]): CanvasBounds => {
+  if (chunks.length === 0) {
+    return {
+      minX: 0,
+      minY: 0,
+      maxX: CHUNK_SIZE,
+      maxY: CHUNK_SIZE,
+    };
+  }
+
+  const xs = chunks.map(c => c.x);
+  const ys = chunks.map(c => c.y);
+  const minChunkX = Math.min(...xs);
+  const minChunkY = Math.min(...ys);
+  const maxChunkX = Math.max(...xs);
+  const maxChunkY = Math.max(...ys);
+
+  return {
+    minX: minChunkX * CHUNK_SIZE,
+    minY: minChunkY * CHUNK_SIZE,
+    maxX: (maxChunkX + 1) * CHUNK_SIZE,
+    maxY: (maxChunkY + 1) * CHUNK_SIZE,
+  };
 };
 
 export const useCanvasStore = create<CanvasStore>((set, get) => {
@@ -78,6 +168,9 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     useHistoryStore.getState().pushState(getDiagramState());
   };
 
+  const initialChunks = calculateCanvasChunks(initialDiagram.nodes);
+  const initialBounds = calculateCanvasBounds(initialChunks);
+
   return {
     ...initialDiagram,
     selectedNodeId: null,
@@ -85,14 +178,29 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     diagramName: savedDiagram?.name || 'Untitled Diagram',
     viewportWidth: 0,
     viewportHeight: 0,
+    canvasBounds: initialBounds,
+    canvasChunks: initialChunks,
 
     getDiagramState,
+
+    updateCanvasBounds: () =>
+      set((state) => {
+        const chunks = calculateCanvasChunks(state.nodes);
+        return {
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
+        };
+      }),
 
     addNode: (node) =>
       set((state) => {
         saveToHistory();
+        const newNodes = [...state.nodes, node];
+        const chunks = calculateCanvasChunks(newNodes);
         const newState = {
-          nodes: [...state.nodes, node],
+          nodes: newNodes,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
         };
         saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
         return newState;
@@ -104,10 +212,17 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         if (!skipHistory && !isDragging) {
           saveToHistory();
         }
+        const newNodes = state.nodes.map((node) =>
+          node.id === id ? { ...node, ...updates } : node
+        );
+        
+        // Recalculate chunks based on new node positions
+        const chunks = calculateCanvasChunks(newNodes);
+        
         const newState = {
-          nodes: state.nodes.map((node) =>
-            node.id === id ? { ...node, ...updates } : node
-          ),
+          nodes: newNodes,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
         };
         saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
         return newState;
@@ -116,12 +231,16 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     deleteNode: (id) =>
       set((state) => {
         saveToHistory();
+        const newNodes = state.nodes.filter((node) => node.id !== id);
+        const chunks = calculateCanvasChunks(newNodes);
         const newState = {
-          nodes: state.nodes.filter((node) => node.id !== id),
+          nodes: newNodes,
           connections: state.connections.filter(
             (conn) => conn.source !== id && conn.target !== id
           ),
           selectedNodeId: state.selectedNodeId === id ? null : state.selectedNodeId,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
         };
         saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
         return newState;
@@ -402,8 +521,14 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         if (!skipHistory) {
           saveToHistory();
         }
-        saveDiagramToStorage(state, get().diagramName);
-        return state;
+        const chunks = calculateCanvasChunks(state.nodes || []);
+        const newState = {
+          ...state,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
+        };
+        saveDiagramToStorage(newState, get().diagramName);
+        return newState;
       }),
 
     saveDiagram: () => {
@@ -413,15 +538,26 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
     resetCanvas: () => {
       saveToHistory();
-      set(initialState);
+      const chunks = calculateCanvasChunks([]);
+      set({
+        ...initialState,
+        canvasChunks: chunks,
+        canvasBounds: calculateCanvasBounds(chunks),
+      });
     },
 
     undo: () => {
       const previousState = useHistoryStore.getState().undo();
       if (previousState) {
         set(() => {
-          saveDiagramToStorage(previousState, get().diagramName);
-          return previousState;
+          const chunks = calculateCanvasChunks(previousState.nodes || []);
+          const newState = {
+            ...previousState,
+            canvasChunks: chunks,
+            canvasBounds: calculateCanvasBounds(chunks),
+          };
+          saveDiagramToStorage(newState, get().diagramName);
+          return newState;
         });
       }
     },
@@ -430,8 +566,14 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       const nextState = useHistoryStore.getState().redo();
       if (nextState) {
         set(() => {
-          saveDiagramToStorage(nextState, get().diagramName);
-          return nextState;
+          const chunks = calculateCanvasChunks(nextState.nodes || []);
+          const newState = {
+            ...nextState,
+            canvasChunks: chunks,
+            canvasBounds: calculateCanvasBounds(chunks),
+          };
+          saveDiagramToStorage(newState, get().diagramName);
+          return newState;
         });
       }
     },
@@ -449,5 +591,63 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       draggedNodeInitialState = null;
       // No need to save history here - it was saved at the start
     },
+
+    bringToFront: (nodeId) =>
+      set((state) => {
+        saveToHistory();
+        const nodeIndex = state.nodes.findIndex((n) => n.id === nodeId);
+        if (nodeIndex === -1) return state;
+
+        const nodes = [...state.nodes];
+        const [node] = nodes.splice(nodeIndex, 1);
+        nodes.push(node);
+
+        const newState = { nodes };
+        saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        return newState;
+      }),
+
+    sendToBack: (nodeId) =>
+      set((state) => {
+        saveToHistory();
+        const nodeIndex = state.nodes.findIndex((n) => n.id === nodeId);
+        if (nodeIndex === -1) return state;
+
+        const nodes = [...state.nodes];
+        const [node] = nodes.splice(nodeIndex, 1);
+        nodes.unshift(node);
+
+        const newState = { nodes };
+        saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        return newState;
+      }),
+
+    bringForward: (nodeId) =>
+      set((state) => {
+        saveToHistory();
+        const nodeIndex = state.nodes.findIndex((n) => n.id === nodeId);
+        if (nodeIndex === -1 || nodeIndex === state.nodes.length - 1) return state;
+
+        const nodes = [...state.nodes];
+        [nodes[nodeIndex], nodes[nodeIndex + 1]] = [nodes[nodeIndex + 1], nodes[nodeIndex]];
+
+        const newState = { nodes };
+        saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        return newState;
+      }),
+
+    sendBackward: (nodeId) =>
+      set((state) => {
+        saveToHistory();
+        const nodeIndex = state.nodes.findIndex((n) => n.id === nodeId);
+        if (nodeIndex === -1 || nodeIndex === 0) return state;
+
+        const nodes = [...state.nodes];
+        [nodes[nodeIndex], nodes[nodeIndex - 1]] = [nodes[nodeIndex - 1], nodes[nodeIndex]];
+
+        const newState = { nodes };
+        saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        return newState;
+      }),
   };
 });

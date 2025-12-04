@@ -7,6 +7,9 @@ interface UIStore {
   showHeatMapLegend: boolean;
   setShowHeatMapLegend: (show: boolean) => void;
   toggleHeatMapLegend: () => void;
+  showRuler: boolean;
+  setShowRuler: (show: boolean) => void;
+  toggleRuler: () => void;
   autoCenterOnSelect: boolean;
   setAutoCenterOnSelect: (enabled: boolean) => void;
   searchQuery: string;
@@ -22,6 +25,9 @@ export const useUIStore = create<UIStore>((set) => ({
   showHeatMapLegend: true,
   setShowHeatMapLegend: (show) => set({ showHeatMapLegend: show }),
   toggleHeatMapLegend: () => set((state) => ({ showHeatMapLegend: !state.showHeatMapLegend })),
+  showRuler: false,
+  setShowRuler: (show) => set({ showRuler: show }),
+  toggleRuler: () => set((state) => ({ showRuler: !state.showRuler })),
   autoCenterOnSelect: true,
   setAutoCenterOnSelect: (enabled) => set({ autoCenterOnSelect: enabled }),
   searchQuery: '',

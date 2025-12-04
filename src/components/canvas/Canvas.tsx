@@ -10,6 +10,11 @@ import { HeatMapLegend } from '@/components/emulation/HeatMapLegend';
 import { DataPathVisualization } from './DataPathVisualization';
 import { CanvasMinimap } from './CanvasMinimap';
 import { ComponentGroup } from './ComponentGroup';
+import { CanvasRuler } from './CanvasRuler';
+import { findBestConnectionPoint } from '@/utils/connectionPoints';
+import { ContextMenu } from './ContextMenu';
+import { deepClone } from '@/lib/deepClone';
+import { toast } from 'sonner';
 
 // Compact connection context menu component
 function ConnectionContextMenu({
@@ -24,6 +29,34 @@ function ConnectionContextMenu({
   onClose: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ x, y });
+
+  useEffect(() => {
+    if (menuRef.current) {
+      const menuRect = menuRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      let adjustedX = x;
+      let adjustedY = y;
+
+      // Adjust if menu goes off right edge
+      if (x + menuRect.width > viewportWidth) {
+        adjustedX = viewportWidth - menuRect.width - 8;
+      }
+
+      // Adjust if menu goes off bottom edge
+      if (y + menuRect.height > viewportHeight) {
+        adjustedY = viewportHeight - menuRect.height - 8;
+      }
+
+      // Ensure menu doesn't go off left or top edges
+      adjustedX = Math.max(8, adjustedX);
+      adjustedY = Math.max(8, adjustedY);
+
+      setPosition({ x: adjustedX, y: adjustedY });
+    }
+  }, [x, y]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -50,23 +83,17 @@ function ConnectionContextMenu({
   return (
     <div
       ref={menuRef}
-      className="fixed bg-card border border-border rounded-md shadow-lg py-0.5 z-50 min-w-[120px]"
+      className="fixed bg-card border border-border rounded-md shadow-lg z-50"
       style={{
-        left: `${x}px`,
-        top: `${y}px`,
+        left: `${position.x}px`,
+        top: `${position.y}px`,
       }}
     >
       <button
-        className="w-full px-2 py-1 text-xs text-left hover:bg-accent transition-colors"
+        className="w-full px-3 py-2 text-sm text-left hover:bg-accent transition-colors first:rounded-t-md last:rounded-b-md"
         onClick={onDelete}
       >
-        Delete Connection
-      </button>
-      <button
-        className="w-full px-2 py-1 text-xs text-left hover:bg-accent transition-colors"
-        onClick={onClose}
-      >
-        Cancel
+        Delete
       </button>
     </div>
   );
@@ -92,9 +119,18 @@ export function Canvas() {
     selectedConnectionId,
     selectedNodeId,
     setViewportSize,
+    deleteNode,
+    updateNode,
+    bringToFront,
+    sendToBack,
+    bringForward,
+    sendBackward,
+    canvasBounds,
+    canvasChunks,
+    addNodeToGroup,
   } = useCanvasStore();
   const { isRunning } = useEmulationStore();
-  const { showMinimap, showHeatMapLegend } = useUIStore();
+  const { showMinimap, showHeatMapLegend, showRuler } = useUIStore();
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [isConnecting, setIsConnecting] = useState(false);
@@ -105,12 +141,22 @@ export function Canvas() {
     x: number;
     y: number;
   } | null>(null);
+  const [contextMenuNode, setContextMenuNode] = useState<{
+    nodeId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null);
   const [selectionRect, setSelectionRect] = useState<{
     x: number;
     y: number;
     width: number;
     height: number;
+  } | null>(null);
+  const [showAddToGroupDialog, setShowAddToGroupDialog] = useState<{
+    nodeId: string;
+    x: number;
+    y: number;
   } | null>(null);
 
   // Track viewport size so other parts (e.g. toolbar) can fit all nodes correctly
@@ -257,15 +303,43 @@ export function Canvas() {
     setConnectionStart(nodeId);
   };
 
-  const handleNodeConnectionEnd = (nodeId: string) => {
+  const handleNodeConnectionEnd = (nodeId: string, targetPort?: number) => {
     if (isConnecting && connectionStart && connectionStart !== nodeId) {
-      const newConnection: CanvasConnection = {
-        id: `conn-${Date.now()}`,
-        source: connectionStart,
-        target: nodeId,
-        type: 'async',
-      };
-      addConnection(newConnection);
+      const sourceNode = nodes.find(n => n.id === connectionStart);
+      const targetNode = nodes.find(n => n.id === nodeId);
+      
+      if (sourceNode && targetNode) {
+        // Find best connection points
+        const sourcePort = findBestConnectionPoint(
+          connectionStart,
+          nodeId,
+          targetNode.position.x + 70,
+          targetNode.position.y + 50,
+          connections,
+          sourceNode.position.x,
+          sourceNode.position.y
+        );
+        
+        const finalTargetPort = targetPort !== undefined ? targetPort : findBestConnectionPoint(
+          nodeId,
+          connectionStart,
+          sourceNode.position.x + 70,
+          sourceNode.position.y + 50,
+          connections,
+          targetNode.position.x,
+          targetNode.position.y
+        );
+        
+        const newConnection: CanvasConnection = {
+          id: `conn-${Date.now()}`,
+          source: connectionStart,
+          target: nodeId,
+          type: 'async',
+          sourcePort,
+          targetPort: finalTargetPort,
+        };
+        addConnection(newConnection);
+      }
     }
     setIsConnecting(false);
     setConnectionStart(null);
@@ -315,21 +389,40 @@ export function Canvas() {
     }
   };
 
+  const gridSize = 20; // Base grid size
+  const scaledGridSize = gridSize * zoom;
+  const rulerSize = showRuler ? 24 : 0;
+
+  const CHUNK_SIZE = 2000; // Must match store constant
+  
+  // Show canvas boundaries when zoomed out (zoom < 0.5)
+  const showCanvasBoundaries = zoom < 0.5;
+
   return (
-    <div
-      ref={canvasRef}
-      className="flex-1 canvas-grid overflow-hidden relative"
-      onDrop={handleDrop}
-      onDragOver={handleDragOver}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onWheel={handleWheel}
-      style={{
-        cursor: isPanning ? 'grabbing' : isConnecting ? 'crosshair' : 'default',
-      }}
-    >
+    <div className="flex-1 overflow-hidden relative">
+      {/* Ruler - positioned outside canvas with border */}
+      <CanvasRuler isVisible={showRuler} canvasRef={canvasRef} />
+      
+      {/* Canvas area - offset to make room for rulers */}
+      <div
+        ref={canvasRef}
+        className="absolute overflow-hidden"
+        style={{
+          top: `${rulerSize}px`,
+          left: `${rulerSize}px`,
+          right: 0,
+          bottom: 0,
+          cursor: isPanning ? 'grabbing' : isConnecting ? 'crosshair' : 'default',
+          backgroundColor: 'hsl(var(--muted) / 0.1)', // Background outside canvas chunks
+        }}
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
+        onWheel={handleWheel}
+      >
       <div
         style={{
           transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -339,6 +432,70 @@ export function Canvas() {
           position: 'relative',
         }}
       >
+        {/* Canvas chunks - render each chunk separately with grid and dividers */}
+        {canvasChunks.map((chunk) => {
+          const chunkX = chunk.x * CHUNK_SIZE;
+          const chunkY = chunk.y * CHUNK_SIZE;
+          
+          // Check if this chunk has neighbors to determine which dividers to show
+          const hasRightNeighbor = canvasChunks.some(
+            c => c.x === chunk.x + 1 && c.y === chunk.y
+          );
+          const hasBottomNeighbor = canvasChunks.some(
+            c => c.x === chunk.x && c.y === chunk.y + 1
+          );
+          
+          return (
+            <div
+              key={`chunk-${chunk.x}-${chunk.y}`}
+              className="absolute pointer-events-none"
+              style={{
+                left: `${chunkX}px`,
+                top: `${chunkY}px`,
+                width: `${CHUNK_SIZE}px`,
+                height: `${CHUNK_SIZE}px`,
+                backgroundColor: 'hsl(var(--canvas-bg))',
+                backgroundImage: `
+                  linear-gradient(hsl(var(--canvas-grid)) 1px, transparent 1px),
+                  linear-gradient(90deg, hsl(var(--canvas-grid)) 1px, transparent 1px)
+                `,
+                backgroundSize: `${scaledGridSize}px ${scaledGridSize}px`,
+                backgroundPosition: `${(pan.x % scaledGridSize) + (chunkX % scaledGridSize)}px ${(pan.y % scaledGridSize) + (chunkY % scaledGridSize)}px`,
+                border: showCanvasBoundaries 
+                  ? '2px dashed hsl(var(--border) / 0.6)' 
+                  : 'none',
+                boxShadow: showCanvasBoundaries 
+                  ? 'inset 0 0 0 1px hsl(var(--border) / 0.3)' 
+                  : 'none',
+              }}
+            >
+              {/* Divider lines - always show between chunks */}
+              {/* Right divider - show if there's a neighbor to the right */}
+              {hasRightNeighbor && (
+                <div
+                  className="absolute top-0 bottom-0 pointer-events-none z-10"
+                  style={{
+                    right: 0,
+                    width: '1px',
+                    backgroundColor: 'hsl(var(--border) / 0.5)',
+                  }}
+                />
+              )}
+              {/* Bottom divider - show if there's a neighbor below */}
+              {hasBottomNeighbor && (
+                <div
+                  className="absolute left-0 right-0 pointer-events-none z-10"
+                  style={{
+                    bottom: 0,
+                    height: '1px',
+                    backgroundColor: 'hsl(var(--border) / 0.5)',
+                  }}
+                />
+              )}
+            </div>
+          );
+        })}
+        
         {/* Lasso selection rectangle */}
         {selectionRect && (
           <div
@@ -459,8 +616,9 @@ export function Canvas() {
             key={node.id}
             node={node}
             onConnectionStart={() => handleNodeConnectionStart(node.id)}
-            onConnectionEnd={() => handleNodeConnectionEnd(node.id)}
+            onConnectionEnd={(portIndex) => handleNodeConnectionEnd(node.id, portIndex)}
             isConnecting={isConnecting}
+            onContextMenu={(x, y) => setContextMenuNode({ nodeId: node.id, x, y })}
           />
         ))}
         
@@ -472,6 +630,7 @@ export function Canvas() {
             position={node.position}
           />
         ))}
+      </div>
       </div>
 
       {/* Heat Map Legend */}
@@ -491,6 +650,144 @@ export function Canvas() {
           onDelete={handleDeleteConnection}
           onClose={() => setContextMenuConnection(null)}
         />
+      )}
+
+      {/* Node context menu - rendered outside transform container */}
+      {contextMenuNode && (() => {
+        const node = nodes.find(n => n.id === contextMenuNode.nodeId);
+        if (!node) return null;
+
+        const handleDelete = () => {
+          deleteNode(node.id);
+          toast.success('Element deleted');
+          setContextMenuNode(null);
+        };
+
+        const handleDuplicate = () => {
+          const duplicatedNode: CanvasNodeType = {
+            ...deepClone(node),
+            id: `${node.type}_${Date.now()}`,
+            position: {
+              x: node.position.x + 20,
+              y: node.position.y + 20,
+            },
+            selected: false,
+          };
+          if (duplicatedNode.data?.config) {
+            duplicatedNode.data.config = deepClone(duplicatedNode.data.config);
+          }
+          addNode(duplicatedNode);
+          toast.success('Element duplicated');
+          setContextMenuNode(null);
+        };
+
+        const handleCopyId = () => {
+          navigator.clipboard.writeText(node.id);
+          toast.success('ID copied to clipboard');
+          setContextMenuNode(null);
+        };
+
+        const handleBringToFront = () => {
+          bringToFront(node.id);
+          toast.success('Brought to front');
+          setContextMenuNode(null);
+        };
+
+        const handleSendToBack = () => {
+          sendToBack(node.id);
+          toast.success('Sent to back');
+          setContextMenuNode(null);
+        };
+
+        const handleBringForward = () => {
+          bringForward(node.id);
+          toast.success('Brought forward');
+          setContextMenuNode(null);
+        };
+
+        const handleSendBackward = () => {
+          sendBackward(node.id);
+          toast.success('Sent backward');
+          setContextMenuNode(null);
+        };
+
+        const handleAddToGroup = () => {
+          setShowAddToGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+          setContextMenuNode(null);
+        };
+
+        return (
+          <ContextMenu
+            x={contextMenuNode.x}
+            y={contextMenuNode.y}
+            onDelete={handleDelete}
+            onDuplicate={handleDuplicate}
+            onCopyId={handleCopyId}
+            onBringToFront={handleBringToFront}
+            onSendToBack={handleSendToBack}
+            onBringForward={handleBringForward}
+            onSendBackward={handleSendBackward}
+            onAddToGroup={handleAddToGroup}
+            onClose={() => setContextMenuNode(null)}
+          />
+        );
+      })()}
+
+      {/* Add to Group Dialog */}
+      {showAddToGroupDialog && (
+        <div
+          className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
+          style={{
+            left: `${showAddToGroupDialog.x}px`,
+            top: `${showAddToGroupDialog.y}px`,
+          }}
+        >
+          <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground border-b border-border">
+            Add to Group
+          </div>
+          <div className="max-h-60 overflow-y-auto">
+            {groups.length > 0 ? (
+              groups.map((group) => {
+                const isInGroup = group.nodeIds.includes(showAddToGroupDialog.nodeId);
+                return (
+                  <button
+                    key={group.id}
+                    onClick={() => {
+                      if (isInGroup) {
+                        toast.info('Component is already in this group');
+                      } else {
+                        addNodeToGroup(group.id, showAddToGroupDialog.nodeId);
+                        toast.success(`Added to "${group.name}"`);
+                      }
+                      setShowAddToGroupDialog(null);
+                    }}
+                    disabled={isInGroup}
+                    className="w-full px-2 py-1.5 text-xs text-left text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div
+                      className="w-3 h-3 rounded border border-border flex-shrink-0"
+                      style={{ backgroundColor: group.color || 'hsl(var(--primary))' }}
+                    />
+                    <span className="truncate">{group.name}</span>
+                    {isInGroup && <span className="text-xs text-muted-foreground ml-auto">(in group)</span>}
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-2 py-4 text-xs text-muted-foreground text-center">
+                No groups available
+              </div>
+            )}
+          </div>
+          <div className="border-t border-border mt-1">
+            <button
+              onClick={() => setShowAddToGroupDialog(null)}
+              className="w-full px-2 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       )}
 
     </div>

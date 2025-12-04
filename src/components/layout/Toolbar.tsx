@@ -16,6 +16,7 @@ import {
   Activity,
   Layers,
   Sparkles,
+  Ruler,
 } from 'lucide-react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useHistoryStore } from '@/store/useHistoryStore';
@@ -62,10 +63,10 @@ export function Toolbar() {
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [newName, setNewName] = useState(diagramName);
   const [showGroupNameDialog, setShowGroupNameDialog] = useState(false);
-  const { showMinimap, toggleMinimap, showHeatMapLegend, toggleHeatMapLegend } = useUIStore();
+  const { showMinimap, toggleMinimap, showHeatMapLegend, toggleHeatMapLegend, showRuler, toggleRuler } = useUIStore();
 
   const handleZoomIn = () => setZoom(Math.min(zoom + 0.1, 2));
-  const handleZoomOut = () => setZoom(Math.max(zoom - 0.1, 0.5));
+  const handleZoomOut = () => setZoom(zoom - 0.1);
   const handleZoomReset = () => {
     const allNodes = nodes;
     if (!allNodes.length) {
@@ -211,10 +212,6 @@ export function Toolbar() {
           </button>
           <Separator orientation="vertical" className="h-6 mx-2" />
 
-          {/* Tool mode buttons were decorative and Connect mode is removed as requested */}
-
-          <Separator orientation="vertical" className="h-6 mx-2" />
-
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
@@ -249,10 +246,10 @@ export function Toolbar() {
               variant="ghost"
               size="icon"
               className="h-8 w-8"
-              onClick={handleZoomOut}
-              title="Zoom Out"
+              onClick={handleZoomIn}
+              title="Zoom In"
             >
-              <ZoomOut className="h-4 w-4" />
+              <ZoomIn className="h-4 w-4" />
             </Button>
             <span className="text-sm font-mono px-2 min-w-[60px] text-center">
               {Math.round(zoom * 100)}%
@@ -261,17 +258,17 @@ export function Toolbar() {
               variant="ghost"
               size="icon"
               className="h-8 w-8"
-              onClick={handleZoomIn}
-              title="Zoom In"
+              onClick={handleZoomOut}
+              title="Zoom Out"
             >
-              <ZoomIn className="h-4 w-4" />
+              <ZoomOut className="h-4 w-4" />
             </Button>
             <Button
               variant="ghost"
               size="icon"
               className="h-8 w-8"
               onClick={handleZoomReset}
-              title="Reset Zoom"
+              title="Fit to View"
             >
               <Maximize2 className="h-4 w-4" />
             </Button>
@@ -352,6 +349,16 @@ export function Toolbar() {
             onClick={toggleHeatMapLegend}
           >
             <Activity className="h-4 w-4" />
+          </Button>
+
+          <Button 
+            variant={showRuler ? "default" : "ghost"} 
+            size="icon" 
+            className="h-9 w-9" 
+            title={showRuler ? "Hide ruler" : "Show ruler"}
+            onClick={toggleRuler}
+          >
+            <Ruler className="h-4 w-4" />
           </Button>
 
           <Button variant="ghost" size="icon" className="h-9 w-9" title="Settings">

@@ -14,6 +14,16 @@ export function useKeyboardShortcuts() {
     setPan,
     resetCanvas,
     saveDiagram,
+    selectedConnectionId,
+    selectedNodeId,
+    selectedGroupId,
+    nodes,
+    deleteConnection,
+    deleteNode,
+    deleteGroup,
+    selectConnection,
+    selectNode,
+    selectGroup,
   } = useCanvasStore();
   const { canUndo, canRedo } = useHistoryStore();
   const { isRunning, start, stop } = useEmulationStore();
@@ -122,6 +132,50 @@ export function useKeyboardShortcuts() {
         toggleHeatMapLegend();
         return;
       }
+
+      // Delete selected items: Delete or Backspace
+      if ((e.key === 'Delete' || e.key === 'Backspace') && !isCtrlOrCmd) {
+        // Check if input/textarea is focused - don't delete if user is typing
+        const activeElement = document.activeElement;
+        const isInputFocused = activeElement && (
+          activeElement.tagName === 'INPUT' ||
+          activeElement.tagName === 'TEXTAREA' ||
+          activeElement.isContentEditable
+        );
+        
+        if (isInputFocused) return;
+
+        e.preventDefault();
+
+        // Delete selected connection
+        if (selectedConnectionId) {
+          deleteConnection(selectedConnectionId);
+          selectConnection(null);
+          return;
+        }
+
+        // Delete selected group
+        if (selectedGroupId) {
+          deleteGroup(selectedGroupId);
+          selectGroup(null);
+          return;
+        }
+
+        // Delete selected nodes (including multi-selected)
+        const selectedNodes = nodes.filter(n => n.selected);
+        if (selectedNodes.length > 0) {
+          selectedNodes.forEach(node => deleteNode(node.id));
+          selectNode(null);
+          return;
+        }
+
+        // Delete single selected node (if no multi-selection)
+        if (selectedNodeId) {
+          deleteNode(selectedNodeId);
+          selectNode(null);
+          return;
+        }
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -147,5 +201,15 @@ export function useKeyboardShortcuts() {
     toggleMinimap,
     showHeatMapLegend,
     toggleHeatMapLegend,
+    selectedConnectionId,
+    selectedNodeId,
+    selectedGroupId,
+    nodes,
+    deleteConnection,
+    deleteNode,
+    deleteGroup,
+    selectConnection,
+    selectNode,
+    selectGroup,
   ]);
 }
