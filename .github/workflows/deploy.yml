@@ -34,9 +34,8 @@ jobs:
 
       - name: Build
         env:
-          # Если репозиторий не в корне GitHub Pages, раскомментируйте и укажите имя репозитория:
-          # VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_BASE_PATH: /
+          # Для GitHub Pages указываем базовый путь как /<имя-репозитория>/
+          VITE_BASE_PATH: /${{ github.event.repository.name }}/
         run: npm run build
 
       - name: Setup Pages
