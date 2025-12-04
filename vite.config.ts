@@ -10,7 +10,9 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  // Base path for GitHub Pages (set via environment variable or default to root)
+  // Base path for GitHub Pages:
+  // - в локальной разработке будет '/'
+  // - на GitHub Pages берётся из переменной окружения VITE_BASE_PATH (см. .github/workflows/deploy.yml)
   base: process.env.VITE_BASE_PATH || '/',
   server: {
     port: 3929,
