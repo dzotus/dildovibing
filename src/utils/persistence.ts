@@ -121,6 +121,11 @@ export const importDiagramFromJSON = (file: File): Promise<StoredDiagram | null>
             throw new Error('Invalid diagram format');
           }
 
+          // Ensure groups array exists
+          if (!diagram.groups) {
+            diagram.groups = [];
+          }
+
           resolve(diagram);
         } catch (error) {
           console.error('Failed to parse diagram file:', error);

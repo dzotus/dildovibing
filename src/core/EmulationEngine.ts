@@ -1,5 +1,6 @@
 import { CanvasNode, CanvasConnection } from '@/types';
-import { prometheusExporter } from './PrometheusMetricsExporter';
+import { dataFlowEngine } from './DataFlowEngine';
+import { componentStateEngine } from './ComponentStateEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -78,6 +79,7 @@ export class EmulationEngine {
   private isRunning: boolean = false;
   private simulationTime: number = 0;
   private baseTime: number = Date.now();
+  private pausedTime: number = 0; // Time accumulated before pause
   private updateInterval: number = 100; // ms
   private intervalId: NodeJS.Timeout | null = null;
   
@@ -169,6 +171,51 @@ export class EmulationEngine {
     this.nodes = nodes;
     this.connections = connections;
     this.initializeMetrics();
+    
+    // Initialize data flow engine
+    dataFlowEngine.initialize(nodes, connections);
+  }
+
+  /**
+   * Update nodes and connections without resetting metrics
+   * (useful when canvas is modified during simulation)
+   */
+  public updateNodesAndConnections(nodes: CanvasNode[], connections: CanvasConnection[]) {
+    this.nodes = nodes;
+    this.connections = connections;
+    
+    // Update metrics for new nodes
+    for (const node of nodes) {
+      if (!this.metrics.has(node.id)) {
+        this.metrics.set(node.id, this.createDefaultMetrics(node.id, node.type));
+      }
+    }
+    
+    // Remove metrics for deleted nodes
+    const nodeIds = new Set(nodes.map(n => n.id));
+    for (const [nodeId] of this.metrics.entries()) {
+      if (!nodeIds.has(nodeId)) {
+        this.metrics.delete(nodeId);
+      }
+    }
+    
+    // Update connection metrics for new connections
+    for (const connection of connections) {
+      if (!this.connectionMetrics.has(connection.id)) {
+        this.connectionMetrics.set(connection.id, this.createDefaultConnectionMetrics(connection));
+      }
+    }
+    
+    // Remove metrics for deleted connections
+    const connectionIds = new Set(connections.map(c => c.id));
+    for (const [connId] of this.connectionMetrics.entries()) {
+      if (!connectionIds.has(connId)) {
+        this.connectionMetrics.delete(connId);
+      }
+    }
+    
+    // Update data flow engine
+    dataFlowEngine.updateNodesAndConnections(nodes, connections);
   }
 
   /**
@@ -178,7 +225,11 @@ export class EmulationEngine {
     if (this.isRunning) return;
     
     this.isRunning = true;
-    this.baseTime = Date.now();
+    // Continue from where we paused, not from 0
+    this.baseTime = Date.now() - this.pausedTime;
+    
+    // Start data flow engine
+    dataFlowEngine.start();
     
     this.intervalId = setInterval(() => {
       this.simulate();
@@ -189,11 +240,30 @@ export class EmulationEngine {
    * Stop the emulation simulation
    */
   public stop() {
+    if (!this.isRunning) return;
+    
     this.isRunning = false;
+    // Save current simulation time so we can resume later
+    this.pausedTime = this.simulationTime;
+    
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    
+    // Stop data flow engine
+    dataFlowEngine.stop();
+  }
+  
+  /**
+   * Reset the simulation to initial state
+   */
+  public resetSimulation() {
+    this.stop();
+    this.simulationTime = 0;
+    this.pausedTime = 0;
+    this.baseTime = Date.now();
+    this.initializeMetrics();
   }
 
   /**
@@ -211,9 +281,6 @@ export class EmulationEngine {
     for (const connection of this.connections) {
       this.updateConnectionMetrics(connection);
     }
-    
-    // Update Prometheus exporter with latest metrics
-    prometheusExporter.updateMetrics(this.metrics, this.connectionMetrics, this.nodes);
   }
 
   /**
@@ -223,38 +290,152 @@ export class EmulationEngine {
     const config = (node.data.config || {}) as ComponentConfig;
     const metrics = this.metrics.get(node.id) || this.createDefaultMetrics(node.id, node.type);
     
-    // Apply component-specific logic
-    switch (node.type) {
-      case 'kafka':
-        this.simulateKafka(node, config, metrics);
-        break;
-      case 'rabbitmq':
-        this.simulateRabbitMQ(node, config, metrics);
-        break;
-      case 'postgres':
-      case 'mongodb':
-      case 'redis':
-        this.simulateDatabase(node, config, metrics);
-        break;
-      case 'nginx':
-        this.simulateNginx(node, config, metrics);
-        break;
-      case 'docker':
-      case 'kubernetes':
-        this.simulateInfrastructure(node, config, metrics);
-        break;
-      case 'rest':
-      case 'grpc':
-      case 'websocket':
-        this.simulateAPI(node, config, metrics);
-        break;
+    // Check if component has incoming connections (receives data)
+    const hasIncomingConnections = this.connections.some(conn => conn.target === node.id);
+    // Check if component has outgoing connections (sends data)
+    const hasOutgoingConnections = this.connections.some(conn => conn.source === node.id);
+    // Component is active if it has connections
+    const isActive = hasIncomingConnections || hasOutgoingConnections;
+    
+    // Only generate metrics for components with connections
+    // Components without connections should have zero metrics
+    if (!isActive) {
+      // Reset to default (zero) metrics for unconnected components
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      metrics.customMetrics = {};
+    } else {
+      // Apply component-specific logic only for connected components
+      switch (node.type) {
+        case 'kafka':
+          this.simulateKafka(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'rabbitmq':
+          this.simulateRabbitMQ(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'postgres':
+        case 'mongodb':
+        case 'redis':
+          this.simulateDatabase(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'nginx':
+          this.simulateNginx(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'docker':
+        case 'kubernetes':
+          this.simulateInfrastructure(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'rest':
+        case 'grpc':
+        case 'websocket':
+          this.simulateAPI(node, config, metrics, hasIncomingConnections);
+          break;
+      }
     }
+    
+    // Apply cascade effects from dependencies
+    this.applyCascadeEffects(node, metrics);
+    
+    // Apply manual state control (enabled/disabled/degraded)
+    const stateEffects = componentStateEngine.applyStateEffects(node.id, {
+      throughput: metrics.throughput,
+      latency: metrics.latency,
+      errorRate: metrics.errorRate,
+      utilization: metrics.utilization,
+    });
+    
+    metrics.throughput = stateEffects.throughput;
+    metrics.latency = stateEffects.latency;
+    metrics.errorRate = stateEffects.errorRate;
+    metrics.utilization = stateEffects.utilization;
     
     // Update latency percentiles (p50/p99) from history
     this.updateLatencyPercentiles(node.id, metrics.latency, metrics);
     
     metrics.timestamp = Date.now();
     this.metrics.set(node.id, metrics);
+  }
+
+  /**
+   * Apply cascade effects from dependent components
+   * Errors and delays propagate through the dependency chain
+   */
+  private applyCascadeEffects(node: CanvasNode, metrics: ComponentMetrics) {
+    // Find all incoming connections (dependencies)
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    
+    if (incomingConnections.length === 0) return; // No dependencies, no cascade
+    
+    let totalCascadeErrorRate = 0;
+    let totalCascadeLatency = 0;
+    let totalDependencyWeight = 0;
+    
+    // Store base latency before cascade effects (the latency set by component-specific simulation)
+    const baseLatency = metrics.latency;
+    
+    for (const conn of incomingConnections) {
+      const sourceMetrics = this.metrics.get(conn.source);
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      
+      if (!sourceMetrics || !connMetrics) continue;
+      
+      // Calculate dependency weight based on throughput dependency
+      const weight = connMetrics.throughputDependency || 0.5;
+      totalDependencyWeight += weight;
+      
+      // Cascade error rate: errors from source propagate to target
+      // Higher dependency = more error propagation
+      const cascadeError = sourceMetrics.errorRate * weight * 0.3; // 30% of source errors cascade
+      totalCascadeErrorRate += cascadeError * weight;
+      
+      // Cascade latency: use only the BASE latency portion from source to avoid accumulation
+      // We estimate base latency as min(sourceLatency, 500) to avoid using already-accumulated values
+      const sourceBaseLatency = Math.min(sourceMetrics.latency, 500);
+      const cascadeLatency = sourceBaseLatency * weight * 0.2; // 20% of source latency cascades
+      totalCascadeLatency += cascadeLatency * weight;
+      
+      // If source is down or critical, significantly affect target
+      if (sourceMetrics.errorRate > 0.5 || sourceMetrics.utilization > 0.95) {
+        // Source is failing, cascade more errors
+        totalCascadeErrorRate += 0.1 * weight;
+        totalCascadeLatency += 100 * weight; // Add significant delay
+      }
+    }
+    
+    // Normalize by total weight
+    if (totalDependencyWeight > 0) {
+      totalCascadeErrorRate /= totalDependencyWeight;
+      totalCascadeLatency /= totalDependencyWeight;
+    }
+    
+    // Cap cascade latency to prevent unbounded growth
+    const maxCascadeLatency = 500; // Maximum 500ms of cascade latency
+    totalCascadeLatency = Math.min(totalCascadeLatency, maxCascadeLatency);
+    
+    // Apply cascade effects to metrics
+    // Error rate: add cascade errors (capped at reasonable level)
+    metrics.errorRate = Math.min(1, metrics.errorRate + totalCascadeErrorRate);
+    
+    // Latency: add cascade delays to base latency (not accumulated)
+    // This ensures latency = baseLatency + cascadeEffect, not infinite accumulation
+    metrics.latency = baseLatency + totalCascadeLatency;
+    
+    // Cap total latency to a reasonable maximum
+    const maxTotalLatency = 10000; // Maximum 10 seconds
+    metrics.latency = Math.min(metrics.latency, maxTotalLatency);
+    
+    // Utilization: if dependencies are slow, this component may wait
+    // This increases effective utilization
+    if (totalCascadeLatency > 50) {
+      metrics.utilization = Math.min(1, metrics.utilization + 0.1);
+    }
+    
+    // Throughput: if dependencies are failing, reduce effective throughput
+    if (totalCascadeErrorRate > 0.1) {
+      metrics.throughput = metrics.throughput * (1 - totalCascadeErrorRate * 0.5);
+    }
   }
 
   /**
@@ -441,7 +622,16 @@ export class EmulationEngine {
   /**
    * Kafka broker emulation
    */
-  private simulateKafka(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateKafka(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
     const topicCount = config.topicCount || 5;
     const partitions = config.partitions || 3;
     const throughputMsgs = config.throughputMsgs || 1000; // msgs/sec
@@ -472,7 +662,16 @@ export class EmulationEngine {
   /**
    * RabbitMQ broker emulation
    */
-  private simulateRabbitMQ(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateRabbitMQ(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
     const throughputMsgs = config.throughputMsgs || 1000; // msgs/sec
     const replicationFactor = config.replicationFactor || 1;
     
@@ -500,13 +699,30 @@ export class EmulationEngine {
   /**
    * Database emulation (PostgreSQL, MongoDB, Redis)
    */
-  private simulateDatabase(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateDatabase(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming queries, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      metrics.customMetrics = {};
+      return;
+    }
+    
     const maxConnections = config.maxConnections || 100;
     const queryLatency = config.queryLatency || 10; // ms
     const indexCount = config.indexCount || 5;
     
-    // Throughput (queries/sec)
-    const activeConnections = Math.floor(maxConnections * Math.random());
+    // Throughput (queries/sec) - based on incoming connections
+    const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+    const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+      const sourceMetrics = this.metrics.get(conn.source);
+      return sum + (sourceMetrics?.throughput || 0);
+    }, 0);
+    
+    // Active connections based on incoming throughput
+    const activeConnections = Math.min(maxConnections, Math.floor(totalIncomingThroughput / 10) || Math.floor(maxConnections * 0.3));
     metrics.throughput = activeConnections * (1000 / (queryLatency + Math.random() * 20));
     
     // Latency increases with active connections
@@ -529,7 +745,16 @@ export class EmulationEngine {
   /**
    * NGINX load balancer emulation
    */
-  private simulateNginx(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateNginx(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
     const workerThreads = config.workerThreads || 4;
     const throughputReqs = config.requestsPerSecond || 10000;
     
@@ -557,7 +782,16 @@ export class EmulationEngine {
   /**
    * Docker/Kubernetes infrastructure emulation
    */
-  private simulateInfrastructure(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateInfrastructure(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
     const workerCount = config.workerThreads || 1;
     
     // Throughput (container events/sec)
@@ -582,7 +816,16 @@ export class EmulationEngine {
   /**
    * API (REST, gRPC, WebSocket) emulation
    */
-  private simulateAPI(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics) {
+  private simulateAPI(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
     
@@ -650,6 +893,27 @@ export class EmulationEngine {
       errorRate: 0,
       utilization: 0,
       timestamp: Date.now(),
+    };
+  }
+
+  /**
+   * Create default metrics for a connection
+   */
+  private createDefaultConnectionMetrics(connection: CanvasConnection): ConnectionMetrics {
+    return {
+      id: connection.id,
+      source: connection.source,
+      target: connection.target,
+      traffic: 0,
+      latency: 0,
+      errorRate: 0,
+      utilization: 0,
+      timestamp: Date.now(),
+      throughputDependency: 0,
+      backpressure: 0,
+      bottleneck: false,
+      effectiveThroughput: 0,
+      congestion: 0,
     };
   }
 

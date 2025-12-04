@@ -1,6 +1,5 @@
 import { ComponentType } from '@/types';
 import { ProfileConfigRenderer } from '../shared/ProfileConfigRenderer';
-import { KongConfig } from './KongConfig';
 import { INTEGRATION_PROFILES } from './profiles';
 
 interface IntegrationConfigProps {
@@ -9,12 +8,6 @@ interface IntegrationConfigProps {
 }
 
 export function IntegrationConfig({ componentId, componentType }: IntegrationConfigProps) {
-  // Use special GUI component for Kong
-  if (componentType === 'kong') {
-    return <KongConfig componentId={componentId} />;
-  }
-
-  // Use profile-based config for other integration components
   return (
     <ProfileConfigRenderer
       componentId={componentId}

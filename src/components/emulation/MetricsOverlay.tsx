@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 import { useEmulationStore } from '@/store/useEmulationStore';
+import { useCanvasStore } from '@/store/useCanvasStore';
 import { ComponentMetrics } from '@/core/EmulationEngine';
 
 const NODE_WIDTH = 140;
@@ -13,8 +14,21 @@ interface MetricsOverlayProps {
 
 export function MetricsOverlay({ nodeId, position }: MetricsOverlayProps) {
   const metrics = useEmulationStore((state) => state.componentMetrics.get(nodeId));
+  const { connections } = useCanvasStore();
+  const { isRunning } = useEmulationStore();
 
-  // Metrics display
+  // Check if component has activity (connections and non-zero metrics)
+  const hasConnections = connections.some(
+    conn => conn.source === nodeId || conn.target === nodeId
+  );
+  
+  const hasActivity = metrics && (
+    (metrics.throughput && metrics.throughput > 0.1) ||
+    (metrics.errorRate && metrics.errorRate > 0.001) ||
+    (metrics.utilization && metrics.utilization > 0.01)
+  );
+
+  // Metrics display - must be called before early return to follow Rules of Hooks
   const metricsDisplay = useMemo(() => {
     if (!metrics) return [];
     
@@ -70,7 +84,8 @@ export function MetricsOverlay({ nodeId, position }: MetricsOverlayProps) {
     return baseMetrics;
   }, [metrics]);
 
-  if (!metrics || metricsDisplay.length === 0) {
+  // Only show overlay for connected components with activity
+  if (!isRunning || !metrics || !hasConnections || !hasActivity || metricsDisplay.length === 0) {
     return null;
   }
 

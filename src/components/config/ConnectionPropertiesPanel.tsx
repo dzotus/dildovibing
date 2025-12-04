@@ -4,7 +4,13 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Badge } from '@/components/ui/badge';
+import { useDataFlowStore } from '@/store/useDataFlowStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { useState, useEffect } from 'react';
+import { Activity, Database, FileText, AlertCircle } from 'lucide-react';
 
 interface ConnectionPropertiesPanelProps {
   connection: CanvasConnection;
@@ -13,6 +19,27 @@ interface ConnectionPropertiesPanelProps {
 
 export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPropertiesPanelProps) {
   const config = connection.data || {};
+  const { isRunning } = useEmulationStore();
+  const { getConnectionMessages, getMessageHistory } = useDataFlowStore();
+  const [messages, setMessages] = useState<any[]>([]);
+  const [messageHistory, setMessageHistory] = useState<any[]>([]);
+  
+  useEffect(() => {
+    if (!isRunning) {
+      setMessages([]);
+      setMessageHistory([]);
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      const connMessages = getConnectionMessages(connection.id);
+      const history = getMessageHistory(50).filter(m => m.connectionId === connection.id);
+      setMessages(connMessages);
+      setMessageHistory(history);
+    }, 200);
+    
+    return () => clearInterval(interval);
+  }, [isRunning, connection.id, getConnectionMessages, getMessageHistory]);
 
   const updateConfig = (updates: Partial<ConnectionConfig>) => {
     const newData = { ...config, ...updates };
@@ -46,26 +73,26 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
   };
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <h3 className="text-sm font-semibold text-foreground">Соединение</h3>
-        <div className="text-xs text-muted-foreground space-y-1">
-          <div>От: {connection.source}</div>
-          <div>К: {connection.target}</div>
-          <div>Тип: {connection.type}</div>
+    <div className="space-y-3">
+      <div className="space-y-1.5">
+        <h3 className="text-xs font-semibold text-foreground">Connection</h3>
+        <div className="text-[10px] text-muted-foreground space-y-0.5">
+          <div>From: {connection.source}</div>
+          <div>To: {connection.target}</div>
+          <div>Type: {connection.type}</div>
         </div>
       </div>
 
-      <div className="border-t border-border pt-4 space-y-4">
+      <div className="border-t border-border pt-3 space-y-3">
         {/* Network Parameters Section */}
         <div>
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Сетевые параметры</h4>
+          <h4 className="text-[10px] font-semibold text-foreground mb-2 uppercase opacity-70">Network Parameters</h4>
 
           {/* Latency */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Задержка (ms)</Label>
-              <span className="text-xs font-mono text-primary">{config.latencyMs ?? 0}</span>
+              <Label className="text-xs">Latency (ms)</Label>
+              <span className="text-[10px] font-mono text-primary">{config.latencyMs ?? 0}</span>
             </div>
             <Slider
               value={[config.latencyMs ?? 0]}
@@ -85,10 +112,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           </div>
 
           {/* Bandwidth */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Пропускная способность (Mbps)</Label>
-              <span className="text-xs font-mono text-primary">{config.bandwidthMbps ?? 1000}</span>
+              <Label className="text-xs">Bandwidth (Mbps)</Label>
+              <span className="text-[10px] font-mono text-primary">{config.bandwidthMbps ?? 1000}</span>
             </div>
             <Slider
               value={[config.bandwidthMbps ?? 1000]}
@@ -108,10 +135,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           </div>
 
           {/* Packet Loss */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Потеря пакетов (%)</Label>
-              <span className="text-xs font-mono text-primary">{config.packetLossPercent ?? 0}</span>
+              <Label className="text-xs">Packet Loss (%)</Label>
+              <span className="text-[10px] font-mono text-primary">{config.packetLossPercent ?? 0}</span>
             </div>
             <Slider
               value={[config.packetLossPercent ?? 0]}
@@ -132,10 +159,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           </div>
 
           {/* Jitter */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Дрожание (ms)</Label>
-              <span className="text-xs font-mono text-primary">{config.jitterMs ?? 0}</span>
+              <Label className="text-xs">Jitter (ms)</Label>
+              <span className="text-[10px] font-mono text-primary">{config.jitterMs ?? 0}</span>
             </div>
             <Slider
               value={[config.jitterMs ?? 0]}
@@ -156,12 +183,12 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
         </div>
 
         {/* Traffic Characteristics Section */}
-        <div className="border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Характеристики трафика</h4>
+        <div className="border-t border-border pt-3">
+          <h4 className="text-[10px] font-semibold text-foreground mb-2 uppercase opacity-70">Traffic Characteristics</h4>
 
           {/* Priority Level */}
-          <div className="space-y-2 mb-4">
-            <Label className="text-xs">Уровень приоритета</Label>
+          <div className="space-y-1.5 mb-3">
+            <Label className="text-xs">Priority Level</Label>
             <Select
               value={config.priorityLevel || 'medium'}
               onValueChange={(value) => updateConfig({ priorityLevel: value as any })}
@@ -170,19 +197,19 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="low">Низкий</SelectItem>
-                <SelectItem value="medium">Средний</SelectItem>
-                <SelectItem value="high">Высокий</SelectItem>
-                <SelectItem value="critical">Критический</SelectItem>
+                <SelectItem value="low">Low</SelectItem>
+                <SelectItem value="medium">Medium</SelectItem>
+                <SelectItem value="high">High</SelectItem>
+                <SelectItem value="critical">Critical</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           {/* Retry Count */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Количество повторов</Label>
-              <span className="text-xs font-mono text-primary">{config.retryCount ?? 3}</span>
+              <Label className="text-xs">Retry Count</Label>
+              <span className="text-[10px] font-mono text-primary">{config.retryCount ?? 3}</span>
             </div>
             <Slider
               value={[config.retryCount ?? 3]}
@@ -202,10 +229,10 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
           </div>
 
           {/* Timeout */}
-          <div className="space-y-2 mb-4">
+          <div className="space-y-1.5 mb-3">
             <div className="flex justify-between items-center">
-              <Label className="text-xs">Таймаут (ms)</Label>
-              <span className="text-xs font-mono text-primary">{config.timeoutMs ?? 30000}</span>
+              <Label className="text-xs">Timeout (ms)</Label>
+              <span className="text-[10px] font-mono text-primary">{config.timeoutMs ?? 30000}</span>
             </div>
             <Slider
               value={[config.timeoutMs ?? 30000]}
@@ -226,11 +253,11 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
         </div>
 
         {/* Monitoring Section */}
-        <div className="border-t border-border pt-4">
-          <h4 className="text-xs font-semibold text-foreground mb-3 uppercase opacity-70">Мониторинг</h4>
+        <div className="border-t border-border pt-3">
+          <h4 className="text-[10px] font-semibold text-foreground mb-2 uppercase opacity-70">Monitoring</h4>
 
-          <div className="flex items-center justify-between p-3 bg-accent/20 rounded-md">
-            <Label className="text-xs cursor-pointer">Включить мониторинг</Label>
+          <div className="flex items-center justify-between p-2 bg-accent/20 rounded-md">
+            <Label className="text-xs cursor-pointer">Enable Monitoring</Label>
             <Switch
               checked={config.enableMonitoring ?? false}
               onCheckedChange={(value) => updateConfig({ enableMonitoring: value })}
@@ -239,20 +266,156 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
         </div>
 
         {/* Stats */}
-        <Card className="bg-card/50 border-border/50 p-3 mt-4">
-          <div className="text-xs space-y-1 text-muted-foreground">
+        <Card className="bg-card/50 border-border/50 p-2 mt-3">
+          <div className="text-[10px] space-y-0.5 text-muted-foreground">
             <div className="flex justify-between">
-              <span>Эффективная пропускная способность:</span>
+              <span>Effective Bandwidth:</span>
               <span className="font-mono">
                 {Math.max(1, (config.bandwidthMbps ?? 1000) * (1 - (config.packetLossPercent ?? 0) / 100)).toFixed(2)} Mbps
               </span>
             </div>
             <div className="flex justify-between">
-              <span>Эффективная задержка:</span>
+              <span>Effective Latency:</span>
               <span className="font-mono">{((config.latencyMs ?? 0) + (config.jitterMs ?? 0) / 2).toFixed(0)} ms</span>
             </div>
           </div>
         </Card>
+
+        {/* Data Flow Section */}
+        {isRunning && (
+          <div className="border-t border-border pt-3 mt-3">
+            <Tabs defaultValue="active" className="w-full">
+              <TabsList className="grid w-full grid-cols-2 h-7">
+                <TabsTrigger value="active" className="text-[10px] px-1.5">
+                  <Activity className="h-3 w-3 mr-1" />
+                  Active ({messages.length})
+                </TabsTrigger>
+                <TabsTrigger value="history" className="text-[10px] px-1.5">
+                  <FileText className="h-3 w-3 mr-1" />
+                  History ({messageHistory.length})
+                </TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="active" className="mt-2 space-y-1.5">
+                {messages.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground text-[10px]">
+                    <Activity className="h-6 w-6 mx-auto mb-1.5 opacity-50" />
+                    <p>No active messages</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {messages.map((msg, idx) => (
+                      <Card key={msg.id || idx} className="p-1.5 border-border/50">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-1">
+                              <Badge variant="outline" className="text-[10px] px-1 py-0">
+                                {msg.format}
+                              </Badge>
+                              <Badge 
+                                variant={
+                                  msg.status === 'delivered' ? 'default' :
+                                  msg.status === 'failed' ? 'destructive' :
+                                  msg.status === 'transformed' ? 'secondary' :
+                                  'outline'
+                                }
+                                className="text-[10px] px-1 py-0"
+                              >
+                                {msg.status}
+                              </Badge>
+                            </div>
+                            <div className="text-[10px] text-muted-foreground space-y-0.5">
+                              <div>Size: {(msg.size / 1024).toFixed(2)} KB</div>
+                              {msg.latency && (
+                                <div>Latency: {msg.latency.toFixed(0)} ms</div>
+                              )}
+                            </div>
+                            {msg.error && (
+                              <div className="text-xs text-destructive mt-1 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {msg.error}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {msg.payload && (
+                          <details className="mt-2">
+                            <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                              Show Data
+                            </summary>
+                            <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
+                              {JSON.stringify(msg.payload, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+
+              <TabsContent value="history" className="mt-2 space-y-1.5">
+                {messageHistory.length === 0 ? (
+                  <div className="text-center py-4 text-muted-foreground text-[10px]">
+                    <FileText className="h-6 w-6 mx-auto mb-1.5 opacity-50" />
+                    <p>History is empty</p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                    {messageHistory.map((msg, idx) => (
+                      <Card key={msg.id || idx} className="p-1.5 border-border/50">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant="outline" className="text-xs">
+                                {msg.format}
+                              </Badge>
+                              <Badge 
+                                variant={
+                                  msg.status === 'delivered' ? 'default' :
+                                  msg.status === 'failed' ? 'destructive' :
+                                  'outline'
+                                }
+                                className="text-xs"
+                              >
+                                {msg.status}
+                              </Badge>
+                              <span className="text-[10px] text-muted-foreground">
+                                {new Date(msg.timestamp).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-muted-foreground space-y-0.5">
+                              <div>Size: {(msg.size / 1024).toFixed(2)} KB</div>
+                              {msg.latency && (
+                                <div>Latency: {msg.latency.toFixed(0)} ms</div>
+                              )}
+                            </div>
+                            {msg.error && (
+                              <div className="text-xs text-destructive mt-1 flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {msg.error}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {msg.payload && (
+                          <details className="mt-2">
+                            <summary className="text-xs cursor-pointer text-muted-foreground hover:text-foreground">
+                              Show Data
+                            </summary>
+                            <pre className="mt-2 p-2 bg-muted rounded text-xs overflow-x-auto max-h-32 overflow-y-auto">
+                              {JSON.stringify(msg.payload, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </Card>
+                    ))}
+                  </div>
+                )}
+              </TabsContent>
+            </Tabs>
+          </div>
+        )}
       </div>
     </div>
   );

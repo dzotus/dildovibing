@@ -1,6 +1,6 @@
-import { ProfileConfigRenderer } from '@/components/config/shared/ProfileConfigRenderer';
+import { ComponentType } from '@/types';
+import { ProfileConfigRenderer } from '../shared/ProfileConfigRenderer';
 import { BUSINESS_PROFILES } from './profiles';
-import type { ComponentType } from '@/types';
 
 interface BusinessConfigProps {
   componentId: string;
@@ -13,10 +13,7 @@ export function BusinessConfig({ componentId, componentType }: BusinessConfigPro
       componentId={componentId}
       componentType={componentType}
       profiles={BUSINESS_PROFILES}
-      emptyState={{
-        title: 'Business Component Configuration',
-        description: 'Configuration panel not available for this business component type',
-      }}
+      emptyState="Конфигурация для бизнес-компонента пока недоступна."
     />
   );
 }

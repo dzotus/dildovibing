@@ -17,7 +17,11 @@ export function EmulationPanel() {
   const { nodes, connections } = useCanvasStore();
 
   const handleStart = () => {
-    initialize(nodes, connections);
+    // Only initialize if this is a fresh start (simulationTime is 0)
+    // Otherwise just resume the simulation
+    if (simulationTime === 0) {
+      initialize(nodes, connections);
+    }
     start();
   };
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Trash2, Copy, Layers } from 'lucide-react';
+import { Trash2, Copy, Layers, ArrowUp, ArrowDown, ChevronUp, ChevronDown, FolderPlus, FolderMinus } from 'lucide-react';
 
 interface ContextMenuProps {
   x: number;
@@ -7,6 +7,12 @@ interface ContextMenuProps {
   onDelete: () => void;
   onDuplicate: () => void;
   onCopyId: () => void;
+  onBringToFront?: () => void;
+  onSendToBack?: () => void;
+  onBringForward?: () => void;
+  onSendBackward?: () => void;
+  onAddToGroup?: () => void;
+  onRemoveFromGroup?: () => void;
   onClose: () => void;
 }
 
@@ -16,37 +22,17 @@ export function ContextMenu({
   onDelete,
   onDuplicate,
   onCopyId,
+  onBringToFront,
+  onSendToBack,
+  onBringForward,
+  onSendBackward,
+  onAddToGroup,
+  onRemoveFromGroup,
   onClose,
 }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState({ x, y });
-
-  useEffect(() => {
-    if (menuRef.current) {
-      const menuRect = menuRef.current.getBoundingClientRect();
-      const viewportWidth = window.innerWidth;
-      const viewportHeight = window.innerHeight;
-
-      let adjustedX = x;
-      let adjustedY = y;
-
-      // Adjust if menu goes off right edge
-      if (x + menuRect.width > viewportWidth) {
-        adjustedX = viewportWidth - menuRect.width - 10;
-      }
-
-      // Adjust if menu goes off bottom edge
-      if (y + menuRect.height > viewportHeight) {
-        adjustedY = viewportHeight - menuRect.height - 10;
-      }
-
-      // Ensure menu doesn't go off left or top edges
-      adjustedX = Math.max(10, adjustedX);
-      adjustedY = Math.max(10, adjustedY);
-
-      setPosition({ x: adjustedX, y: adjustedY });
-    }
-  }, [x, y]);
+  // Use coordinates directly - menu appears exactly where clicked
+  // No state, no adjustments - just use the coordinates as-is
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -85,36 +71,122 @@ export function ContextMenu({
     onClose();
   };
 
+  const handleBringToFront = () => {
+    onBringToFront?.();
+    onClose();
+  };
+
+  const handleSendToBack = () => {
+    onSendToBack?.();
+    onClose();
+  };
+
+  const handleBringForward = () => {
+    onBringForward?.();
+    onClose();
+  };
+
+  const handleSendBackward = () => {
+    onSendBackward?.();
+    onClose();
+  };
+
+  const handleAddToGroup = () => {
+    onAddToGroup?.();
+    onClose();
+  };
+
+  const handleRemoveFromGroup = () => {
+    onRemoveFromGroup?.();
+    onClose();
+  };
+
   return (
     <div
       ref={menuRef}
-      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-1 min-w-[180px]"
+      className="fixed bg-popover border border-border rounded-md shadow-lg z-50 py-0.5 min-w-[140px]"
       style={{
-        left: `${position.x}px`,
-        top: `${position.y}px`,
+        left: `${x}px`,
+        top: `${y}px`,
       }}
     >
       <button
         onClick={handleDuplicate}
-        className="w-full px-4 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Layers className="w-4 h-4" />
-        Дублировать
+        <Layers className="w-3.5 h-3.5" />
+        Duplicate
       </button>
       <button
         onClick={handleCopyId}
-        className="w-full px-4 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Copy className="w-4 h-4" />
-        Копировать ID
+        <Copy className="w-3.5 h-3.5" />
+        Copy ID
       </button>
-      <div className="border-t border-border my-1" />
+      {(onAddToGroup || onRemoveFromGroup) && (
+        <>
+          <div className="border-t border-border my-0.5" />
+          {onRemoveFromGroup && (
+            <button
+              onClick={handleRemoveFromGroup}
+              className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <FolderMinus className="w-3.5 h-3.5" />
+              Remove from Group
+            </button>
+          )}
+          {onAddToGroup && (
+            <button
+              onClick={handleAddToGroup}
+              className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+            >
+              <FolderPlus className="w-3.5 h-3.5" />
+              Add to Group
+            </button>
+          )}
+        </>
+      )}
+      <div className="border-t border-border my-0.5" />
+      {(onBringToFront || onSendToBack || onBringForward || onSendBackward) && (
+        <>
+          <button
+            onClick={handleBringToFront}
+            className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+          >
+            <ArrowUp className="w-3.5 h-3.5" />
+            Bring to Front
+          </button>
+          <button
+            onClick={handleSendToBack}
+            className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+          >
+            <ArrowDown className="w-3.5 h-3.5" />
+            Send to Back
+          </button>
+          <button
+            onClick={handleBringForward}
+            className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+            Bring Forward
+          </button>
+          <button
+            onClick={handleSendBackward}
+            className="w-full px-2 py-1.5 text-xs text-foreground hover:bg-accent hover:text-accent-foreground flex items-center gap-1.5 transition-colors"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+            Send Backward
+          </button>
+          <div className="border-t border-border my-0.5" />
+        </>
+      )}
       <button
         onClick={handleDelete}
-        className="w-full px-4 py-2 text-sm text-destructive hover:bg-destructive hover:text-destructive-foreground flex items-center gap-2 transition-colors"
+        className="w-full px-2.5 py-1.5 text-xs text-destructive hover:bg-destructive hover:text-destructive-foreground flex items-center gap-1.5 transition-colors"
       >
-        <Trash2 className="w-4 h-4" />
-        Удалить
+        <Trash2 className="w-3.5 h-3.5" />
+        Delete
       </button>
     </div>
   );

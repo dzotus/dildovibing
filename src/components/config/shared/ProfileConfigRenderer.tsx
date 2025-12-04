@@ -36,13 +36,13 @@ export function ProfileConfigRenderer({
   if (!profile) {
     return (
       <div className="p-6 text-muted-foreground">
-        {emptyState || `Конфигурация для компонента ${componentType} пока не реализована.`}
+        {emptyState || `Configuration for component ${componentType} is not yet implemented.`}
       </div>
     );
   }
 
   if (!node) {
-    return <div className="p-6 text-muted-foreground">Компонент не найден</div>;
+    return <div className="p-6 text-muted-foreground">Component not found</div>;
   }
 
   const persistConfig = (nextConfig: Record<string, ConfigFieldValue>) => {
@@ -81,21 +81,12 @@ export function ProfileConfigRenderer({
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
           />
         );
-      case 'password':
-        return (
-          <Input
-            type="password"
-            value={typeof value === 'string' ? value : ''}
-            placeholder={field.placeholder}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
-          />
-        );
       case 'textarea':
         return (
           <Textarea
             value={typeof value === 'string' ? value : ''}
             placeholder={field.placeholder}
-            rows={field.rows || 4}
+            rows={4}
             onChange={(e) => handleFieldChange(field.id, e.target.value)}
           />
         );
@@ -131,7 +122,7 @@ export function ProfileConfigRenderer({
               checked={Boolean(value)}
               onCheckedChange={(checked) => handleFieldChange(field.id, checked)}
             />
-            <span className="text-sm text-muted-foreground">{Boolean(value) ? 'Вкл.' : 'Выкл.'}</span>
+            <span className="text-sm text-muted-foreground">{Boolean(value) ? 'On' : 'Off'}</span>
           </div>
         );
       case 'list': {
@@ -178,7 +169,7 @@ export function ProfileConfigRenderer({
 
             <Button variant="outline" size="sm" onClick={addItem}>
               <Plus className="h-4 w-4 mr-2" />
-              Добавить
+              Add
             </Button>
           </div>
         );
@@ -213,7 +204,7 @@ export function ProfileConfigRenderer({
           {profile.docsUrl && (
             <Button variant="ghost" size="sm" asChild>
               <a href={profile.docsUrl} target="_blank" rel="noreferrer">
-                Документация
+                Documentation
                 <ExternalLink className="h-4 w-4 ml-2" />
               </a>
             </Button>
