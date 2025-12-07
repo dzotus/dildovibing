@@ -84,6 +84,10 @@ interface IstioConfig {
   totalRequests?: number;
   totalErrors?: number;
   averageLatency?: number;
+  enableMTLS?: boolean;
+  enableTracing?: boolean;
+  enableMetrics?: boolean;
+  defaultLoadBalancer?: 'ROUND_ROBIN' | 'LEAST_CONN' | 'RANDOM';
 }
 
 export function IstioConfigAdvanced({ componentId }: IstioConfigProps) {
@@ -573,20 +577,32 @@ export function IstioConfigAdvanced({ componentId }: IstioConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable mTLS</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableMTLS ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableMTLS: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Tracing</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableTracing ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableTracing: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Metrics</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableMetrics ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableMetrics: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default Load Balancer</Label>
-                  <Select defaultValue="ROUND_ROBIN">
+                  <Select 
+                    value={config.defaultLoadBalancer ?? 'ROUND_ROBIN'}
+                    onValueChange={(value: 'ROUND_ROBIN' | 'LEAST_CONN' | 'RANDOM') => updateConfig({ defaultLoadBalancer: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>

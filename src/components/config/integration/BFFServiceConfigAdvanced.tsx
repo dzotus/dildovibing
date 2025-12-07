@@ -53,6 +53,11 @@ interface BFFServiceConfig {
   totalEndpoints?: number;
   totalRequests?: number;
   averageLatency?: number;
+  enableCaching?: boolean;
+  enableRequestBatching?: boolean;
+  enableResponseCompression?: boolean;
+  defaultTimeout?: number;
+  maxConcurrentRequests?: number;
 }
 
 export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps) {
@@ -384,24 +389,43 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Caching</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableCaching ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableCaching: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Request Batching</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableRequestBatching ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableRequestBatching: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Response Compression</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableResponseCompression ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableResponseCompression: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default Timeout (ms)</Label>
-                  <Input type="number" defaultValue={5000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.defaultTimeout ?? 5000}
+                    onChange={(e) => updateConfig({ defaultTimeout: parseInt(e.target.value) || 5000 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Concurrent Requests</Label>
-                  <Input type="number" defaultValue={100} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxConcurrentRequests ?? 100}
+                    onChange={(e) => updateConfig({ maxConcurrentRequests: parseInt(e.target.value) || 100 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

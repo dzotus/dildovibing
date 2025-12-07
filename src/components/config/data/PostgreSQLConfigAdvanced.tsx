@@ -10,6 +10,11 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
+import { showSuccess, showError } from '@/utils/toast';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
 import { 
   Database, 
   Table, 
@@ -80,6 +85,11 @@ interface PostgreSQLConfig {
   currentSchema?: string;
   sqlQuery?: string;
   queryResults?: any[];
+  metrics?: {
+    enabled?: boolean;
+    port?: number;
+    path?: string;
+  };
 }
 
 export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps) {
@@ -118,6 +128,14 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port', 'database', 'username'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
   };
 
   const [editingTable, setEditingTable] = useState<string | null>(null);
@@ -127,6 +145,28 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     { name: 'id', type: 'SERIAL', nullable: false, primaryKey: true },
   ]);
   const [selectedTableForData, setSelectedTableForData] = useState<string>('');
+  
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+    { field: 'database', label: 'Database' },
+    { field: 'username', label: 'Username' },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port, database, username },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
+  };
 
   const addTable = () => {
     if (newTableName && newTableName.trim()) {
@@ -139,7 +179,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
       );
       
       if (tableExists) {
-        alert(`Table "${newTableName.trim()}" already exists in schema "${currentSchema}"`);
+        showError(`Таблица "${newTableName.trim()}" уже существует в схеме "${currentSchema}"`);
         return;
       }
       
@@ -161,6 +201,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
       setNewTableName('');
       setNewTableColumns([{ name: 'id', type: 'SERIAL', nullable: false, primaryKey: true }]);
       setShowCreateTable(false);
+      showSuccess(`Таблица "${newTableName.trim()}" успешно создана`);
     }
   };
 
@@ -175,6 +216,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
         primaryKey: false,
       });
       updateConfig({ tables: newTables });
+      showSuccess(`Колонка добавлена в таблицу "${tableName}"`);
     }
   };
 
@@ -182,8 +224,12 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     const newTables = [...tables];
     const tableIndex = newTables.findIndex(t => t.name === tableName && t.schema === currentSchema);
     if (tableIndex >= 0 && newTables[tableIndex].columns.length > 1) {
+      const columnName = newTables[tableIndex].columns[columnIndex]?.name || 'колонка';
       newTables[tableIndex].columns = newTables[tableIndex].columns.filter((_, i) => i !== columnIndex);
       updateConfig({ tables: newTables });
+      showSuccess(`Колонка "${columnName}" удалена из таблицы "${tableName}"`);
+    } else if (newTables[tableIndex]?.columns.length === 1) {
+      showError('Нельзя удалить последнюю колонку в таблице');
     }
   };
 
@@ -203,6 +249,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     updateConfig({
       schemas: [...schemas, { name: 'new_schema', owner: username }],
     });
+    showSuccess('Схема успешно создана');
   };
 
   const addView = () => {
@@ -213,12 +260,14 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
         definition: 'SELECT * FROM table_name',
       }],
     });
+    showSuccess('Представление успешно создано');
   };
 
   const addRole = () => {
     updateConfig({
       roles: [...roles, { name: 'new_role', login: false, superuser: false }],
     });
+    showSuccess('Роль успешно создана');
   };
 
   const filteredTables = tables.filter(t => t.schema === currentSchema);
@@ -489,15 +538,15 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                                     />
                                   </td>
                                   <td className="p-2">
-                                    {newTableColumns.length > 1 && (
-                                      <Button
-                                        size="icon"
-                                        variant="ghost"
-                                        onClick={() => setNewTableColumns(newTableColumns.filter((_, i) => i !== colIndex))}
-                                      >
-                                        <Trash2 className="h-4 w-4" />
-                                      </Button>
-                                    )}
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      onClick={() => setNewTableColumns(newTableColumns.filter((_, i) => i !== colIndex))}
+                                      disabled={newTableColumns.length <= 1}
+                                      title={newTableColumns.length <= 1 ? 'Нельзя удалить последнюю колонку' : 'Удалить колонку'}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
                                   </td>
                                 </tr>
                               ))}
@@ -558,10 +607,12 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                               size="sm"
                               variant="ghost"
                               onClick={() => {
+                                const tableName = table.name;
                                 updateConfig({ tables: tables.filter((_, i) => {
                                   const t = tables[i];
                                   return !(t.name === table.name && t.schema === currentSchema);
                                 })});
+                                showSuccess(`Таблица "${tableName}" удалена`);
                               }}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -691,15 +742,15 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                                     </td>
                                     {editingTable === table.name && (
                                       <td className="p-2">
-                                        {table.columns.length > 1 && (
-                                          <Button
-                                            size="icon"
-                                            variant="ghost"
-                                            onClick={() => removeColumnFromTable(table.name, colIndex)}
-                                          >
-                                            <Trash2 className="h-4 w-4" />
-                                          </Button>
-                                        )}
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => removeColumnFromTable(table.name, colIndex)}
+                                          disabled={table.columns.length <= 1}
+                                          title={table.columns.length <= 1 ? 'Нельзя удалить последнюю колонку' : 'Удалить колонку'}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
                                       </td>
                                     )}
                                   </tr>
@@ -1121,43 +1172,124 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="host">Host</Label>
+                    <Label htmlFor="host">
+                      Host <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="host"
                       value={host}
-                      onChange={(e) => updateConfig({ host: e.target.value })}
+                      onChange={(e) => {
+                        updateConfig({ host: e.target.value });
+                        if (fieldErrors.host) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="localhost"
+                      className={hostError || fieldErrors.host ? 'border-destructive' : ''}
                     />
+                    {hostError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{hostError}</span>
+                      </div>
+                    )}
+                    {!hostError && fieldErrors.host && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.host}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="port">Port</Label>
+                    <Label htmlFor="port">
+                      Port <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="port"
                       type="number"
                       value={port}
-                      onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 5432 })}
+                      onChange={(e) => {
+                        updateConfig({ port: parseInt(e.target.value) || 5432 });
+                        if (fieldErrors.port) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="5432"
+                      className={portError || portConflict.hasConflict || fieldErrors.port ? 'border-destructive' : ''}
                     />
+                    {portError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{portError}</span>
+                      </div>
+                    )}
+                    {!portError && fieldErrors.port && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.port}</span>
+                      </div>
+                    )}
+                    {!portError && !fieldErrors.port && portConflict.hasConflict && portConflict.conflictingNode && (
+                      <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>
+                          Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                          уже использует {host}:{port}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="database">Database</Label>
+                  <Label htmlFor="database">
+                    Database <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     id="database"
                     value={database}
-                    onChange={(e) => updateConfig({ database: e.target.value })}
+                    onChange={(e) => {
+                      updateConfig({ database: e.target.value });
+                      if (fieldErrors.database) {
+                        validateConnectionFields();
+                      }
+                    }}
+                    onBlur={validateConnectionFields}
                     placeholder="postgres"
+                    className={fieldErrors.database ? 'border-destructive' : ''}
                   />
+                  {fieldErrors.database && (
+                    <div className="flex items-center gap-1 text-sm text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{fieldErrors.database}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="username">Username</Label>
+                    <Label htmlFor="username">
+                      Username <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="username"
                       value={username}
-                      onChange={(e) => updateConfig({ username: e.target.value })}
+                      onChange={(e) => {
+                        updateConfig({ username: e.target.value });
+                        if (fieldErrors.username) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="postgres"
+                      className={fieldErrors.username ? 'border-destructive' : ''}
                     />
+                    {fieldErrors.username && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.username}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="password">Password</Label>
@@ -1169,6 +1301,87 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                       placeholder="password"
                     />
                   </div>
+                </div>
+                <div className="flex gap-2 pt-4 border-t">
+                  <Button
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения сохранены');
+                      } else {
+                        showError('Пожалуйста, заполните все обязательные поля');
+                      }
+                    }}
+                  >
+                    Сохранить настройки
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения валидны');
+                      } else {
+                        showError('Пожалуйста, заполните все обязательные поля');
+                      }
+                    }}
+                  >
+                    Проверить подключение
+                  </Button>
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Metrics Export (postgres_exporter)</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export PostgreSQL metrics for Prometheus scraping</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          port: config.metrics?.port || 9187,
+                          path: config.metrics?.path || '/metrics'
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Metrics Port (postgres_exporter)</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.port ?? 9187}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              port: parseInt(e.target.value) || 9187,
+                              path: config.metrics?.path || '/metrics'
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Default port for postgres_exporter: 9187</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Metrics Path</Label>
+                        <Input 
+                          type="text" 
+                          value={config.metrics?.path ?? '/metrics'}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              path: e.target.value || '/metrics',
+                              port: config.metrics?.port || 9187
+                            } 
+                          })}
+                          placeholder="/metrics"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>

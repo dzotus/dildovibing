@@ -58,6 +58,12 @@ interface VPNConfig {
   activeConnections?: number;
   totalTunnels?: number;
   totalBytes?: number;
+  vpnProtocol?: 'openvpn' | 'ipsec' | 'wireguard';
+  encryptionAlgorithm?: 'aes-128' | 'aes-256' | 'chacha20-poly1305';
+  enableCompression?: boolean;
+  enableKeepAlive?: boolean;
+  maxConnections?: number;
+  connectionTimeout?: number;
 }
 
 export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
@@ -371,7 +377,10 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>VPN Protocol</Label>
-                  <Select defaultValue="openvpn">
+                  <Select 
+                    value={config.vpnProtocol ?? 'openvpn'}
+                    onValueChange={(value: 'openvpn' | 'ipsec' | 'wireguard') => updateConfig({ vpnProtocol: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -384,33 +393,52 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
                 </div>
                 <div className="space-y-2">
                   <Label>Encryption Algorithm</Label>
-                  <Select defaultValue="aes-256">
+                  <Select 
+                    value={config.encryptionAlgorithm ?? 'aes-256'}
+                    onValueChange={(value: 'aes-128' | 'aes-256' | 'chacha20-poly1305') => updateConfig({ encryptionAlgorithm: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="aes-256">AES-256</SelectItem>
                       <SelectItem value="aes-128">AES-128</SelectItem>
-                      <SelectItem value="chacha20">ChaCha20</SelectItem>
+                      <SelectItem value="chacha20-poly1305">ChaCha20</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">
                   <Label>Enable Compression</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableCompression ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableCompression: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Keep-Alive</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableKeepAlive ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableKeepAlive: checked })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Connections</Label>
-                  <Input type="number" defaultValue={100} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxConnections ?? 100}
+                    onChange={(e) => updateConfig({ maxConnections: parseInt(e.target.value) || 100 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Connection Timeout (seconds)</Label>
-                  <Input type="number" defaultValue={120} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.connectionTimeout ?? 120}
+                    onChange={(e) => updateConfig({ connectionTimeout: parseInt(e.target.value) || 120 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -420,4 +448,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
     </div>
   );
 }
+
+
+
 

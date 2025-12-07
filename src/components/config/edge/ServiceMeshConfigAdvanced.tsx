@@ -54,6 +54,16 @@ interface ServiceMeshConfig {
   activePolicies?: number;
   totalRequests?: number;
   averageLatency?: number;
+  enableMTLS?: boolean;
+  enableTracing?: boolean;
+  enableMetrics?: boolean;
+  defaultLoadBalancer?: 'ROUND_ROBIN' | 'LEAST_CONN' | 'RANDOM';
+  metrics?: {
+    enabled?: boolean;
+    controlPlanePort?: number;
+    sidecarPort?: number;
+    gatewayPort?: number;
+  };
 }
 
 export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProps) {
@@ -371,20 +381,32 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable mTLS</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableMTLS ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableMTLS: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Tracing</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableTracing ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableTracing: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Metrics</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableMetrics ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableMetrics: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default Load Balancer</Label>
-                  <Select defaultValue="ROUND_ROBIN">
+                  <Select 
+                    value={config.defaultLoadBalancer ?? 'ROUND_ROBIN'}
+                    onValueChange={(value: 'ROUND_ROBIN' | 'LEAST_CONN' | 'RANDOM') => updateConfig({ defaultLoadBalancer: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -395,6 +417,85 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
                     </SelectContent>
                   </Select>
                 </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Metrics Export</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export Istio metrics for Prometheus scraping</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          controlPlanePort: config.metrics?.controlPlanePort || 15014,
+                          sidecarPort: config.metrics?.sidecarPort || 15090,
+                          gatewayPort: config.metrics?.gatewayPort || 15020
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Control Plane Metrics Port (istiod)</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.controlPlanePort ?? 15014}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              controlPlanePort: parseInt(e.target.value) || 15014,
+                              sidecarPort: config.metrics?.sidecarPort || 15090,
+                              gatewayPort: config.metrics?.gatewayPort || 15020
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Istio control plane metrics endpoint: :15014/metrics</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Sidecar Metrics Port (Envoy)</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.sidecarPort ?? 15090}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              sidecarPort: parseInt(e.target.value) || 15090,
+                              controlPlanePort: config.metrics?.controlPlanePort || 15014,
+                              gatewayPort: config.metrics?.gatewayPort || 15020
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Envoy sidecar metrics endpoint: :15090/stats/prometheus</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Gateway Metrics Port</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.gatewayPort ?? 15020}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              gatewayPort: parseInt(e.target.value) || 15020,
+                              controlPlanePort: config.metrics?.controlPlanePort || 15014,
+                              sidecarPort: config.metrics?.sidecarPort || 15090
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Istio gateway metrics endpoint: :15020/stats/prometheus</p>
+                      </div>
+                    </>
+                  )}
+                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -403,4 +504,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
     </div>
   );
 }
+
+
+
 

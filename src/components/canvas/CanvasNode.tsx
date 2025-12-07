@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, memo, useMemo } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useTabStore } from '@/store/useTabStore';
 import { useEmulationStore } from '@/store/useEmulationStore';
 import { useDependencyStore } from '@/store/useDependencyStore';
 import { useComponentStateStore } from '@/store/useComponentStateStore';
 import { useUIStore } from '@/store/useUIStore';
+import { useShallow } from 'zustand/react/shallow';
 import { CanvasNode as CanvasNodeType } from '@/types';
 import { COMPONENT_LIBRARY } from '@/data/components';
 import { ContextMenu } from './ContextMenu';
@@ -13,6 +14,7 @@ import { deepClone } from '@/lib/deepClone';
 import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getConnectionPoints } from '@/utils/connectionPoints';
+import { useNodeRefs } from '@/contexts/NodeRefsContext';
 
 interface CanvasNodeProps {
   node: CanvasNodeType;
@@ -22,8 +24,45 @@ interface CanvasNodeProps {
   onContextMenu?: (x: number, y: number) => void;
 }
 
-export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnecting = false, onContextMenu }: CanvasNodeProps) {
-  const { selectNode, updateNode, deleteNode, addNode, startDragOperation, endDragOperation, connections, zoom, pan, bringToFront, sendToBack, bringForward, sendBackward } = useCanvasStore();
+function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConnecting = false, onContextMenu }: CanvasNodeProps) {
+  // Регистрируем ref узла для доступа из других компонентов (вместо querySelector)
+  const { registerNodeRef, unregisterNodeRef } = useNodeRefs();
+  const nodeElementRef = useRef<HTMLDivElement>(null);
+
+  // Регистрируем/удаляем ref при монтировании/размонтировании
+  useEffect(() => {
+    if (nodeElementRef.current) {
+      registerNodeRef(node.id, nodeElementRef.current);
+    }
+    return () => {
+      unregisterNodeRef(node.id);
+    };
+  }, [node.id, registerNodeRef, unregisterNodeRef]);
+
+  // Optimize store subscriptions: only subscribe to specific values that this component needs
+  // This prevents re-renders when unrelated store values change
+  const selectNode = useCanvasStore(state => state.selectNode);
+  const updateNode = useCanvasStore(state => state.updateNode);
+  const updateNodes = useCanvasStore(state => state.updateNodes);
+  const deleteNode = useCanvasStore(state => state.deleteNode);
+  const addNode = useCanvasStore(state => state.addNode);
+  const startDragOperation = useCanvasStore(state => state.startDragOperation);
+  const endDragOperation = useCanvasStore(state => state.endDragOperation);
+  const bringToFront = useCanvasStore(state => state.bringToFront);
+  const sendToBack = useCanvasStore(state => state.sendToBack);
+  const bringForward = useCanvasStore(state => state.bringForward);
+  const sendBackward = useCanvasStore(state => state.sendBackward);
+  
+  // Use useShallow for multiple values to prevent re-renders when values haven't changed
+  const { connections, zoom, pan, nodes } = useCanvasStore(
+    useShallow(state => ({
+      connections: state.connections,
+      zoom: state.zoom,
+      pan: state.pan,
+      nodes: state.nodes,
+    }))
+  );
+  
   const { addTab } = useTabStore();
   const [isDragging, setIsDragging] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
@@ -35,18 +74,25 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   const canvasRectRef = useRef<DOMRect | null>(null);
   const isPointerDownRef = useRef(false);
   const dragInitiatedRef = useRef(false);
+  const selectedNodesInitialPositionsRef = useRef<Record<string, { x: number; y: number }>>({});
 
-  const component = COMPONENT_LIBRARY.find((c) => c.type === node.type);
+  // Memoize component lookup - only recalculate when node.type changes
+  const component = useMemo(
+    () => COMPONENT_LIBRARY.find((c) => c.type === node.type),
+    [node.type]
+  );
+  
   const { isRunning, getComponentMetrics } = useEmulationStore();
   const componentStatus = useDependencyStore((state) => state.getComponentStatus(node.id));
   const componentState = useComponentStateStore((state) => state.getComponentState(node.id));
   const metrics = isRunning ? getComponentMetrics(node.id) : undefined;
-  const { highlightedNodeId } = useUIStore();
+  const highlightedNodeId = useUIStore(state => state.highlightedNodeId);
   const isHighlighted = highlightedNodeId === node.id;
   
-  // Check if component has connections
-  const hasConnections = connections.some(
-    conn => conn.source === node.id || conn.target === node.id
+  // Memoize hasConnections check - only recalculate when connections or node.id changes
+  const hasConnections = useMemo(
+    () => connections.some(conn => conn.source === node.id || conn.target === node.id),
+    [connections, node.id]
   );
   
   // Check if component has activity (throughput > 0 or errors)
@@ -170,6 +216,17 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     const handleGlobalMouseMove = (e: MouseEvent) => {
       if (!isPointerDownRef.current) return;
 
+      // Проверяем, не перетаскивается ли группа - если да, блокируем перетаскивание компонента
+      const store = useCanvasStore.getState();
+      if (store.getIsGroupDragging()) {
+        // Если группа перетаскивается, не позволяем компоненту перетаскиваться
+        // Сбрасываем состояние перетаскивания компонента
+        isPointerDownRef.current = false;
+        dragInitiatedRef.current = false;
+        setIsDragging(false);
+        return;
+      }
+
       const deltaX = e.clientX - dragStartRef.current.x;
       const deltaY = e.clientY - dragStartRef.current.y;
       const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
@@ -178,6 +235,18 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
         dragInitiatedRef.current = true;
         setIsDragging(true);
         startDragOperation(node.id);
+        
+        // Store initial positions of all selected nodes at the moment drag starts
+        // This ensures we have the latest selection state and positions
+        const store = useCanvasStore.getState();
+        const selectedNodes = store.nodes.filter(n => n.selected);
+        selectedNodesInitialPositionsRef.current = {};
+        selectedNodes.forEach(selectedNode => {
+          selectedNodesInitialPositionsRef.current[selectedNode.id] = {
+            x: selectedNode.position.x,
+            y: selectedNode.position.y,
+          };
+        });
       }
 
       if (dragInitiatedRef.current && canvasElementRef.current) {
@@ -196,17 +265,49 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
         const deltaX = currentWorldX - dragStartWorldPosRef.current.x;
         const deltaY = currentWorldY - dragStartWorldPosRef.current.y;
         
-        // Calculate new position based on initial node position + delta
-        const newX = dragStartNodePosRef.current.x + deltaX;
-        const newY = dragStartNodePosRef.current.y + deltaY;
+        // Get all selected nodes from store (fresh data, not from closure)
+        const store = useCanvasStore.getState();
+        const selectedNodes = store.nodes.filter(n => n.selected);
         
-        // Update node position directly
-        updateNode(node.id, {
-          position: {
-            x: newX,
-            y: newY,
-          },
-        }, true);
+        // Check if we have initial positions stored for multi-drag
+        const hasInitialPositions = Object.keys(selectedNodesInitialPositionsRef.current).length > 0;
+        
+        if (selectedNodes.length > 1 && hasInitialPositions) {
+          // Multiple nodes selected - move all of them
+          const updates = selectedNodes
+            .map(selectedNode => {
+              const initialPos = selectedNodesInitialPositionsRef.current[selectedNode.id];
+              if (initialPos) {
+                return {
+                  id: selectedNode.id,
+                  updates: {
+                    position: {
+                      x: initialPos.x + deltaX,
+                      y: initialPos.y + deltaY,
+                    },
+                  },
+                };
+              }
+              return null;
+            })
+            .filter((update): update is { id: string; updates: Partial<CanvasNodeType> } => update !== null);
+          
+          if (updates.length > 0) {
+            updateNodes(updates, true);
+          }
+        } else {
+          // Single node - use existing logic
+          const newX = dragStartNodePosRef.current.x + deltaX;
+          const newY = dragStartNodePosRef.current.y + deltaY;
+          
+          // Update node position directly
+          updateNode(node.id, {
+            position: {
+              x: newX,
+              y: newY,
+            },
+          }, true);
+        }
       }
     };
 
@@ -229,14 +330,25 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
       document.removeEventListener('mousemove', handleGlobalMouseMove);
       document.removeEventListener('mouseup', handleGlobalMouseUp);
     };
-  }, [node.id, updateNode, startDragOperation, endDragOperation]);
+  }, [node.id, updateNode, updateNodes, startDragOperation, endDragOperation]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
 
-    // Multi-select with Ctrl/Cmd
-    const multiSelect = e.ctrlKey || e.metaKey;
-    selectNode(node.id, multiSelect);
+    // Get current selection state before updating
+    const store = useCanvasStore.getState();
+    const currentlySelectedNodes = store.nodes.filter(n => n.selected);
+    const isCurrentlySelected = node.selected;
+    const hasOtherSelected = currentlySelectedNodes.some(n => n.id !== node.id);
+
+    // If node is already selected and there are other selected nodes, don't change selection
+    // This allows dragging multiple selected nodes together
+    // Otherwise, update selection normally
+    if (!(isCurrentlySelected && hasOtherSelected && !e.ctrlKey && !e.metaKey)) {
+      // Multi-select with Ctrl/Cmd
+      const multiSelect = e.ctrlKey || e.metaKey;
+      selectNode(node.id, multiSelect);
+    }
 
     // Find canvas element to get its position
     const canvasElement = document.querySelector('.flex-1.overflow-hidden.relative') as HTMLElement;
@@ -269,16 +381,27 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
       y: startWorldY,
     };
     
-    // Store initial node position
+    // Get fresh nodes from store AFTER selectNode has updated the state
+    // Zustand updates are synchronous, so we can get fresh state immediately
+    const updatedStore = useCanvasStore.getState();
+    
+    // Get current node position from store (may be different from props)
+    const currentNode = updatedStore.nodes.find(n => n.id === node.id);
+    const currentNodePosition = currentNode?.position || node.position;
+    
+    // Store initial node position (from store, not props)
     dragStartNodePosRef.current = {
-      x: node.position.x,
-      y: node.position.y,
+      x: currentNodePosition.x,
+      y: currentNodePosition.y,
     };
+    
+    // Note: Initial positions of all selected nodes will be stored when drag actually starts
+    // (when distance > 3), not here, to ensure we have the latest selection state
     
     // Calculate offset: difference between mouse position and node position in world coordinates
     dragOffsetRef.current = {
-      x: startWorldX - node.position.x,
-      y: startWorldY - node.position.y,
+      x: startWorldX - currentNodePosition.x,
+      y: startWorldY - currentNodePosition.y,
     };
     
     dragStartRef.current = { x: e.clientX, y: e.clientY };
@@ -315,7 +438,13 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    selectNode(node.id);
+    // If node is not selected, select it (but don't deselect others if multi-select is active)
+    // If node is already selected, keep current selection
+    if (!node.selected) {
+      // Check if there are other selected nodes - if so, use multi-select to add this one
+      const hasOtherSelected = nodes.some(n => n.id !== node.id && n.selected);
+      selectNode(node.id, hasOtherSelected);
+    }
     // Pass coordinates to parent (Canvas) to render menu outside transform container
     onContextMenu?.(e.clientX, e.clientY);
   };
@@ -421,6 +550,8 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
   return (
     <>
       <div
+        ref={nodeElementRef}
+        data-node-id={node.id}
         className={`
           absolute cursor-move select-none
           transition-shadow
@@ -518,3 +649,26 @@ export function CanvasNode({ node, onConnectionStart, onConnectionEnd, isConnect
     </>
   );
 }
+
+// Memoize component to prevent unnecessary re-renders
+// Only re-render if node properties, isConnecting, or callback functions change
+export const CanvasNode = memo(CanvasNodeComponent, (prevProps, nextProps) => {
+  // Compare node by id and key properties that affect rendering
+  if (prevProps.node.id !== nextProps.node.id) return false;
+  if (prevProps.node.position.x !== nextProps.node.position.x) return false;
+  if (prevProps.node.position.y !== nextProps.node.position.y) return false;
+  if (prevProps.node.selected !== nextProps.node.selected) return false;
+  if (prevProps.node.type !== nextProps.node.type) return false;
+  if (prevProps.node.data.label !== nextProps.node.data.label) return false;
+  
+  // Compare other props
+  if (prevProps.isConnecting !== nextProps.isConnecting) return false;
+  
+  // Callbacks are compared by reference (should be stable with useCallback)
+  if (prevProps.onConnectionStart !== nextProps.onConnectionStart) return false;
+  if (prevProps.onConnectionEnd !== nextProps.onConnectionEnd) return false;
+  if (prevProps.onContextMenu !== nextProps.onContextMenu) return false;
+  
+  // If all checks pass, props are equal - skip re-render
+  return true;
+});

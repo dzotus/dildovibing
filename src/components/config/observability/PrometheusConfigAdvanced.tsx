@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useState } from 'react';
 import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { showError } from '@/utils/toast';
 
 interface PrometheusConfigProps {
   componentId: string;
@@ -491,7 +492,9 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                           try {
                             const parsed = JSON.parse(e.target.value);
                             updateServiceDiscovery(index, 'config', parsed);
-                          } catch {}
+                          } catch (error) {
+                            showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                          }
                         }}
                         placeholder='{"role": "pod", "namespaces": {"names": ["default"]}}'
                       />
@@ -596,7 +599,9 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                           try {
                             const parsed = JSON.parse(e.target.value);
                             updateAlertingRule(index, 'labels', parsed);
-                          } catch {}
+                          } catch (error) {
+                            showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                          }
                         }}
                         placeholder='{"severity": "warning"}'
                       />
@@ -611,7 +616,9 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                           try {
                             const parsed = JSON.parse(e.target.value);
                             updateAlertingRule(index, 'annotations', parsed);
-                          } catch {}
+                          } catch (error) {
+                            showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                          }
                         }}
                         placeholder='{"summary": "Alert summary", "description": "Alert description"}'
                       />
@@ -709,7 +716,9 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                           try {
                             const parsed = JSON.parse(e.target.value);
                             updateRecordingRule(index, 'labels', parsed);
-                          } catch {}
+                          } catch (error) {
+                            showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                          }
                         }}
                         placeholder='{"job": "node-exporter"}'
                       />

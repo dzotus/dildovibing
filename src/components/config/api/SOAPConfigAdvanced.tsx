@@ -62,6 +62,9 @@ interface SOAPConfig {
   totalRequests?: number;
   successRate?: number;
   averageLatency?: number;
+  enableWSSecurity?: boolean;
+  enableWSAddressing?: boolean;
+  soapVersion?: '1.1' | '1.2';
 }
 
 export function SOAPConfigAdvanced({ componentId }: SOAPConfigProps) {
@@ -435,15 +438,24 @@ export function SOAPConfigAdvanced({ componentId }: SOAPConfigProps) {
                 <Separator />
                 <div className="flex items-center justify-between">
                   <Label>Enable WS-Security</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableWSSecurity ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableWSSecurity: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable WS-Addressing</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableWSAddressing ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableWSAddressing: checked })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>SOAP Version</Label>
-                  <Select defaultValue="1.1">
+                  <Select 
+                    value={config.soapVersion ?? '1.1'}
+                    onValueChange={(value: '1.1' | '1.2') => updateConfig({ soapVersion: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>

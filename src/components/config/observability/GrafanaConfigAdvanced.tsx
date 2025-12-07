@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { logError } from '@/utils/logger';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -1043,7 +1044,7 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
     </div>
   );
   } catch (error) {
-    console.error('Error rendering GrafanaConfigAdvanced:', error);
+    logError('Error rendering GrafanaConfigAdvanced', error instanceof Error ? error : new Error(String(error)));
     return (
       <div className="p-4 text-destructive">
         <p>Error loading Grafana configuration</p>

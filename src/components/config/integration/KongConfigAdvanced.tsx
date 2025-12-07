@@ -28,6 +28,7 @@ import {
   Edit
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { showError } from '@/utils/toast';
 
 interface KongConfigProps {
   componentId: string;
@@ -827,7 +828,9 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
                             try {
                               const parsed = JSON.parse(e.target.value);
                               updatePlugin(index, 'config', parsed);
-                            } catch {}
+                            } catch (error) {
+                              showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                            }
                           }}
                           placeholder='{"minute": 1000, "hour": 10000}'
                         />

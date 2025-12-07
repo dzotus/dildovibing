@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Plus, Trash2, ExternalLink } from 'lucide-react';
 import { ComponentProfile, ConfigField, ConfigFieldValue } from './types';
 import { deepClone } from '@/lib/deepClone';
@@ -103,17 +104,21 @@ export function ProfileConfigRenderer({
         );
       case 'select':
         return (
-          <select
-            className="h-9 rounded-md border border-border bg-transparent px-3 text-sm"
+          <Select
             value={typeof value === 'string' ? value : ''}
-            onChange={(e) => handleFieldChange(field.id, e.target.value)}
+            onValueChange={(newValue) => handleFieldChange(field.id, newValue)}
           >
-            {(field.options || []).map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger>
+              <SelectValue placeholder={field.placeholder || 'Select an option'} />
+            </SelectTrigger>
+            <SelectContent>
+              {(field.options || []).map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         );
       case 'toggle':
         return (

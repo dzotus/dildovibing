@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { logWarn } from '@/utils/logger';
 import { ComponentCollection } from '@/types';
 
 const STORAGE_KEY = 'archiphoenix_component_library';
@@ -30,7 +31,7 @@ const loadState = (): Pick<ComponentLibraryState, 'favorites' | 'collections'> =
       collections: Array.isArray(parsed.collections) ? parsed.collections : [],
     };
   } catch (error) {
-    console.warn('Failed to load component library state', error);
+    logWarn('Failed to load component library state', error instanceof Error ? error : new Error(String(error)));
     return { favorites: [], collections: [] };
   }
 };

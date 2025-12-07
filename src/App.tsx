@@ -6,6 +6,9 @@ import { Canvas } from './components/canvas/Canvas';
 import { ComponentConfigRenderer } from './components/config/ComponentConfigRenderer';
 import { useTabStore } from './store/useTabStore';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { NodeRefsProvider } from './contexts/NodeRefsContext';
+import { ResizeObserverProvider } from './contexts/ResizeObserverContext';
 
 function App() {
   useKeyboardShortcuts();
@@ -13,11 +16,17 @@ function App() {
   const activeTab = tabs.find((tab) => tab.active);
 
   return (
+    <ErrorBoundary>
+      <ResizeObserverProvider>
+        <NodeRefsProvider>
     <div className="h-screen flex flex-col bg-background">
       <Toolbar />
       <TabBar />
       <div className="flex-1 flex overflow-hidden">
+            <ErrorBoundary>
         <Sidebar />
+            </ErrorBoundary>
+            <ErrorBoundary>
         {activeTab?.type === 'diagram' ? (
           <Canvas />
         ) : activeTab?.type === 'component' && activeTab.componentId && activeTab.componentType ? (
@@ -30,9 +39,15 @@ function App() {
         ) : (
           <Canvas />
         )}
+            </ErrorBoundary>
+            <ErrorBoundary>
         <PropertiesPanel />
+            </ErrorBoundary>
       </div>
     </div>
+        </NodeRefsProvider>
+      </ResizeObserverProvider>
+    </ErrorBoundary>
   );
 }
 

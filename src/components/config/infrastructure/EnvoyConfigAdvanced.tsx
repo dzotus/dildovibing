@@ -65,6 +65,16 @@ interface EnvoyConfig {
   totalRoutes?: number;
   totalRequests?: number;
   totalErrors?: number;
+  enableAdminInterface?: boolean;
+  enableAccessLogging?: boolean;
+  enableStats?: boolean;
+  adminPort?: number;
+  drainTime?: number;
+  maxConnections?: number;
+  metrics?: {
+    enabled?: boolean;
+    prometheusPath?: string;
+  };
 }
 
 export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
@@ -469,28 +479,91 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Admin Interface</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableAdminInterface ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableAdminInterface: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Access Logging</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableAccessLogging ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableAccessLogging: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Stats</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableStats ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableStats: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Admin Port</Label>
-                  <Input type="number" defaultValue={9901} min={1} max={65535} />
+                  <Input 
+                    type="number" 
+                    value={config.adminPort ?? 9901}
+                    onChange={(e) => updateConfig({ adminPort: parseInt(e.target.value) || 9901 })}
+                    min={1} 
+                    max={65535} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Drain Time (seconds)</Label>
-                  <Input type="number" defaultValue={600} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.drainTime ?? 600}
+                    onChange={(e) => updateConfig({ drainTime: parseInt(e.target.value) || 600 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Connections</Label>
-                  <Input type="number" defaultValue={1024} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxConnections ?? 1024}
+                    onChange={(e) => updateConfig({ maxConnections: parseInt(e.target.value) || 1024 })}
+                    min={1} 
+                  />
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Prometheus Metrics</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export metrics for Prometheus scraping via /stats/prometheus</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          prometheusPath: config.metrics?.prometheusPath || '/stats/prometheus'
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <div className="space-y-2">
+                      <Label>Prometheus Stats Path</Label>
+                      <Input 
+                        type="text" 
+                        value={config.metrics?.prometheusPath ?? '/stats/prometheus'}
+                        onChange={(e) => updateConfig({ 
+                          metrics: { 
+                            ...config.metrics, 
+                            prometheusPath: e.target.value || '/stats/prometheus'
+                          } 
+                        })}
+                        placeholder="/stats/prometheus"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Metrics available at: {config.adminPort ?? 9901}{config.metrics?.prometheusPath || '/stats/prometheus'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -500,4 +573,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
     </div>
   );
 }
+
+
+
 

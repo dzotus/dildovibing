@@ -1,8 +1,9 @@
 import { CanvasConnection, CanvasNode } from '@/types';
-import { useState, useEffect } from 'react';
+import { useState, memo, useMemo } from 'react';
 import { useEmulationStore } from '@/store/useEmulationStore';
 import { useDataFlowStore } from '@/store/useDataFlowStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useShallow } from 'zustand/react/shallow';
 import { useIsPathHighlighted } from './DataPathVisualization';
 import { getConnectionPoints } from '@/utils/connectionPoints';
 
@@ -17,48 +18,52 @@ interface ConnectionLineProps {
   onContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export function ConnectionLine({
+function ConnectionLineComponent({
   connection,
   sourceNode,
   targetNode,
   zoom,
+  pan,
   isSelected = false,
   onClick,
   onContextMenu,
 }: ConnectionLineProps) {
   const [isHovered, setIsHovered] = useState(false);
-  const { isRunning, getConnectionMetrics } = useEmulationStore();
+  
+  // Subscribe to store to trigger re-renders when metrics update
+  // Subscribe to both isRunning and connectionMetrics to ensure re-renders
+  const { isRunning, connectionMetrics } = useEmulationStore(
+    useShallow(state => ({
+      isRunning: state.isRunning,
+      connectionMetrics: state.connectionMetrics,
+    }))
+  );
+  
+  // Get metrics for this connection - will update when connectionMetrics Map changes
+  const metrics = isRunning ? connectionMetrics.get(connection.id) : undefined;
+  
   const { getConnectionMessages } = useDataFlowStore();
-  const { selectedNodeId, connections } = useCanvasStore();
-  const [metrics, setMetrics] = useState<ReturnType<typeof getConnectionMetrics>>();
-  const [dataMessages, setDataMessages] = useState<any[]>([]);
+  
+  // Optimize store subscriptions: only subscribe to specific values
+  const selectedNodeId = useCanvasStore(state => state.selectedNodeId);
+  const connections = useCanvasStore(state => state.connections);
+  
+  // Get data messages directly from store and filter in-transit ones
+  const allMessages = isRunning ? getConnectionMessages(connection.id) : [];
+  const dataMessages = useMemo(
+    () => allMessages.filter(m => m.status === 'in-transit' || m.status === 'pending'),
+    [allMessages]
+  );
+  
   const isPathHighlighted = useIsPathHighlighted(connection.id);
   
-  // Check if there's a reverse connection (bidirectional)
-  const hasReverseConnection = connections.some(
-    conn => conn.source === connection.target && conn.target === connection.source
+  // Memoize hasReverseConnection check - only recalculate when connections or connection changes
+  const hasReverseConnection = useMemo(
+    () => connections.some(
+      conn => conn.source === connection.target && conn.target === connection.source
+    ),
+    [connections, connection.target, connection.source]
   );
-
-  // Update metrics when emulation is running
-  useEffect(() => {
-    if (!isRunning) {
-      setMetrics(undefined);
-      setDataMessages([]);
-      return;
-    }
-
-    const interval = setInterval(() => {
-      const connMetrics = getConnectionMetrics(connection.id);
-      setMetrics(connMetrics);
-      
-      // Get data messages in transit
-      const messages = getConnectionMessages(connection.id);
-      const inTransit = messages.filter(m => m.status === 'in-transit' || m.status === 'pending');
-      setDataMessages(inTransit);
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [isRunning, connection.id, getConnectionMetrics, getConnectionMessages]);
 
   // Node dimensions
   const nodeWidth = 140;
@@ -380,3 +385,38 @@ export function ConnectionLine({
     </g>
   );
 }
+
+// Memoize component to prevent unnecessary re-renders
+// Only re-render if connection, nodes, zoom, pan, or selection state changes
+export const ConnectionLine = memo(ConnectionLineComponent, (prevProps, nextProps) => {
+  // Compare connection by id and key properties
+  if (prevProps.connection.id !== nextProps.connection.id) return false;
+  if (prevProps.connection.sourcePort !== nextProps.connection.sourcePort) return false;
+  if (prevProps.connection.targetPort !== nextProps.connection.targetPort) return false;
+  if (prevProps.connection.label !== nextProps.connection.label) return false;
+  
+  // Compare source node position
+  if (prevProps.sourceNode.id !== nextProps.sourceNode.id) return false;
+  if (prevProps.sourceNode.position.x !== nextProps.sourceNode.position.x) return false;
+  if (prevProps.sourceNode.position.y !== nextProps.sourceNode.position.y) return false;
+  
+  // Compare target node position
+  if (prevProps.targetNode.id !== nextProps.targetNode.id) return false;
+  if (prevProps.targetNode.position.x !== nextProps.targetNode.position.x) return false;
+  if (prevProps.targetNode.position.y !== nextProps.targetNode.position.y) return false;
+  
+  // Compare zoom and pan (affect rendering)
+  if (prevProps.zoom !== nextProps.zoom) return false;
+  if (prevProps.pan.x !== nextProps.pan.x) return false;
+  if (prevProps.pan.y !== nextProps.pan.y) return false;
+  
+  // Compare selection state
+  if (prevProps.isSelected !== nextProps.isSelected) return false;
+  
+  // Callbacks are compared by reference (should be stable with useCallback)
+  if (prevProps.onClick !== nextProps.onClick) return false;
+  if (prevProps.onContextMenu !== nextProps.onContextMenu) return false;
+  
+  // If all checks pass, props are equal - skip re-render
+  return true;
+});

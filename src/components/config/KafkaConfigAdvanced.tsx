@@ -1,5 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { getTypedConfig } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -84,7 +85,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
-  const config = (node.data.config as any) || {} as KafkaConfig;
+  const config = getTypedConfig(node.data.config, {} as KafkaConfig);
   const brokers = config.brokers || ['localhost:9092'];
   const topics = config.topics || [];
   const consumerGroups = config.consumerGroups || [];
@@ -123,6 +124,42 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (updates.brokers !== undefined) {
+      const newErrors = { ...fieldErrors };
+      if (newErrors.brokers) delete newErrors.brokers;
+      setFieldErrors(newErrors);
+    }
+  };
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const validateBrokers = () => {
+    if (!brokers || brokers.length === 0) {
+      setFieldErrors({ ...fieldErrors, brokers: 'Необходимо указать хотя бы один broker' });
+      return false;
+    }
+    // Проверка формата host:port
+    const invalidBrokers = brokers.filter(b => {
+      if (!b || !b.trim()) return true;
+      const parts = b.trim().split(':');
+      if (parts.length !== 2) return true;
+      const port = parseInt(parts[1]);
+      return isNaN(port) || port <= 0 || port > 65535;
+    });
+    if (invalidBrokers.length > 0) {
+      setFieldErrors({ ...fieldErrors, brokers: 'Неверный формат broker. Используйте формат host:port' });
+      return false;
+    }
+    const newErrors = { ...fieldErrors };
+    if (newErrors.brokers) delete newErrors.brokers;
+    setFieldErrors(newErrors);
+    return true;
+  };
+  
+  const validateConnectionFields = () => {
+    return validateBrokers();
   };
 
   const addBroker = () => {
@@ -176,7 +213,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
     updateConfig({ topics: newTopics });
   };
 
-  const updateTopicConfig = (index: number, field: keyof TopicConfig, value: any) => {
+  const updateTopicConfig = (index: number, field: keyof TopicConfig, value: unknown) => {
     const newTopics = [...topics];
     if (!newTopics[index].config) {
       newTopics[index].config = {};
@@ -319,15 +356,27 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
+                  {brokers.length === 0 && fieldErrors.brokers && (
+                    <div className="flex items-center gap-1 text-sm text-destructive p-2 border border-destructive rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{fieldErrors.brokers}</span>
+                    </div>
+                  )}
                   {brokers.map((broker, index) => (
                     <div key={index} className="flex items-center gap-3 p-3 border border-border rounded-lg bg-card">
                       <div className="flex-1 flex items-center gap-3">
                         <div className="h-2 w-2 rounded-full bg-green-500" />
                         <Input
                           value={broker}
-                          onChange={(e) => updateBroker(index, e.target.value)}
+                          onChange={(e) => {
+                            updateBroker(index, e.target.value);
+                            if (fieldErrors.brokers) {
+                              validateBrokers();
+                            }
+                          }}
+                          onBlur={validateBrokers}
                           placeholder="localhost:9092"
-                          className="flex-1"
+                          className={`flex-1 ${fieldErrors.brokers ? 'border-destructive' : ''}`}
                         />
                         <Badge variant="secondary">Broker {index + 1}</Badge>
                       </div>
@@ -342,6 +391,37 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                       )}
                     </div>
                   ))}
+                  {fieldErrors.brokers && brokers.length > 0 && (
+                    <div className="flex items-center gap-1 text-sm text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{fieldErrors.brokers}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2 pt-4 border-t">
+                  <Button
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения сохранены');
+                      } else {
+                        showError('Пожалуйста, укажите хотя бы один корректный broker (host:port)');
+                      }
+                    }}
+                  >
+                    Сохранить настройки
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения валидны');
+                      } else {
+                        showError('Пожалуйста, укажите хотя бы один корректный broker (host:port)');
+                      }
+                    }}
+                  >
+                    Проверить подключение
+                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -510,7 +590,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                                 <Label>Compression Type</Label>
                                 <Select
                                   value={topic.config.compressionType || 'gzip'}
-                                  onValueChange={(value: any) => updateTopicConfig(index, 'compressionType', value)}
+                                  onValueChange={(value: unknown) => updateTopicConfig(index, 'compressionType', value)}
                                 >
                                   <SelectTrigger>
                                     <SelectValue />
@@ -742,10 +822,11 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                   <div className="space-y-3">
                     {acls.map((acl, index) => {
                       // Backward compatibility: handle old ACL format
-                      const resourceType = (acl as any).resourceType || 'Topic';
-                      const resourceName = (acl as any).resourceName || (acl as any).resource || 'unknown';
-                      const resourcePatternType = (acl as any).resourcePatternType || 'Literal';
-                      const host = (acl as any).host || '*';
+                      const aclRecord = acl as Record<string, unknown>;
+                      const resourceType = (aclRecord.resourceType as string) || 'Topic';
+                      const resourceName = (aclRecord.resourceName as string) || (aclRecord.resource as string) || 'unknown';
+                      const resourcePatternType = (aclRecord.resourcePatternType as string) || 'Literal';
+                      const host = (aclRecord.host as string) || '*';
                       
                       return (
                         <Card key={index} className="p-3">
@@ -932,7 +1013,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                   <Label htmlFor="resource-type">Resource Type</Label>
                   <Select
                     value={aclForm.resourceType}
-                    onValueChange={(value: any) => setAclForm({ ...aclForm, resourceType: value })}
+                    onValueChange={(value: unknown) => setAclForm({ ...aclForm, resourceType: value as string })}
                   >
                     <SelectTrigger id="resource-type">
                       <SelectValue />
@@ -950,7 +1031,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                   <Label htmlFor="resource-pattern-type">Pattern Type</Label>
                   <Select
                     value={aclForm.resourcePatternType}
-                    onValueChange={(value: any) => setAclForm({ ...aclForm, resourcePatternType: value })}
+                    onValueChange={(value: unknown) => setAclForm({ ...aclForm, resourcePatternType: value as string })}
                   >
                     <SelectTrigger id="resource-pattern-type">
                       <SelectValue />
@@ -977,7 +1058,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                   <Label htmlFor="operation">Operation</Label>
                   <Select
                     value={aclForm.operation}
-                    onValueChange={(value: any) => setAclForm({ ...aclForm, operation: value })}
+                    onValueChange={(value: unknown) => setAclForm({ ...aclForm, operation: value as string })}
                   >
                     <SelectTrigger id="operation">
                       <SelectValue />

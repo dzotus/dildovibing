@@ -100,11 +100,61 @@ export function useKeyboardShortcuts() {
 
       // Toggle simulation: Space (without Ctrl/Cmd), when focused on body
       if (!isCtrlOrCmd && e.key === ' ') {
+        // Use e.target to check what element received the event
+        // This is more reliable than document.activeElement
+        const target = e.target as HTMLElement;
+        
+        if (!target) {
+          // No target - safe to toggle
+          e.preventDefault();
+          if (isRunning) {
+            stop();
+          } else {
+            const { nodes, connections } = useCanvasStore.getState();
+            useEmulationStore.getState().initialize(nodes, connections);
+            start();
+          }
+          return;
+        }
+        
+        // Check if target is an input element
+        const tagName = target.tagName;
+        if (tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT') {
+          // User is typing - allow space to work normally
+          return;
+        }
+        
+        // Check if target is contentEditable
+        if (target.isContentEditable) {
+          // User is typing in contentEditable - allow space to work normally
+          return;
+        }
+        
+        // Check if target is inside an input element
+        const inputParent = target.closest('input, textarea, select, [contenteditable="true"]');
+        if (inputParent) {
+          // User is inside an input - allow space to work normally
+          return;
+        }
+        
+        // Check role attribute
+        const role = target.getAttribute('role');
+        if (role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton') {
+          // User is in an input-like element - allow space to work normally
+          return;
+        }
+        
+        // Check if target is inside a Radix UI Select
+        if (target.closest('[data-radix-select-trigger], [data-radix-select-content], [data-radix-select-viewport]')) {
+          // User is interacting with Select - allow space to work normally
+          return;
+        }
+        
+        // If we get here, user is NOT in an input - safe to toggle simulation
         e.preventDefault();
         if (isRunning) {
           stop();
         } else {
-          // Initialize nodes & connections implicitly from current canvas state
           const { nodes, connections } = useCanvasStore.getState();
           useEmulationStore.getState().initialize(nodes, connections);
           start();
@@ -135,15 +185,41 @@ export function useKeyboardShortcuts() {
 
       // Delete selected items: Delete or Backspace
       if ((e.key === 'Delete' || e.key === 'Backspace') && !isCtrlOrCmd) {
-        // Check if input/textarea is focused - don't delete if user is typing
+        // Check if input/textarea/select is focused - don't delete if user is typing
         const activeElement = document.activeElement;
-        const isInputFocused = activeElement && (
-          activeElement.tagName === 'INPUT' ||
-          activeElement.tagName === 'TEXTAREA' ||
-          activeElement.isContentEditable
-        );
         
-        if (isInputFocused) return;
+        if (activeElement) {
+          const tagName = activeElement.tagName;
+          if (
+            tagName === 'INPUT' ||
+            tagName === 'TEXTAREA' ||
+            tagName === 'SELECT' ||
+            activeElement.isContentEditable
+          ) {
+            return; // User is typing, don't delete
+          }
+          
+          // Check role attribute
+          const role = activeElement.getAttribute('role');
+          if (
+            role === 'textbox' ||
+            role === 'combobox' ||
+            role === 'searchbox' ||
+            role === 'spinbutton'
+          ) {
+            return; // User is in an input-like element
+          }
+          
+          // Check if element is inside a form or input container
+          const isInForm = activeElement.closest('form') !== null;
+          const isInInputContainer = activeElement.closest('[role="textbox"], [role="combobox"], [contenteditable="true"]') !== null;
+          const isInSelect = activeElement.closest('[data-radix-select-trigger], [data-radix-select-content]') !== null;
+          const isInDialog = activeElement.closest('[role="dialog"]') !== null;
+          
+          if (isInForm || isInInputContainer || isInSelect || isInDialog) {
+            return; // User is in a form or input context
+          }
+        }
 
         e.preventDefault();
 

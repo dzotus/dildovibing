@@ -72,6 +72,9 @@ interface TraefikConfig {
   totalRequests?: number;
   totalResponses?: number;
   activeRouters?: number;
+  enableDashboard?: boolean;
+  enableAPI?: boolean;
+  autoDiscoverServices?: boolean;
 }
 
 export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
@@ -602,15 +605,24 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                 <Separator />
                 <div className="flex items-center justify-between">
                   <Label>Enable Dashboard</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableDashboard ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableDashboard: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable API</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableAPI ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableAPI: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Auto Discover Services</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.autoDiscoverServices ?? true}
+                    onCheckedChange={(checked) => updateConfig({ autoDiscoverServices: checked })}
+                  />
                 </div>
               </CardContent>
             </Card>

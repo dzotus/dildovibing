@@ -1,87 +1,77 @@
-// Advanced configs - включены по одному для проверки
-import { KafkaConfigAdvanced } from './KafkaConfigAdvanced';
-import { RabbitMQConfigAdvanced } from './RabbitMQConfigAdvanced';
-import { ActiveMQConfigAdvanced } from './messaging/ActiveMQConfigAdvanced';
-import { AWSSQSConfigAdvanced } from './messaging/AWSSQSConfigAdvanced';
-import { AzureServiceBusConfigAdvanced } from './messaging/AzureServiceBusConfigAdvanced';
-import { GCPPubSubConfigAdvanced } from './messaging/GCPPubSubConfigAdvanced';
-import { DatabaseConfigAdvanced } from './DatabaseConfigAdvanced';
-import { PostgreSQLConfigAdvanced } from './data/PostgreSQLConfigAdvanced';
-import { MongoDBConfigAdvanced } from './data/MongoDBConfigAdvanced';
-import { RedisConfigAdvanced } from './data/RedisConfigAdvanced';
-import { NginxConfigAdvanced } from './NginxConfigAdvanced';
-import { DockerK8sConfigAdvanced } from './infrastructure/DockerK8sConfigAdvanced';
-import { KongConfigAdvanced } from './integration/KongConfigAdvanced';
-import { ApigeeConfigAdvanced } from './integration/ApigeeConfigAdvanced';
-import { MuleSoftConfigAdvanced } from './integration/MuleSoftConfigAdvanced';
-import { GraphQLGatewayConfigAdvanced } from './integration/GraphQLGatewayConfigAdvanced';
-import { BFFServiceConfigAdvanced } from './integration/BFFServiceConfigAdvanced';
-import { WebhookRelayConfigAdvanced } from './integration/WebhookRelayConfigAdvanced';
-import { ElasticsearchConfigAdvanced } from './data/ElasticsearchConfigAdvanced';
-import { CassandraConfigAdvanced } from './data/CassandraConfigAdvanced';
-import { ClickHouseConfigAdvanced } from './data/ClickHouseConfigAdvanced';
-import { SnowflakeConfigAdvanced } from './data/SnowflakeConfigAdvanced';
-import { S3DataLakeConfigAdvanced } from './data/S3DataLakeConfigAdvanced';
-import { GrafanaConfigAdvanced } from './observability/GrafanaConfigAdvanced';
-import { PrometheusConfigAdvanced } from './observability/PrometheusConfigAdvanced';
-import { LokiConfigAdvanced } from './observability/LokiConfigAdvanced';
-import { JaegerConfigAdvanced } from './observability/JaegerConfigAdvanced';
-import { OpenTelemetryCollectorConfigAdvanced } from './observability/OpenTelemetryCollectorConfigAdvanced';
-import { PagerDutyConfigAdvanced } from './observability/PagerDutyConfigAdvanced';
-import { KeycloakConfigAdvanced } from './security/KeycloakConfigAdvanced';
-import { WAFConfigAdvanced } from './security/WAFConfigAdvanced';
-import { SecretsVaultConfigAdvanced } from './security/SecretsVaultConfigAdvanced';
-import { IDSIPSConfigAdvanced } from './security/IDSIPSConfigAdvanced';
-import { FirewallConfigAdvanced } from './security/FirewallConfigAdvanced';
-import { JenkinsConfigAdvanced } from './devops/JenkinsConfigAdvanced';
-import { GitLabCIConfigAdvanced } from './devops/GitLabCIConfigAdvanced';
-import { ArgoCDConfigAdvanced } from './devops/ArgoCDConfigAdvanced';
-import { HarborConfigAdvanced } from './devops/HarborConfigAdvanced';
-import { TerraformConfigAdvanced } from './devops/TerraformConfigAdvanced';
-import { AnsibleConfigAdvanced } from './devops/AnsibleConfigAdvanced';
-import { MLflowConfigAdvanced } from './ml/MLflowConfigAdvanced';
-import { SparkConfigAdvanced } from './ml/SparkConfigAdvanced';
-import { TensorFlowServingConfigAdvanced } from './ml/TensorFlowServingConfigAdvanced';
-import { PyTorchServeConfigAdvanced } from './ml/PyTorchServeConfigAdvanced';
-import { FeatureStoreConfigAdvanced } from './ml/FeatureStoreConfigAdvanced';
-
-// Basic configs
-import { RabbitMQConfig } from './RabbitMQConfig';
-import { DatabaseConfig } from './DatabaseConfig';
-import { NginxConfig } from './NginxConfig';
-import { ApiConfig } from './ApiConfig';
-import { RestApiConfigAdvanced } from './api/RestApiConfigAdvanced';
-import { GraphQLConfigAdvanced } from './api/GraphQLConfigAdvanced';
-import { GRPCConfigAdvanced } from './api/GRPCConfigAdvanced';
-import { WebSocketConfigAdvanced } from './api/WebSocketConfigAdvanced';
-import { SOAPConfigAdvanced } from './api/SOAPConfigAdvanced';
-import { WebhookConfigAdvanced } from './api/WebhookConfigAdvanced';
-import { InfrastructureConfig } from './InfrastructureConfig';
-import { MessagingConfig } from './messaging/MessagingConfig';
-import { IntegrationConfig } from './integration/IntegrationConfig';
-import { DataConfig } from './data/DataConfig';
-import { ObservabilityConfig } from './observability/ObservabilityConfig';
-import { SecurityConfig } from './security/SecurityConfig';
-import { DevopsConfig } from './devops/DevopsConfig';
-import { InfrastructureConfigExtended } from './infrastructure/InfrastructureConfigExtended';
-import { HAProxyConfigAdvanced } from './infrastructure/HAProxyConfigAdvanced';
-import { TraefikConfigAdvanced } from './infrastructure/TraefikConfigAdvanced';
-import { EnvoyConfigAdvanced } from './infrastructure/EnvoyConfigAdvanced';
-import { EdgeConfig } from './edge/EdgeConfig';
-import { IstioConfigAdvanced } from './edge/IstioConfigAdvanced';
-import { ServiceMeshConfigAdvanced } from './edge/ServiceMeshConfigAdvanced';
-import { APIGatewayConfigAdvanced } from './edge/APIGatewayConfigAdvanced';
-import { VPNConfigAdvanced } from './edge/VPNConfigAdvanced';
-import { CDNConfigAdvanced } from './edge/CDNConfigAdvanced';
-import { ApiConfigExtended } from './api/ApiConfigExtended';
-import { MLConfig } from './ml/MLConfig';
-import { BusinessConfig } from './business/BusinessConfig';
-import { PaymentGatewayConfigAdvanced } from './business/PaymentGatewayConfigAdvanced';
-import { BPMNEngineConfigAdvanced } from './business/BPMNEngineConfigAdvanced';
-import { CRMConfigAdvanced } from './business/CRMConfigAdvanced';
-import { ERPConfigAdvanced } from './business/ERPConfigAdvanced';
-import { RPABotConfigAdvanced } from './business/RPABotConfigAdvanced';
+import { lazy, Suspense } from 'react';
 import type { ComponentType } from '@/types';
+
+// Lazy loading для больших компонентов конфигурации - уменьшает начальный bundle size
+const KafkaConfigAdvanced = lazy(() => import('./KafkaConfigAdvanced').then(m => ({ default: m.KafkaConfigAdvanced })));
+const RabbitMQConfigAdvanced = lazy(() => import('./RabbitMQConfigAdvanced').then(m => ({ default: m.RabbitMQConfigAdvanced })));
+const PostgreSQLConfigAdvanced = lazy(() => import('./data/PostgreSQLConfigAdvanced').then(m => ({ default: m.PostgreSQLConfigAdvanced })));
+const MongoDBConfigAdvanced = lazy(() => import('./data/MongoDBConfigAdvanced').then(m => ({ default: m.MongoDBConfigAdvanced })));
+const RedisConfigAdvanced = lazy(() => import('./data/RedisConfigAdvanced').then(m => ({ default: m.RedisConfigAdvanced })));
+const ElasticsearchConfigAdvanced = lazy(() => import('./data/ElasticsearchConfigAdvanced').then(m => ({ default: m.ElasticsearchConfigAdvanced })));
+const CassandraConfigAdvanced = lazy(() => import('./data/CassandraConfigAdvanced').then(m => ({ default: m.CassandraConfigAdvanced })));
+const ClickHouseConfigAdvanced = lazy(() => import('./data/ClickHouseConfigAdvanced').then(m => ({ default: m.ClickHouseConfigAdvanced })));
+const SnowflakeConfigAdvanced = lazy(() => import('./data/SnowflakeConfigAdvanced').then(m => ({ default: m.SnowflakeConfigAdvanced })));
+const S3DataLakeConfigAdvanced = lazy(() => import('./data/S3DataLakeConfigAdvanced').then(m => ({ default: m.S3DataLakeConfigAdvanced })));
+const NginxConfigAdvanced = lazy(() => import('./NginxConfigAdvanced').then(m => ({ default: m.NginxConfigAdvanced })));
+const RestApiConfigAdvanced = lazy(() => import('./api/RestApiConfigAdvanced').then(m => ({ default: m.RestApiConfigAdvanced })));
+const GRPCConfigAdvanced = lazy(() => import('./api/GRPCConfigAdvanced').then(m => ({ default: m.GRPCConfigAdvanced })));
+const WebSocketConfigAdvanced = lazy(() => import('./api/WebSocketConfigAdvanced').then(m => ({ default: m.WebSocketConfigAdvanced })));
+const GraphQLConfigAdvanced = lazy(() => import('./api/GraphQLConfigAdvanced').then(m => ({ default: m.GraphQLConfigAdvanced })));
+const SOAPConfigAdvanced = lazy(() => import('./api/SOAPConfigAdvanced').then(m => ({ default: m.SOAPConfigAdvanced })));
+const WebhookConfigAdvanced = lazy(() => import('./api/WebhookConfigAdvanced').then(m => ({ default: m.WebhookConfigAdvanced })));
+const DockerK8sConfigAdvanced = lazy(() => import('./infrastructure/DockerK8sConfigAdvanced').then(m => ({ default: m.DockerK8sConfigAdvanced })));
+const HAProxyConfigAdvanced = lazy(() => import('./infrastructure/HAProxyConfigAdvanced').then(m => ({ default: m.HAProxyConfigAdvanced })));
+const TraefikConfigAdvanced = lazy(() => import('./infrastructure/TraefikConfigAdvanced').then(m => ({ default: m.TraefikConfigAdvanced })));
+const EnvoyConfigAdvanced = lazy(() => import('./infrastructure/EnvoyConfigAdvanced').then(m => ({ default: m.EnvoyConfigAdvanced })));
+const ActiveMQConfigAdvanced = lazy(() => import('./messaging/ActiveMQConfigAdvanced').then(m => ({ default: m.ActiveMQConfigAdvanced })));
+const AWSSQSConfigAdvanced = lazy(() => import('./messaging/AWSSQSConfigAdvanced').then(m => ({ default: m.AWSSQSConfigAdvanced })));
+const AzureServiceBusConfigAdvanced = lazy(() => import('./messaging/AzureServiceBusConfigAdvanced').then(m => ({ default: m.AzureServiceBusConfigAdvanced })));
+const GCPPubSubConfigAdvanced = lazy(() => import('./messaging/GCPPubSubConfigAdvanced').then(m => ({ default: m.GCPPubSubConfigAdvanced })));
+const KongConfigAdvanced = lazy(() => import('./integration/KongConfigAdvanced').then(m => ({ default: m.KongConfigAdvanced })));
+const ApigeeConfigAdvanced = lazy(() => import('./integration/ApigeeConfigAdvanced').then(m => ({ default: m.ApigeeConfigAdvanced })));
+const MuleSoftConfigAdvanced = lazy(() => import('./integration/MuleSoftConfigAdvanced').then(m => ({ default: m.MuleSoftConfigAdvanced })));
+const GraphQLGatewayConfigAdvanced = lazy(() => import('./integration/GraphQLGatewayConfigAdvanced').then(m => ({ default: m.GraphQLGatewayConfigAdvanced })));
+const BFFServiceConfigAdvanced = lazy(() => import('./integration/BFFServiceConfigAdvanced').then(m => ({ default: m.BFFServiceConfigAdvanced })));
+const WebhookRelayConfigAdvanced = lazy(() => import('./integration/WebhookRelayConfigAdvanced').then(m => ({ default: m.WebhookRelayConfigAdvanced })));
+const PrometheusConfigAdvanced = lazy(() => import('./observability/PrometheusConfigAdvanced').then(m => ({ default: m.PrometheusConfigAdvanced })));
+const GrafanaConfigAdvanced = lazy(() => import('./observability/GrafanaConfigAdvanced').then(m => ({ default: m.GrafanaConfigAdvanced })));
+const LokiConfigAdvanced = lazy(() => import('./observability/LokiConfigAdvanced').then(m => ({ default: m.LokiConfigAdvanced })));
+const JaegerConfigAdvanced = lazy(() => import('./observability/JaegerConfigAdvanced').then(m => ({ default: m.JaegerConfigAdvanced })));
+const OpenTelemetryCollectorConfigAdvanced = lazy(() => import('./observability/OpenTelemetryCollectorConfigAdvanced').then(m => ({ default: m.OpenTelemetryCollectorConfigAdvanced })));
+const PagerDutyConfigAdvanced = lazy(() => import('./observability/PagerDutyConfigAdvanced').then(m => ({ default: m.PagerDutyConfigAdvanced })));
+const KeycloakConfigAdvanced = lazy(() => import('./security/KeycloakConfigAdvanced').then(m => ({ default: m.KeycloakConfigAdvanced })));
+const WAFConfigAdvanced = lazy(() => import('./security/WAFConfigAdvanced').then(m => ({ default: m.WAFConfigAdvanced })));
+const SecretsVaultConfigAdvanced = lazy(() => import('./security/SecretsVaultConfigAdvanced').then(m => ({ default: m.SecretsVaultConfigAdvanced })));
+const IDSIPSConfigAdvanced = lazy(() => import('./security/IDSIPSConfigAdvanced').then(m => ({ default: m.IDSIPSConfigAdvanced })));
+const FirewallConfigAdvanced = lazy(() => import('./security/FirewallConfigAdvanced').then(m => ({ default: m.FirewallConfigAdvanced })));
+const JenkinsConfigAdvanced = lazy(() => import('./devops/JenkinsConfigAdvanced').then(m => ({ default: m.JenkinsConfigAdvanced })));
+const GitLabCIConfigAdvanced = lazy(() => import('./devops/GitLabCIConfigAdvanced').then(m => ({ default: m.GitLabCIConfigAdvanced })));
+const ArgoCDConfigAdvanced = lazy(() => import('./devops/ArgoCDConfigAdvanced').then(m => ({ default: m.ArgoCDConfigAdvanced })));
+const HarborConfigAdvanced = lazy(() => import('./devops/HarborConfigAdvanced').then(m => ({ default: m.HarborConfigAdvanced })));
+const TerraformConfigAdvanced = lazy(() => import('./devops/TerraformConfigAdvanced').then(m => ({ default: m.TerraformConfigAdvanced })));
+const AnsibleConfigAdvanced = lazy(() => import('./devops/AnsibleConfigAdvanced').then(m => ({ default: m.AnsibleConfigAdvanced })));
+const IstioConfigAdvanced = lazy(() => import('./edge/IstioConfigAdvanced').then(m => ({ default: m.IstioConfigAdvanced })));
+const ServiceMeshConfigAdvanced = lazy(() => import('./edge/ServiceMeshConfigAdvanced').then(m => ({ default: m.ServiceMeshConfigAdvanced })));
+const APIGatewayConfigAdvanced = lazy(() => import('./edge/APIGatewayConfigAdvanced').then(m => ({ default: m.APIGatewayConfigAdvanced })));
+const VPNConfigAdvanced = lazy(() => import('./edge/VPNConfigAdvanced').then(m => ({ default: m.VPNConfigAdvanced })));
+const CDNConfigAdvanced = lazy(() => import('./edge/CDNConfigAdvanced').then(m => ({ default: m.CDNConfigAdvanced })));
+const SparkConfigAdvanced = lazy(() => import('./ml/SparkConfigAdvanced').then(m => ({ default: m.SparkConfigAdvanced })));
+const TensorFlowServingConfigAdvanced = lazy(() => import('./ml/TensorFlowServingConfigAdvanced').then(m => ({ default: m.TensorFlowServingConfigAdvanced })));
+const PyTorchServeConfigAdvanced = lazy(() => import('./ml/PyTorchServeConfigAdvanced').then(m => ({ default: m.PyTorchServeConfigAdvanced })));
+const FeatureStoreConfigAdvanced = lazy(() => import('./ml/FeatureStoreConfigAdvanced').then(m => ({ default: m.FeatureStoreConfigAdvanced })));
+const MLflowConfigAdvanced = lazy(() => import('./ml/MLflowConfigAdvanced').then(m => ({ default: m.MLflowConfigAdvanced })));
+const CRMConfigAdvanced = lazy(() => import('./business/CRMConfigAdvanced').then(m => ({ default: m.CRMConfigAdvanced })));
+const ERPConfigAdvanced = lazy(() => import('./business/ERPConfigAdvanced').then(m => ({ default: m.ERPConfigAdvanced })));
+const RPABotConfigAdvanced = lazy(() => import('./business/RPABotConfigAdvanced').then(m => ({ default: m.RPABotConfigAdvanced })));
+const BPMNEngineConfigAdvanced = lazy(() => import('./business/BPMNEngineConfigAdvanced').then(m => ({ default: m.BPMNEngineConfigAdvanced })));
+const PaymentGatewayConfigAdvanced = lazy(() => import('./business/PaymentGatewayConfigAdvanced').then(m => ({ default: m.PaymentGatewayConfigAdvanced })));
+
+// Fallback компонент для загрузки
+const LoadingFallback = () => (
+  <div className="flex items-center justify-center h-full">
+    <div className="text-muted-foreground">Loading configuration...</div>
+  </div>
+);
 
 interface ComponentConfigRendererProps {
   componentId: string;
@@ -89,6 +79,7 @@ interface ComponentConfigRendererProps {
 }
 
 export function ComponentConfigRenderer({ componentId, componentType }: ComponentConfigRendererProps) {
+  const renderConfig = () => {
   switch (componentType) {
     case 'kafka':
       return <KafkaConfigAdvanced componentId={componentId} />;
@@ -224,4 +215,11 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
         </div>
       );
   }
+  };
+
+  return (
+    <Suspense fallback={<LoadingFallback />}>
+      {renderConfig()}
+    </Suspense>
+  );
 }

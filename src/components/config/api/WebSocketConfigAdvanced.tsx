@@ -55,6 +55,11 @@ interface WebSocketConfig {
   totalConnections?: number;
   activeConnections?: number;
   totalMessages?: number;
+  enableCompression?: boolean;
+  enablePingPong?: boolean;
+  pingInterval?: number;
+  maxConnections?: number;
+  maxMessageSize?: number;
 }
 
 export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
@@ -394,23 +399,44 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
                 <Separator />
                 <div className="flex items-center justify-between">
                   <Label>Enable Compression</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableCompression ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableCompression: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Ping/Pong</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enablePingPong ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enablePingPong: checked })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Ping Interval (seconds)</Label>
-                  <Input type="number" defaultValue={30} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.pingInterval ?? 30}
+                    onChange={(e) => updateConfig({ pingInterval: parseInt(e.target.value) || 30 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Connections</Label>
-                  <Input type="number" defaultValue={1000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxConnections ?? 1000}
+                    onChange={(e) => updateConfig({ maxConnections: parseInt(e.target.value) || 1000 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Message Size (KB)</Label>
-                  <Input type="number" defaultValue={1024} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxMessageSize ?? 1024}
+                    onChange={(e) => updateConfig({ maxMessageSize: parseInt(e.target.value) || 1024 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

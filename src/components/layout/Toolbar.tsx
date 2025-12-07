@@ -21,6 +21,7 @@ import {
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useHistoryStore } from '@/store/useHistoryStore';
 import { useUIStore } from '@/store/useUIStore';
+import { logError } from '@/utils/logger';
 import {
   exportDiagramAsJSON,
   importDiagramFromJSON,
@@ -152,7 +153,7 @@ export function Toolbar() {
       toast.success(`Diagram "${diagram.name}" imported successfully`);
     } catch (error) {
       toast.error('Failed to import diagram');
-      console.error(error);
+      logError('Failed to import diagram', error instanceof Error ? error : new Error(String(error)));
     }
 
     // Reset file input

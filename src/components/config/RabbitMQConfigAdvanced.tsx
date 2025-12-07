@@ -26,6 +26,10 @@ import {
   Key
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
+import { showSuccess, showError } from '@/utils/toast';
 
 interface RabbitMQConfigProps {
   componentId: string;
@@ -107,6 +111,9 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   const bindings = config.bindings || [];
   const policies = config.policies || [];
   
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
+  
   const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
   const [showCreateExchange, setShowCreateExchange] = useState(false);
   const [showCreateBinding, setShowCreateBinding] = useState(false);
@@ -119,6 +126,31 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
+  };
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
   };
 
   const addQueue = () => {
@@ -777,13 +809,40 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="host">Host</Label>
+                    <Label htmlFor="host">
+                      Host <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="host"
                       value={host}
-                      onChange={(e) => updateConfig({ host: e.target.value })}
+                      onChange={(e) => {
+                        updateConfig({ host: e.target.value });
+                        if (fieldErrors.host) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="localhost"
+                      className={hostError || fieldErrors.host ? 'border-destructive' : ''}
                     />
+                    {hostError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{hostError}</span>
+                      </div>
+                    )}
+                    {!hostError && fieldErrors.host && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.host}</span>
+                      </div>
+                    )}
+              {!hostError && fieldErrors.host && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.host}</span>
+                </div>
+              )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="port">Port</Label>
@@ -793,7 +852,29 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                       value={port}
                       onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 5672 })}
                       placeholder="5672"
+                      className={portError || portConflict.hasConflict ? 'border-destructive' : ''}
                     />
+                    {portError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{portError}</span>
+                      </div>
+                    )}
+              {!portError && !fieldErrors.port && portConflict.hasConflict && portConflict.conflictingNode && (
+                <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>
+                    Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                    уже использует {host}:{port}
+                  </span>
+                </div>
+              )}
+              {!portError && fieldErrors.port && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.port}</span>
+                </div>
+              )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -824,10 +905,35 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                     value={vhost}
                     onChange={(e) => updateConfig({ vhost: e.target.value })}
                     placeholder="/"
-                  />
-                </div>
-              </CardContent>
-            </Card>
+              />
+            </div>
+            <div className="flex gap-2 pt-4 border-t">
+              <Button
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения сохранены');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Сохранить настройки
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения валидны');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Проверить подключение
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
           </TabsContent>
 
           {/* Monitoring Tab */}

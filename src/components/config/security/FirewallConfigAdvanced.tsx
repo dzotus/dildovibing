@@ -60,6 +60,11 @@ interface FirewallConfig {
   activeRules?: number;
   blockedConnections?: number;
   allowedConnections?: number;
+  enableFirewall?: boolean;
+  enableLogging?: boolean;
+  enableIntrusionDetection?: boolean;
+  defaultPolicy?: 'allow' | 'deny' | 'reject';
+  logRetention?: number;
 }
 
 export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
@@ -438,20 +443,32 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Firewall</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableFirewall ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableFirewall: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Logging</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableLogging ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableLogging: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Intrusion Detection</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableIntrusionDetection ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableIntrusionDetection: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default Policy</Label>
-                  <Select defaultValue="deny">
+                  <Select 
+                    value={config.defaultPolicy ?? 'deny'}
+                    onValueChange={(value: 'allow' | 'deny' | 'reject') => updateConfig({ defaultPolicy: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -463,7 +480,12 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
                 </div>
                 <div className="space-y-2">
                   <Label>Log Retention (days)</Label>
-                  <Input type="number" defaultValue={30} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.logRetention ?? 30}
+                    onChange={(e) => updateConfig({ logRetention: parseInt(e.target.value) || 30 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -473,4 +495,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
     </div>
   );
 }
+
+
+
 

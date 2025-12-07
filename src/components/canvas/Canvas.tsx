@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useEmulationStore } from '@/store/useEmulationStore';
 import { useUIStore } from '@/store/useUIStore';
@@ -482,12 +482,12 @@ export function Canvas() {
     }
   };
 
-  const handleNodeConnectionStart = (nodeId: string) => {
+  const handleNodeConnectionStart = useCallback((nodeId: string) => {
     setIsConnecting(true);
     setConnectionStart(nodeId);
-  };
+  }, []);
 
-  const handleNodeConnectionEnd = (nodeId: string, targetPort?: number) => {
+  const handleNodeConnectionEnd = useCallback((nodeId: string, targetPort?: number) => {
     if (isConnecting && connectionStart && connectionStart !== nodeId) {
       const sourceNode = nodes.find(n => n.id === connectionStart);
       const targetNode = nodes.find(n => n.id === nodeId);
@@ -528,22 +528,99 @@ export function Canvas() {
     setIsConnecting(false);
     setConnectionStart(null);
     setTempLineEnd(null);
-  };
+  }, [isConnecting, connectionStart, nodes, connections, addConnection]);
 
-  const handleConnectionClick = (connectionId: string) => {
+  const handleConnectionClick = useCallback((connectionId: string) => {
     selectConnection(connectionId);
-  };
+  }, [selectConnection]);
 
-  const handleConnectionContextMenu = (connectionId: string, x: number, y: number) => {
+  const handleConnectionContextMenu = useCallback((connectionId: string, x: number, y: number) => {
     setContextMenuConnection({ connectionId, x, y });
-  };
+  }, []);
 
-  const handleDeleteConnection = () => {
+  const handleCanvasContextMenu = useCallback((e: React.MouseEvent) => {
+    // Check if click was on a node, connection, or group
+    const target = e.target as HTMLElement | SVGElement;
+    const clickedNode = target.closest?.('[data-node-id]');
+    const clickedConnection = target.closest?.('[data-connection-id]');
+    
+    // Check if clicked on SVG (which could be a group)
+    const isSVGElement = target instanceof SVGElement;
+    const isInSVG = target.closest?.('svg') !== null;
+    
+    // If clicked on a node or connection, let their handlers deal with it
+    if (clickedNode || clickedConnection) {
+      return;
+    }
+    
+    // If clicked on SVG element (likely a group), let group handlers deal with it
+    // Groups have their own onContextMenu handlers that stop propagation
+    if (isSVGElement || isInSVG) {
+      return;
+    }
+    
+    // Check if there are selected nodes
+    const selectedNodes = nodes.filter(n => n.selected);
+    if (selectedNodes.length > 0) {
+      e.preventDefault();
+      e.stopPropagation();
+      // Open context menu for the first selected node (it will apply to all selected)
+      setContextMenuNode({ nodeId: selectedNodes[0].id, x: e.clientX, y: e.clientY });
+    }
+  }, [nodes]);
+
+  const handleDeleteConnection = useCallback(() => {
     if (contextMenuConnection) {
       deleteConnection(contextMenuConnection.connectionId);
       setContextMenuConnection(null);
     }
-  };
+  }, [contextMenuConnection, deleteConnection]);
+
+  // Memoize node callbacks to prevent recreating functions on every render
+  // Use node IDs as dependency string for stable comparison
+  const nodeIdsString = useMemo(() => nodes.map(n => n.id).join(','), [nodes.length, nodes.map(n => n.id).join(',')]);
+  
+  const nodeCallbacks = useMemo(() => {
+    const callbacksMap = new Map<string, {
+      onConnectionStart: () => void;
+      onConnectionEnd: (portIndex?: number) => void;
+      onContextMenu: (x: number, y: number) => void;
+    }>();
+    
+    nodes.forEach(node => {
+      // Create stable callbacks using closures - these will only be recreated when nodes array changes
+      const nodeId = node.id; // Capture in closure
+      callbacksMap.set(nodeId, {
+        onConnectionStart: () => handleNodeConnectionStart(nodeId),
+        onConnectionEnd: (portIndex?: number) => handleNodeConnectionEnd(nodeId, portIndex),
+        onContextMenu: (x: number, y: number) => setContextMenuNode({ nodeId, x, y }),
+      });
+    });
+    
+    return callbacksMap;
+  }, [nodeIdsString, handleNodeConnectionStart, handleNodeConnectionEnd]);
+
+  // Memoize connection callbacks to prevent recreating functions on every render
+  // Use connection IDs as dependency string for stable comparison
+  const connectionIdsString = useMemo(() => connections.map(c => c.id).join(','), [connections.length, connections.map(c => c.id).join(',')]);
+  
+  const connectionCallbacks = useMemo(() => {
+    const callbacksMap = new Map<string, {
+      onClick: () => void;
+      onContextMenu: (e: React.MouseEvent) => void;
+    }>();
+    
+    connections.forEach(conn => {
+      // Create stable callbacks using closures
+      const connId = conn.id; // Capture in closure
+      callbacksMap.set(connId, {
+        onClick: () => handleConnectionClick(connId),
+        onContextMenu: (e: React.MouseEvent) => handleConnectionContextMenu(connId, e.clientX, e.clientY),
+      });
+    });
+    
+    return callbacksMap;
+  }, [connectionIdsString, handleConnectionClick, handleConnectionContextMenu]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey && canvasRef.current) {
@@ -582,6 +659,60 @@ export function Canvas() {
   // Show canvas boundaries when zoomed out (zoom < 0.5)
   const showCanvasBoundaries = zoom < 0.5;
 
+  // Get viewport size from store (already tracked by existing useEffect)
+  const viewportWidth = useCanvasStore(state => state.viewportWidth);
+  const viewportHeight = useCanvasStore(state => state.viewportHeight);
+
+  // Viewport culling: calculate visible area to render only visible nodes
+  // This significantly improves performance with many nodes
+  const visibleNodes = useMemo(() => {
+    // Fallback: render all if viewport not ready (initial render)
+    if (viewportWidth === 0 || viewportHeight === 0) return nodes;
+    
+    // Calculate visible world coordinates (accounting for zoom and pan)
+    // World coordinates = (screen - pan) / zoom
+    const visibleMinX = -pan.x / zoom;
+    const visibleMinY = -pan.y / zoom;
+    const visibleMaxX = (viewportWidth - pan.x) / zoom;
+    const visibleMaxY = (viewportHeight - pan.y) / zoom;
+    
+    // Add padding to render nodes slightly outside viewport (for smooth scrolling)
+    const padding = 200; // pixels in world coordinates
+    const paddedMinX = visibleMinX - padding;
+    const paddedMinY = visibleMinY - padding;
+    const paddedMaxX = visibleMaxX + padding;
+    const paddedMaxY = visibleMaxY + padding;
+    
+    // Filter nodes that are visible (or partially visible) in viewport
+    return nodes.filter(node => {
+      const nodeX = node.position.x;
+      const nodeY = node.position.y;
+      const nodeWidth = 140; // Approximate node width
+      const nodeHeight = 100; // Approximate node height
+      
+      // Check if node intersects with visible area
+      return (
+        nodeX + nodeWidth >= paddedMinX &&
+        nodeX <= paddedMaxX &&
+        nodeY + nodeHeight >= paddedMinY &&
+        nodeY <= paddedMaxY
+      );
+    });
+  }, [nodes, zoom, pan, viewportWidth, viewportHeight]);
+
+  // Filter connections to only those connected to visible nodes
+  const visibleNodeIds = useMemo(
+    () => new Set(visibleNodes.map(n => n.id)),
+    [visibleNodes]
+  );
+  
+  const visibleConnections = useMemo(
+    () => connections.filter(conn => 
+      visibleNodeIds.has(conn.source) && visibleNodeIds.has(conn.target)
+    ),
+    [connections, visibleNodeIds]
+  );
+
   return (
     <div className="flex-1 overflow-hidden relative">
       {/* Ruler - positioned outside canvas with border */}
@@ -606,6 +737,7 @@ export function Canvas() {
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
+        onContextMenu={handleCanvasContextMenu}
       >
       <div
         style={{
@@ -751,11 +883,14 @@ export function Canvas() {
           )}
 
           <g style={{ pointerEvents: 'auto' }}>
-            {/* Render connections */}
-            {connections.map((conn) => {
+            {/* Render connections - only visible ones for performance */}
+            {visibleConnections.map((conn) => {
               const sourceNode = nodes.find((n) => n.id === conn.source);
               const targetNode = nodes.find((n) => n.id === conn.target);
               if (!sourceNode || !targetNode) return null;
+
+              const callbacks = connectionCallbacks.get(conn.id);
+              if (!callbacks) return null;
 
               return (
                 <ConnectionLine
@@ -766,8 +901,8 @@ export function Canvas() {
                   zoom={zoom}
                   pan={pan}
                   isSelected={selectedConnectionId === conn.id}
-                  onClick={() => handleConnectionClick(conn.id)}
-                  onContextMenu={(e) => handleConnectionContextMenu(conn.id, e.clientX, e.clientY)}
+                  onClick={callbacks.onClick}
+                  onContextMenu={callbacks.onContextMenu}
                 />
               );
             })}
@@ -794,20 +929,25 @@ export function Canvas() {
           </g>
         </svg>
 
-        {/* Nodes layer */}
-        {nodes.map((node) => (
+        {/* Nodes layer - only render visible nodes for performance */}
+        {visibleNodes.map((node) => {
+          const callbacks = nodeCallbacks.get(node.id);
+          if (!callbacks) return null;
+          
+          return (
           <CanvasNode
             key={node.id}
             node={node}
-            onConnectionStart={() => handleNodeConnectionStart(node.id)}
-            onConnectionEnd={(portIndex) => handleNodeConnectionEnd(node.id, portIndex)}
+              onConnectionStart={callbacks.onConnectionStart}
+              onConnectionEnd={callbacks.onConnectionEnd}
             isConnecting={isConnecting}
-            onContextMenu={(x, y) => setContextMenuNode({ nodeId: node.id, x, y })}
+              onContextMenu={callbacks.onContextMenu}
           />
-        ))}
+          );
+        })}
         
-        {/* Show metrics overlays when emulation is running */}
-        {isRunning && nodes.map((node) => (
+        {/* Show metrics overlays when emulation is running - only for visible nodes */}
+        {isRunning && visibleNodes.map((node) => (
           <MetricsOverlay
             key={`metrics-${node.id}`}
             nodeId={node.id}
@@ -841,80 +981,173 @@ export function Canvas() {
         const node = nodes.find(n => n.id === contextMenuNode.nodeId);
         if (!node) return null;
 
+        // Get all selected nodes (including the one that was right-clicked)
+        const selectedNodes = nodes.filter(n => n.selected);
+        const isMultiSelect = selectedNodes.length > 1;
+
         const handleDelete = () => {
-          deleteNode(node.id);
-          toast.success('Element deleted');
+          if (isMultiSelect) {
+            selectedNodes.forEach(selectedNode => {
+              deleteNode(selectedNode.id);
+            });
+            toast.success(`${selectedNodes.length} elements deleted`);
+          } else {
+            deleteNode(node.id);
+            toast.success('Element deleted');
+          }
           setContextMenuNode(null);
         };
 
         const handleDuplicate = () => {
-          const duplicatedNode: CanvasNodeType = {
-            ...deepClone(node),
-            id: `${node.type}_${Date.now()}`,
-            position: {
-              x: node.position.x + 20,
-              y: node.position.y + 20,
-            },
-            selected: false,
-          };
-          if (duplicatedNode.data?.config) {
-            duplicatedNode.data.config = deepClone(duplicatedNode.data.config);
+          if (isMultiSelect) {
+            // For multiple selection, duplicate all selected nodes
+            selectedNodes.forEach((selectedNode, index) => {
+              const duplicatedNode: CanvasNodeType = {
+                ...deepClone(selectedNode),
+                id: `${selectedNode.type}_${Date.now()}_${index}`,
+                position: {
+                  x: selectedNode.position.x + 20 + (index * 10),
+                  y: selectedNode.position.y + 20 + (index * 10),
+                },
+                selected: false,
+              };
+              if (duplicatedNode.data?.config) {
+                duplicatedNode.data.config = deepClone(duplicatedNode.data.config);
+              }
+              addNode(duplicatedNode);
+            });
+            toast.success(`${selectedNodes.length} elements duplicated`);
+          } else {
+            const duplicatedNode: CanvasNodeType = {
+              ...deepClone(node),
+              id: `${node.type}_${Date.now()}`,
+              position: {
+                x: node.position.x + 20,
+                y: node.position.y + 20,
+              },
+              selected: false,
+            };
+            if (duplicatedNode.data?.config) {
+              duplicatedNode.data.config = deepClone(duplicatedNode.data.config);
+            }
+            addNode(duplicatedNode);
+            toast.success('Element duplicated');
           }
-          addNode(duplicatedNode);
-          toast.success('Element duplicated');
           setContextMenuNode(null);
         };
 
         const handleCopyId = () => {
-          navigator.clipboard.writeText(node.id);
-          toast.success('ID copied to clipboard');
+          if (isMultiSelect) {
+            const ids = selectedNodes.map(n => n.id).join(', ');
+            navigator.clipboard.writeText(ids);
+            toast.success(`${selectedNodes.length} IDs copied to clipboard`);
+          } else {
+            navigator.clipboard.writeText(node.id);
+            toast.success('ID copied to clipboard');
+          }
           setContextMenuNode(null);
         };
 
         const handleBringToFront = () => {
-          bringToFront(node.id);
-          toast.success('Brought to front');
+          if (isMultiSelect) {
+            selectedNodes.forEach(selectedNode => {
+              bringToFront(selectedNode.id);
+            });
+            toast.success(`${selectedNodes.length} elements brought to front`);
+          } else {
+            bringToFront(node.id);
+            toast.success('Brought to front');
+          }
           setContextMenuNode(null);
         };
 
         const handleSendToBack = () => {
-          sendToBack(node.id);
-          toast.success('Sent to back');
+          if (isMultiSelect) {
+            selectedNodes.forEach(selectedNode => {
+              sendToBack(selectedNode.id);
+            });
+            toast.success(`${selectedNodes.length} elements sent to back`);
+          } else {
+            sendToBack(node.id);
+            toast.success('Sent to back');
+          }
           setContextMenuNode(null);
         };
 
         const handleBringForward = () => {
-          bringForward(node.id);
-          toast.success('Brought forward');
+          if (isMultiSelect) {
+            selectedNodes.forEach(selectedNode => {
+              bringForward(selectedNode.id);
+            });
+            toast.success(`${selectedNodes.length} elements brought forward`);
+          } else {
+            bringForward(node.id);
+            toast.success('Brought forward');
+          }
           setContextMenuNode(null);
         };
 
         const handleSendBackward = () => {
-          sendBackward(node.id);
-          toast.success('Sent backward');
+          if (isMultiSelect) {
+            selectedNodes.forEach(selectedNode => {
+              sendBackward(selectedNode.id);
+            });
+            toast.success(`${selectedNodes.length} elements sent backward`);
+          } else {
+            sendBackward(node.id);
+            toast.success('Sent backward');
+          }
           setContextMenuNode(null);
         };
 
         const handleAddToGroup = () => {
-          setShowAddToGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+          // For multi-select, we'll add all selected nodes to the group
+          // But for now, we'll show dialog for the first selected node
+          // In the future, this could be enhanced to show a dialog for all nodes
+          if (isMultiSelect) {
+            // For now, show dialog for the first selected node
+            // The dialog could be enhanced to handle multiple nodes
+            setShowAddToGroupDialog({ nodeId: selectedNodes[0].id, x: contextMenuNode.x, y: contextMenuNode.y });
+          } else {
+            setShowAddToGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+          }
           setContextMenuNode(null);
         };
 
-        // Find all groups this node belongs to
-        const nodeGroups = groups.filter(g => g.nodeIds.includes(node.id));
+        // Find all groups that any selected node belongs to
+        const nodeGroups = isMultiSelect 
+          ? groups.filter(g => selectedNodes.some(n => g.nodeIds.includes(n.id)))
+          : groups.filter(g => g.nodeIds.includes(node.id));
         const hasGroups = nodeGroups.length >= 1;
         const hasMultipleGroups = nodeGroups.length >= 2;
         
         const handleRemoveFromGroup = () => {
-          if (hasMultipleGroups) {
-            // If in multiple groups, show dialog to choose which one
-            setShowRemoveFromGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+          if (isMultiSelect) {
+            // For multi-select, remove all selected nodes from groups
+            // For simplicity, remove from all groups they belong to
+            let removedCount = 0;
+            selectedNodes.forEach(selectedNode => {
+              const nodeGroupsForNode = groups.filter(g => g.nodeIds.includes(selectedNode.id));
+              nodeGroupsForNode.forEach(group => {
+                removeNodeFromGroup(group.id, selectedNode.id);
+                removedCount++;
+              });
+            });
+            if (removedCount > 0) {
+              toast.success(`Removed ${selectedNodes.length} elements from groups`);
+            }
             setContextMenuNode(null);
-          } else if (nodeGroups.length === 1) {
-            // If in only one group, remove immediately
-            removeNodeFromGroup(nodeGroups[0].id, node.id);
-            toast.success(`Removed from "${nodeGroups[0].name}"`);
-            setContextMenuNode(null);
+          } else {
+            if (hasMultipleGroups) {
+              // If in multiple groups, show dialog to choose which one
+              setShowRemoveFromGroupDialog({ nodeId: node.id, x: contextMenuNode.x, y: contextMenuNode.y });
+              setContextMenuNode(null);
+            } else if (nodeGroups.length === 1) {
+              // If in only one group, remove immediately
+              removeNodeFromGroup(nodeGroups[0].id, node.id);
+              toast.success(`Removed from "${nodeGroups[0].name}"`);
+              setContextMenuNode(null);
+            }
           }
         };
 

@@ -51,6 +51,11 @@ interface GraphQLGatewayConfig {
   totalRequests?: number;
   totalErrors?: number;
   endpoint?: string;
+  enableIntrospection?: boolean;
+  enableQueryComplexityAnalysis?: boolean;
+  enableRateLimiting?: boolean;
+  maxQueryDepth?: number;
+  maxQueryComplexity?: number;
 }
 
 export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConfigProps) {
@@ -327,24 +332,44 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
                 <Separator />
                 <div className="flex items-center justify-between">
                   <Label>Enable Introspection</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableIntrospection ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableIntrospection: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Query Complexity Analysis</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableQueryComplexityAnalysis ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableQueryComplexityAnalysis: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Rate Limiting</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableRateLimiting ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableRateLimiting: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Max Query Depth</Label>
-                  <Input type="number" defaultValue={15} min={1} max={50} />
+                  <Input 
+                    type="number" 
+                    value={config.maxQueryDepth ?? 15}
+                    onChange={(e) => updateConfig({ maxQueryDepth: parseInt(e.target.value) || 15 })}
+                    min={1} 
+                    max={50} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Query Complexity</Label>
-                  <Input type="number" defaultValue={1000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxQueryComplexity ?? 1000}
+                    onChange={(e) => updateConfig({ maxQueryComplexity: parseInt(e.target.value) || 1000 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

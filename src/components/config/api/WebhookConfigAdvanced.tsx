@@ -59,6 +59,11 @@ interface WebhookConfig {
   totalEndpoints?: number;
   totalDeliveries?: number;
   successRate?: number;
+  enableRetryOnFailure?: boolean;
+  enableSignatureVerification?: boolean;
+  maxRetryAttempts?: number;
+  retryDelay?: number;
+  timeout?: number;
 }
 
 export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
@@ -336,24 +341,46 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Retry on Failure</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableRetryOnFailure ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableRetryOnFailure: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Signature Verification</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableSignatureVerification ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableSignatureVerification: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Max Retry Attempts</Label>
-                  <Input type="number" defaultValue={3} min={1} max={10} />
+                  <Input 
+                    type="number" 
+                    value={config.maxRetryAttempts ?? 3}
+                    onChange={(e) => updateConfig({ maxRetryAttempts: parseInt(e.target.value) || 3 })}
+                    min={1} 
+                    max={10} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Retry Delay (seconds)</Label>
-                  <Input type="number" defaultValue={5} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.retryDelay ?? 5}
+                    onChange={(e) => updateConfig({ retryDelay: parseInt(e.target.value) || 5 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Timeout (seconds)</Label>
-                  <Input type="number" defaultValue={30} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.timeout ?? 30}
+                    onChange={(e) => updateConfig({ timeout: parseInt(e.target.value) || 30 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

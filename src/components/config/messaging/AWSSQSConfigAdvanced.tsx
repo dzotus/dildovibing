@@ -60,6 +60,11 @@ interface AWSSQSConfig {
     resource: string;
     effect: 'Allow' | 'Deny';
   }>;
+  metrics?: {
+    enabled?: boolean;
+    port?: number;
+    path?: string;
+  };
 }
 
 export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
@@ -620,6 +625,67 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                     </Card>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Metrics Export</CardTitle>
+                <CardDescription>Configure Prometheus metrics export via CloudWatch exporter</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Enable Metrics Export</Label>
+                    <p className="text-xs text-muted-foreground mt-1">Export SQS metrics via CloudWatch exporter for Prometheus scraping</p>
+                  </div>
+                  <Switch 
+                    checked={config.metrics?.enabled ?? true}
+                    onCheckedChange={(checked) => updateConfig({ 
+                      metrics: { 
+                        ...config.metrics, 
+                        enabled: checked,
+                        port: config.metrics?.port || 9102,
+                        path: config.metrics?.path || '/metrics'
+                      } 
+                    })}
+                  />
+                </div>
+                {config.metrics?.enabled !== false && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Metrics Port (CloudWatch Exporter)</Label>
+                      <Input 
+                        type="number" 
+                        value={config.metrics?.port ?? 9102}
+                        onChange={(e) => updateConfig({ 
+                          metrics: { 
+                            ...config.metrics, 
+                            port: parseInt(e.target.value) || 9102,
+                            path: config.metrics?.path || '/metrics'
+                          } 
+                        })}
+                        min={1024} 
+                        max={65535} 
+                      />
+                      <p className="text-xs text-muted-foreground">Port for CloudWatch exporter metrics endpoint</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Metrics Path</Label>
+                      <Input 
+                        type="text" 
+                        value={config.metrics?.path ?? '/metrics'}
+                        onChange={(e) => updateConfig({ 
+                          metrics: { 
+                            ...config.metrics, 
+                            path: e.target.value || '/metrics',
+                            port: config.metrics?.port || 9102
+                          } 
+                        })}
+                        placeholder="/metrics"
+                      />
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

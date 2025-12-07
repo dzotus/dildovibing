@@ -57,6 +57,10 @@ interface GRPCConfig {
   calls?: Call[];
   endpoint?: string;
   reflectionEnabled?: boolean;
+  enableTLS?: boolean;
+  enableCompression?: boolean;
+  maxMessageSize?: number;
+  keepAliveTime?: number;
   totalCalls?: number;
   successRate?: number;
   averageLatency?: number;
@@ -412,20 +416,37 @@ export function GRPCConfigAdvanced({ componentId }: GRPCConfigProps) {
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable TLS</Label>
-                  <Switch />
+                  <Switch 
+                    checked={config.enableTLS ?? false}
+                    onCheckedChange={(checked) => updateConfig({ enableTLS: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Compression</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableCompression ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableCompression: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Max Message Size (MB)</Label>
-                  <Input type="number" defaultValue={4} min={1} max={100} />
+                  <Input 
+                    type="number" 
+                    value={config.maxMessageSize ?? 4}
+                    onChange={(e) => updateConfig({ maxMessageSize: parseInt(e.target.value) || 4 })}
+                    min={1} 
+                    max={100} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Keep Alive Time (seconds)</Label>
-                  <Input type="number" defaultValue={30} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.keepAliveTime ?? 30}
+                    onChange={(e) => updateConfig({ keepAliveTime: parseInt(e.target.value) || 30 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

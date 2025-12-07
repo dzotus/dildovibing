@@ -59,8 +59,8 @@ export interface ComponentConfig {
   avgPayloadSize?: number;
   responseLatency?: number;
   
-  // Custom
-  [key: string]: any;
+  // Custom - используем unknown для безопасности типов
+  [key: string]: unknown;
 }
 
 // Percentile metrics for performance analysis
@@ -98,8 +98,8 @@ export interface ConnectionConfig {
   // Monitoring
   enableMonitoring?: boolean;
   
-  // Custom
-  [key: string]: any;
+  // Custom - используем unknown для безопасности типов
+  [key: string]: unknown;
 }
 
 export interface Tab {

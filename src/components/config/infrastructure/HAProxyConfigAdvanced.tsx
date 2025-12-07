@@ -76,6 +76,11 @@ interface HAProxyConfig {
   activeConnections?: number;
   totalBytesIn?: number;
   totalBytesOut?: number;
+  enableStatsUI?: boolean;
+  enableLogging?: boolean;
+  maxConnections?: number;
+  timeoutConnect?: number;
+  timeoutServer?: number;
 }
 
 export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
@@ -614,23 +619,44 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Stats UI</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableStatsUI ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableStatsUI: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Logging</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableLogging ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableLogging: checked })}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max Connections</Label>
-                  <Input type="number" defaultValue={4096} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxConnections ?? 4096}
+                    onChange={(e) => updateConfig({ maxConnections: parseInt(e.target.value) || 4096 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Timeout Connect (ms)</Label>
-                  <Input type="number" defaultValue={5000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.timeoutConnect ?? 5000}
+                    onChange={(e) => updateConfig({ timeoutConnect: parseInt(e.target.value) || 5000 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Timeout Server (ms)</Label>
-                  <Input type="number" defaultValue={50000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.timeoutServer ?? 50000}
+                    onChange={(e) => updateConfig({ timeoutServer: parseInt(e.target.value) || 50000 })}
+                    min={1} 
+                  />
                 </div>
               </CardContent>
             </Card>

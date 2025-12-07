@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { useState } from 'react';
+import { showSuccess, showError } from '@/utils/toast';
 import { 
   Settings, 
   Activity,
@@ -57,6 +58,16 @@ interface APIGatewayConfig {
   totalKeys?: number;
   totalRequests?: number;
   successRate?: number;
+  enableApiKeyAuth?: boolean;
+  enableRateLimiting?: boolean;
+  enableRequestLogging?: boolean;
+  defaultRateLimit?: number;
+  requestTimeout?: number;
+  metrics?: {
+    enabled?: boolean;
+    port?: number;
+    path?: string;
+  };
 }
 
 export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps) {
@@ -115,6 +126,10 @@ export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps)
 
   const [showCreateAPI, setShowCreateAPI] = useState(false);
   const [showCreateKey, setShowCreateKey] = useState(false);
+  const [newAPIName, setNewAPIName] = useState('');
+  const [newAPIPath, setNewAPIPath] = useState('');
+  const [newAPIBackend, setNewAPIBackend] = useState('');
+  const [newAPIMethod, setNewAPIMethod] = useState<'GET' | 'POST' | 'PUT' | 'DELETE' | 'ALL'>('GET');
 
   const updateConfig = (updates: Partial<APIGatewayConfig>) => {
     updateNode(componentId, {
@@ -126,16 +141,46 @@ export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps)
   };
 
   const addAPI = () => {
+    // Валидация обязательных полей
+    if (!newAPIName.trim()) {
+      showError('Имя API обязательно');
+      return;
+    }
+    if (!newAPIPath.trim()) {
+      showError('Путь API обязателен');
+      return;
+    }
+    if (!newAPIPath.startsWith('/')) {
+      showError('Путь должен начинаться с /');
+      return;
+    }
+    if (!newAPIBackend.trim()) {
+      showError('Backend URL обязателен');
+      return;
+    }
+
+    // Проверка на дубликаты
+    const pathExists = apis.some(api => api.path === newAPIPath.trim() && api.method === newAPIMethod);
+    if (pathExists) {
+      showError(`API с путем ${newAPIPath.trim()} и методом ${newAPIMethod} уже существует`);
+      return;
+    }
+
     const newAPI: API = {
       id: `api-${Date.now()}`,
-      name: 'New API',
-      path: '/api/new',
-      backend: 'http://backend:8080',
-      method: 'GET',
+      name: newAPIName.trim(),
+      path: newAPIPath.trim(),
+      backend: newAPIBackend.trim(),
+      method: newAPIMethod,
       enabled: true,
     };
     updateConfig({ apis: [...apis, newAPI] });
     setShowCreateAPI(false);
+    setNewAPIName('');
+    setNewAPIPath('');
+    setNewAPIBackend('');
+    setNewAPIMethod('GET');
+    showSuccess(`API "${newAPIName.trim()}" успешно создан`);
   };
 
   const removeAPI = (id: string) => {
@@ -251,12 +296,76 @@ export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps)
                     <CardTitle>API Routes</CardTitle>
                     <CardDescription>Registered API endpoints</CardDescription>
                   </div>
-                  <Button onClick={addAPI} size="sm">
+                  <Button onClick={() => setShowCreateAPI(true)} size="sm" variant="outline">
                     <Plus className="h-4 w-4 mr-2" />
                     Create API
                   </Button>
                 </div>
               </CardHeader>
+              {showCreateAPI && (
+                <CardContent className="border-b pb-4 mb-4 bg-muted/30">
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>API Name *</Label>
+                        <Input
+                          value={newAPIName}
+                          onChange={(e) => setNewAPIName(e.target.value)}
+                          placeholder="User Service API"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Method *</Label>
+                        <Select value={newAPIMethod} onValueChange={(value) => setNewAPIMethod(value as typeof newAPIMethod)}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="GET">GET</SelectItem>
+                            <SelectItem value="POST">POST</SelectItem>
+                            <SelectItem value="PUT">PUT</SelectItem>
+                            <SelectItem value="DELETE">DELETE</SelectItem>
+                            <SelectItem value="ALL">ALL</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Path *</Label>
+                      <Input
+                        value={newAPIPath}
+                        onChange={(e) => setNewAPIPath(e.target.value)}
+                        placeholder="/api/users"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Backend URL *</Label>
+                      <Input
+                        value={newAPIBackend}
+                        onChange={(e) => setNewAPIBackend(e.target.value)}
+                        placeholder="http://backend:8080"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={addAPI}
+                        disabled={!newAPIName.trim() || !newAPIPath.trim() || !newAPIBackend.trim()}
+                      >
+                        Create API
+                      </Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateAPI(false);
+                        setNewAPIName('');
+                        setNewAPIPath('');
+                        setNewAPIBackend('');
+                        setNewAPIMethod('GET');
+                      }}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              )}
               <CardContent>
                 <div className="space-y-4">
                   {apis.map((api) => (
@@ -388,24 +497,100 @@ export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps)
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable API Key Authentication</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableApiKeyAuth ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableApiKeyAuth: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Rate Limiting</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableRateLimiting ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableRateLimiting: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable Request Logging</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableRequestLogging ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableRequestLogging: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default Rate Limit (requests/min)</Label>
-                  <Input type="number" defaultValue={1000} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.defaultRateLimit ?? 1000}
+                    onChange={(e) => updateConfig({ defaultRateLimit: parseInt(e.target.value) || 1000 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Request Timeout (seconds)</Label>
-                  <Input type="number" defaultValue={30} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.requestTimeout ?? 30}
+                    onChange={(e) => updateConfig({ requestTimeout: parseInt(e.target.value) || 30 })}
+                    min={1} 
+                  />
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Metrics Export</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export metrics for Prometheus scraping</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          port: config.metrics?.port || 9100,
+                          path: config.metrics?.path || '/metrics'
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Metrics Port</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.port ?? 9100}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              port: parseInt(e.target.value) || 9100,
+                              path: config.metrics?.path || '/metrics'
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Port for Prometheus metrics endpoint</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Metrics Path</Label>
+                        <Input 
+                          type="text" 
+                          value={config.metrics?.path ?? '/metrics'}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              path: e.target.value || '/metrics',
+                              port: config.metrics?.port || 9100
+                            } 
+                          })}
+                          placeholder="/metrics"
+                        />
+                        <p className="text-xs text-muted-foreground">Path for metrics endpoint (e.g., /metrics)</p>
+                      </div>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -415,4 +600,7 @@ export function APIGatewayConfigAdvanced({ componentId }: APIGatewayConfigProps)
     </div>
   );
 }
+
+
+
 

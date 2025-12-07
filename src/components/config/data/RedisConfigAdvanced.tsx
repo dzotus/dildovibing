@@ -11,6 +11,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { showWarning, showSuccess, showError } from '@/utils/toast';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
+import { AlertCircle } from 'lucide-react';
 import {
   Database,
   Key,
@@ -62,6 +65,11 @@ interface RedisConfig {
   keys?: RedisKey[];
   commands?: RedisCommand[];
   selectedKey?: string;
+  metrics?: {
+    enabled?: boolean;
+    port?: number;
+    path?: string;
+  };
 }
 
 export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
@@ -103,13 +111,54 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
+  };
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
   };
 
   const addKey = () => {
-    if (!newKeyName.trim()) return;
+    if (!newKeyName.trim()) {
+      showError('Имя ключа обязательно');
+      return;
+    }
+
+    // Проверка на дубликаты
+    const keyExists = keys.some(k => k.key === newKeyName.trim());
+    if (keyExists) {
+      showError(`Ключ "${newKeyName.trim()}" уже существует`);
+      return;
+    }
+
+    // Валидация TTL
+    if (newKeyTtl && (isNaN(parseInt(newKeyTtl)) || parseInt(newKeyTtl) < -1)) {
+      showError('TTL должен быть числом >= -1');
+      return;
+    }
 
     const newKey: RedisKey = {
-      key: newKeyName,
+      key: newKeyName.trim(),
       type: newKeyType,
       ttl: newKeyTtl ? parseInt(newKeyTtl) : -1,
       value: newKeyValue,
@@ -121,6 +170,7 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
     setNewKeyValue('');
     setNewKeyTtl('');
     setShowCreateKey(false);
+    showSuccess(`Ключ "${newKeyName.trim()}" успешно создан`);
   };
 
   const removeKey = (index: number) => {
@@ -225,19 +275,49 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
           </CardHeader>
           <CardContent className="grid grid-cols-4 gap-4">
             <div className="space-y-2">
-              <Label>Host</Label>
+              <Label>
+                Host <span className="text-destructive">*</span>
+              </Label>
               <Input
                 value={host}
-                onChange={(e) => updateConfig({ host: e.target.value })}
+                onChange={(e) => {
+                  updateConfig({ host: e.target.value });
+                  if (fieldErrors.host) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
+                className={fieldErrors.host ? 'border-destructive' : ''}
               />
+              {fieldErrors.host && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.host}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
-              <Label>Port</Label>
+              <Label>
+                Port <span className="text-destructive">*</span>
+              </Label>
               <Input
                 type="number"
                 value={port}
-                onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 6379 })}
+                onChange={(e) => {
+                  updateConfig({ port: parseInt(e.target.value) || 6379 });
+                  if (fieldErrors.port) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
+                className={fieldErrors.port ? 'border-destructive' : ''}
               />
+              {fieldErrors.port && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.port}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Password</Label>
@@ -254,6 +334,31 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
                 value={database}
                 onChange={(e) => updateConfig({ database: parseInt(e.target.value) || 0 })}
               />
+            </div>
+            <div className="flex gap-2 pt-4 border-t col-span-4">
+              <Button
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения сохранены');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Сохранить настройки
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения валидны');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Проверить подключение
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -349,13 +454,20 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
                       />
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={addKey}>Add Key</Button>
+                      <Button 
+                        onClick={addKey}
+                        disabled={!newKeyName.trim()}
+                      >
+                        Add Key
+                      </Button>
                       <Button variant="outline" onClick={() => {
                         setShowCreateKey(false);
                         setNewKeyName('');
                         setNewKeyValue('');
                         setNewKeyTtl('');
-                      }}>Cancel</Button>
+                      }}>
+                        Cancel
+                      </Button>
                     </div>
                   </div>
                 </CardContent>
@@ -408,8 +520,13 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
                             try {
                               const parsed = JSON.parse(e.target.value);
                               updateKey(index, 'value', parsed);
-                            } catch {
+                            } catch (error) {
+                              // Fallback на строку, если JSON невалиден (нормально для Redis)
                               updateKey(index, 'value', e.target.value);
+                              // Показываем предупреждение только если пользователь явно пытался ввести JSON
+                              if (e.target.value.trim().startsWith('{') || e.target.value.trim().startsWith('[')) {
+                                showWarning('Неверный формат JSON, значение сохранено как строка');
+                              }
                             }
                           }}
                         />
@@ -596,6 +713,62 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
                           </Select>
                         </div>
                       )}
+                    </>
+                  )}
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Metrics Export (redis_exporter)</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export Redis metrics for Prometheus scraping</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          port: config.metrics?.port || 9121,
+                          path: config.metrics?.path || '/metrics'
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Metrics Port (redis_exporter)</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.port ?? 9121}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              port: parseInt(e.target.value) || 9121,
+                              path: config.metrics?.path || '/metrics'
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Default port for redis_exporter: 9121</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Metrics Path</Label>
+                        <Input 
+                          type="text" 
+                          value={config.metrics?.path ?? '/metrics'}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              path: e.target.value || '/metrics',
+                              port: config.metrics?.port || 9121
+                            } 
+                          })}
+                          placeholder="/metrics"
+                        />
+                      </div>
                     </>
                   )}
                 </div>

@@ -24,7 +24,8 @@ import {
   RefreshCcw,
   Cloud,
   Code,
-  Layers
+  Layers,
+  AlertCircle
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -111,6 +112,42 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (updates.nodes !== undefined) {
+      const newErrors = { ...fieldErrors };
+      if (newErrors.nodes) delete newErrors.nodes;
+      setFieldErrors(newErrors);
+    }
+  };
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const validateNodes = () => {
+    if (!nodesList || nodesList.length === 0) {
+      setFieldErrors({ ...fieldErrors, nodes: 'Необходимо указать хотя бы один узел' });
+      return false;
+    }
+    // Проверка формата host:port
+    const invalidNodes = nodesList.filter(n => {
+      if (!n || !n.trim()) return true;
+      const parts = n.trim().split(':');
+      if (parts.length !== 2) return true;
+      const port = parseInt(parts[1]);
+      return isNaN(port) || port <= 0 || port > 65535;
+    });
+    if (invalidNodes.length > 0) {
+      setFieldErrors({ ...fieldErrors, nodes: 'Неверный формат узла. Используйте формат host:port' });
+      return false;
+    }
+    const newErrors = { ...fieldErrors };
+    if (newErrors.nodes) delete newErrors.nodes;
+    setFieldErrors(newErrors);
+    return true;
+  };
+  
+  const validateConnectionFields = () => {
+    return validateNodes();
   };
 
   const addNode = () => {
@@ -520,20 +557,34 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                 <Separator />
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <Label>Node Addresses</Label>
+                    <Label>
+                      Node Addresses <span className="text-destructive">*</span>
+                    </Label>
                     <Button size="sm" onClick={addNode} variant="outline">
                       <Plus className="h-4 w-4 mr-2" />
                       Add Node
                     </Button>
                   </div>
+                  {nodesList.length === 0 && fieldErrors.nodes && (
+                    <div className="flex items-center gap-1 text-sm text-destructive p-2 border border-destructive rounded">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{fieldErrors.nodes}</span>
+                    </div>
+                  )}
                   <div className="space-y-2">
                     {nodesList.map((nodeAddr, index) => (
                       <div key={index} className="flex items-center gap-2">
                         <Input
                           value={nodeAddr}
-                          onChange={(e) => updateNodeAddress(index, e.target.value)}
+                          onChange={(e) => {
+                            updateNodeAddress(index, e.target.value);
+                            if (fieldErrors.nodes) {
+                              validateNodes();
+                            }
+                          }}
+                          onBlur={validateNodes}
                           placeholder="localhost:9200"
-                          className="flex-1"
+                          className={`flex-1 ${fieldErrors.nodes ? 'border-destructive' : ''}`}
                         />
                         {nodesList.length > 1 && (
                           <Button
@@ -547,6 +598,37 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                       </div>
                     ))}
                   </div>
+                  {fieldErrors.nodes && nodesList.length > 0 && (
+                    <div className="flex items-center gap-1 text-sm text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{fieldErrors.nodes}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2 pt-4 border-t">
+                  <Button
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения сохранены');
+                      } else {
+                        showError('Пожалуйста, укажите хотя бы один корректный узел (host:port)');
+                      }
+                    }}
+                  >
+                    Сохранить настройки
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения валидны');
+                      } else {
+                        showError('Пожалуйста, укажите хотя бы один корректный узел (host:port)');
+                      }
+                    }}
+                  >
+                    Проверить подключение
+                  </Button>
                 </div>
               </CardContent>
             </Card>

@@ -26,6 +26,10 @@ import {
 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useState } from 'react';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
+import { showSuccess, showError } from '@/utils/toast';
 
 interface ClickHouseConfigProps {
   componentId: string;
@@ -87,6 +91,9 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
   const queryThroughput = config.queryThroughput || 1250;
   const avgQueryTime = config.avgQueryTime || 45;
 
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
+
   const updateConfig = (updates: Partial<ClickHouseConfig>) => {
     updateNode(componentId, {
       data: {
@@ -94,11 +101,47 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port', 'database'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
+  };
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+    { field: 'database', label: 'Database' },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port, database },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
   };
 
   const addTable = () => {
+    const tableName = 'new_table';
+    
+    // Проверка на дубликаты и генерация уникального имени
+    let finalName = tableName;
+    let counter = 1;
+    while (tables.some(t => t.name === finalName)) {
+      finalName = `${tableName}_${counter}`;
+      counter++;
+    }
+    
     updateConfig({
-      tables: [...tables, { name: 'new_table', engine: 'MergeTree', rows: 0, size: 0, partitions: 0 }],
+      tables: [...tables, { name: finalName, engine: 'MergeTree', rows: 0, size: 0, partitions: 0 }],
     });
   };
 
@@ -440,33 +483,99 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
               <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="host">Host</Label>
+                    <Label htmlFor="host">
+                      Host <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="host"
                       value={host}
-                      onChange={(e) => updateConfig({ host: e.target.value })}
+                      onChange={(e) => {
+                        updateConfig({ host: e.target.value });
+                        if (fieldErrors.host) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="localhost"
+                      className={hostError || fieldErrors.host ? 'border-destructive' : ''}
                     />
+                    {hostError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{hostError}</span>
+                      </div>
+                    )}
+                    {!hostError && fieldErrors.host && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.host}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="port">Port</Label>
+                    <Label htmlFor="port">
+                      Port <span className="text-destructive">*</span>
+                    </Label>
                     <Input
                       id="port"
                       type="number"
                       value={port}
-                      onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 8123 })}
+                      onChange={(e) => {
+                        updateConfig({ port: parseInt(e.target.value) || 8123 });
+                        if (fieldErrors.port) {
+                          validateConnectionFields();
+                        }
+                      }}
+                      onBlur={validateConnectionFields}
                       placeholder="8123"
+                      className={portError || portConflict.hasConflict || fieldErrors.port ? 'border-destructive' : ''}
                     />
+                    {portError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{portError}</span>
+                      </div>
+                    )}
+                    {!portError && fieldErrors.port && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.port}</span>
+                      </div>
+                    )}
+                    {!portError && !fieldErrors.port && portConflict.hasConflict && portConflict.conflictingNode && (
+                      <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>
+                          Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                          уже использует {host}:{port}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="database">Database</Label>
+                  <Label htmlFor="database">
+                    Database <span className="text-destructive">*</span>
+                  </Label>
                   <Input
                     id="database"
                     value={database}
-                    onChange={(e) => updateConfig({ database: e.target.value })}
+                    onChange={(e) => {
+                      updateConfig({ database: e.target.value });
+                      if (fieldErrors.database) {
+                        validateConnectionFields();
+                      }
+                    }}
+                    onBlur={validateConnectionFields}
                     placeholder="default"
+                    className={fieldErrors.database ? 'border-destructive' : ''}
                   />
+                  {fieldErrors.database && (
+                    <div className="flex items-center gap-1 text-sm text-destructive">
+                      <AlertCircle className="h-3 w-3" />
+                      <span>{fieldErrors.database}</span>
+                    </div>
+                  )}
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -488,6 +597,31 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
                       placeholder="password"
                     />
                   </div>
+                </div>
+                <div className="flex gap-2 pt-4 border-t">
+                  <Button
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения сохранены');
+                      } else {
+                        showError('Пожалуйста, заполните все обязательные поля');
+                      }
+                    }}
+                  >
+                    Сохранить настройки
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (validateConnectionFields()) {
+                        showSuccess('Параметры подключения валидны');
+                      } else {
+                        showError('Пожалуйста, заполните все обязательные поля');
+                      }
+                    }}
+                  >
+                    Проверить подключение
+                  </Button>
                 </div>
               </CardContent>
             </Card>

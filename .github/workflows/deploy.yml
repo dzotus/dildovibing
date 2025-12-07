@@ -33,22 +33,17 @@ jobs:
         run: npm ci
 
       - name: Set VITE_BASE_PATH for GitHub Pages
-        id: set_base_path
         run: |
           if [[ "${{ github.event.repository.name }}" == *.github.io ]]; then
             # User/Org pages → сайт в корне: https://username.github.io
-            echo "base_path=/" >> $GITHUB_OUTPUT
+            echo "VITE_BASE_PATH=/" >> $GITHUB_ENV
           else
             # Project pages → сайт в подпапке: https://username.github.io/repo-name/
-            echo "base_path=/${{ github.event.repository.name }}/" >> $GITHUB_OUTPUT
+            echo "VITE_BASE_PATH=/${{ github.event.repository.name }}/" >> $GITHUB_ENV
           fi
 
       - name: Build
-        env:
-          VITE_BASE_PATH: ${{ steps.set_base_path.outputs.base_path }}
-        run: |
-          echo "Building with VITE_BASE_PATH=$VITE_BASE_PATH"
-          npm run build
+        run: npm run build
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

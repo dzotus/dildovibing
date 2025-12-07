@@ -23,5 +23,8 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
+  },
+  optimizeDeps: {
+    force: true, // Принудительная переоптимизация зависимостей
   }
 });

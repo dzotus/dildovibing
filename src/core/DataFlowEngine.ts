@@ -1,4 +1,4 @@
-import { CanvasNode, CanvasConnection } from '@/types';
+import { CanvasNode, CanvasConnection, ComponentConfig } from '@/types';
 
 /**
  * Data message format for transmission between components
@@ -10,7 +10,7 @@ export interface DataMessage {
   target: string;
   connectionId: string;
   format: 'json' | 'xml' | 'binary' | 'protobuf' | 'text' | 'custom';
-  payload: any; // Actual data payload
+  payload: unknown; // Actual data payload - используем unknown для безопасности типов
   size: number; // bytes
   metadata?: {
     contentType?: string;
@@ -18,7 +18,7 @@ export interface DataMessage {
     compression?: boolean;
     schema?: string;
     version?: string;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   status: 'pending' | 'in-transit' | 'delivered' | 'failed' | 'transformed';
   error?: string;
@@ -32,17 +32,17 @@ export interface ComponentDataHandler {
   /**
    * Generate data from this component (for sources)
    */
-  generateData?(node: CanvasNode, config: any): DataMessage[] | null;
+  generateData?(node: CanvasNode, config: ComponentConfig): DataMessage[] | null;
   
   /**
    * Process incoming data (for targets)
    */
-  processData?(node: CanvasNode, message: DataMessage, config: any): DataMessage | null;
+  processData?(node: CanvasNode, message: DataMessage, config: ComponentConfig): DataMessage | null;
   
   /**
    * Transform data format if needed
    */
-  transformData?(node: CanvasNode, message: DataMessage, targetType: string, config: any): DataMessage | null;
+  transformData?(node: CanvasNode, message: DataMessage, targetType: string, config: ComponentConfig): DataMessage | null;
   
   /**
    * Get supported data formats
@@ -589,7 +589,7 @@ export class DataFlowEngine {
     
     // Generate random business data
     const dataType = Math.random() > 0.5 ? 'contact' : 'deal';
-    let payload: any;
+    let payload: Record<string, unknown>;
     
     if (dataType === 'contact' && contacts.length > 0) {
       const contact = contacts[Math.floor(Math.random() * contacts.length)];
@@ -652,7 +652,7 @@ export class DataFlowEngine {
     const inventory = config.inventory || [];
     
     const dataType = Math.random() > 0.5 ? 'order' : 'inventory';
-    let payload: any;
+    let payload: Record<string, unknown>;
     
     if (dataType === 'order' && orders.length > 0) {
       const order = orders[Math.floor(Math.random() * orders.length)];
@@ -711,7 +711,7 @@ export class DataFlowEngine {
     const config = node.data.config || {};
     const transactions = config.transactions || [];
     
-    let payload: any;
+    let payload: Record<string, unknown>;
     if (transactions.length > 0) {
       const txn = transactions[Math.floor(Math.random() * transactions.length)];
       payload = {
@@ -754,10 +754,10 @@ export class DataFlowEngine {
     };
   }
 
-  private generateQueryResults(dbType: string, query?: string): any[] {
+  private generateQueryResults(dbType: string, query?: string): Record<string, unknown>[] {
     // Generate mock query results based on database type
     const count = Math.floor(Math.random() * 10) + 1;
-    const results: any[] = [];
+    const results: Record<string, unknown>[] = [];
     
     for (let i = 0; i < count; i++) {
       results.push({

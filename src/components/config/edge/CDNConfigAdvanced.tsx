@@ -57,6 +57,17 @@ interface CDNConfig {
   totalRequests?: number;
   totalBandwidth?: number;
   averageCacheHitRate?: number;
+  enableCompression?: boolean;
+  enableHTTP2?: boolean;
+  enableHTTPS?: boolean;
+  defaultTTL?: number;
+  maxTTL?: number;
+  cachePolicy?: 'cache-first' | 'origin-first' | 'bypass';
+  metrics?: {
+    enabled?: boolean;
+    port?: number;
+    path?: string;
+  };
 }
 
 export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
@@ -407,37 +418,115 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               <CardContent className="space-y-4">
                 <div className="flex items-center justify-between">
                   <Label>Enable Compression</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableCompression ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableCompression: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable HTTP/2</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableHTTP2 ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableHTTP2: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Enable HTTPS</Label>
-                  <Switch defaultChecked />
+                  <Switch 
+                    checked={config.enableHTTPS ?? true}
+                    onCheckedChange={(checked) => updateConfig({ enableHTTPS: checked })}
+                  />
                 </div>
                 <Separator />
                 <div className="space-y-2">
                   <Label>Default TTL (seconds)</Label>
-                  <Input type="number" defaultValue={3600} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.defaultTTL ?? 3600}
+                    onChange={(e) => updateConfig({ defaultTTL: parseInt(e.target.value) || 3600 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Max TTL (seconds)</Label>
-                  <Input type="number" defaultValue={86400} min={1} />
+                  <Input 
+                    type="number" 
+                    value={config.maxTTL ?? 86400}
+                    onChange={(e) => updateConfig({ maxTTL: parseInt(e.target.value) || 86400 })}
+                    min={1} 
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label>Cache Policy</Label>
-                  <Select defaultValue="cache-first">
+                  <Select 
+                    value={config.cachePolicy ?? 'cache-first'}
+                    onValueChange={(value: 'cache-first' | 'origin-first' | 'bypass') => updateConfig({ cachePolicy: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="cache-first">Cache First</SelectItem>
                       <SelectItem value="origin-first">Origin First</SelectItem>
-                      <SelectItem value="cache-only">Cache Only</SelectItem>
+                      <SelectItem value="bypass">Cache Only</SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label>Enable Metrics Export</Label>
+                      <p className="text-xs text-muted-foreground mt-1">Export CDN metrics for Prometheus scraping</p>
+                    </div>
+                    <Switch 
+                      checked={config.metrics?.enabled ?? true}
+                      onCheckedChange={(checked) => updateConfig({ 
+                        metrics: { 
+                          ...config.metrics, 
+                          enabled: checked,
+                          port: config.metrics?.port || 9101,
+                          path: config.metrics?.path || '/metrics'
+                        } 
+                      })}
+                    />
+                  </div>
+                  {config.metrics?.enabled !== false && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Metrics Port</Label>
+                        <Input 
+                          type="number" 
+                          value={config.metrics?.port ?? 9101}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              port: parseInt(e.target.value) || 9101,
+                              path: config.metrics?.path || '/metrics'
+                            } 
+                          })}
+                          min={1024} 
+                          max={65535} 
+                        />
+                        <p className="text-xs text-muted-foreground">Port for Prometheus metrics endpoint</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Metrics Path</Label>
+                        <Input 
+                          type="text" 
+                          value={config.metrics?.path ?? '/metrics'}
+                          onChange={(e) => updateConfig({ 
+                            metrics: { 
+                              ...config.metrics, 
+                              path: e.target.value || '/metrics',
+                              port: config.metrics?.port || 9101
+                            } 
+                          })}
+                          placeholder="/metrics"
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>

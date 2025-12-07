@@ -2,20 +2,8 @@ import { create } from 'zustand';
 import { CanvasNode, CanvasConnection, DiagramState, ComponentGroup } from '@/types';
 import { saveDiagramToStorage, loadDiagramFromStorage } from '@/utils/persistence';
 import { useHistoryStore } from './useHistoryStore';
-
-interface CanvasBounds {
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-}
-
-interface CanvasChunk {
-  x: number; // Grid X coordinate
-  y: number; // Grid Y coordinate
-}
-
-const CHUNK_SIZE = 2000; // Fixed size of each canvas chunk
+import { getConnectionHandler } from '@/services/connection/connectionHandlerInstance';
+import { calculateCanvasChunks, calculateCanvasBounds, CanvasBounds, CanvasChunk } from './canvas/canvasChunks';
 
 interface CanvasStore extends DiagramState {
   selectedNodeId: string | null;
@@ -29,6 +17,7 @@ interface CanvasStore extends DiagramState {
   updateCanvasBounds: () => void;
   addNode: (node: CanvasNode) => void;
   updateNode: (id: string, updates: Partial<CanvasNode>, skipHistory?: boolean) => void;
+  updateNodes: (updates: Array<{ id: string; updates: Partial<CanvasNode> }>, skipHistory?: boolean) => void;
   deleteNode: (id: string) => void;
   selectNode: (id: string | null, multiSelect?: boolean) => void;
   selectNodesByIds: (ids: string[]) => void;
@@ -57,6 +46,8 @@ interface CanvasStore extends DiagramState {
   getDiagramState: () => DiagramState;
   startDragOperation: (nodeId: string) => void;
   endDragOperation: () => void;
+  setGroupDragging: (value: boolean) => void;
+  getIsGroupDragging: () => boolean;
   // Z-index management
   bringToFront: (nodeId: string) => void;
   sendToBack: (nodeId: string) => void;
@@ -72,73 +63,7 @@ const initialState: DiagramState = {
   pan: { x: 0, y: 0 },
 };
 
-const NODE_SIZE = 140;
-const CANVAS_PADDING = 200;
-
-// Helper to get chunk coordinates from world coordinates
-const getChunkCoords = (worldX: number, worldY: number): CanvasChunk => {
-  return {
-    x: Math.floor(worldX / CHUNK_SIZE),
-    y: Math.floor(worldY / CHUNK_SIZE),
-  };
-};
-
-// Helper to calculate required canvas chunks from nodes
-const calculateCanvasChunks = (nodes: CanvasNode[]): CanvasChunk[] => {
-  if (nodes.length === 0) {
-    // Default: one chunk at origin
-    return [{ x: 0, y: 0 }];
-  }
-
-  const chunks = new Set<string>();
-  
-  // Add chunks for all nodes (including their size)
-  nodes.forEach(node => {
-    const topLeft = getChunkCoords(node.position.x, node.position.y);
-    const bottomRight = getChunkCoords(
-      node.position.x + NODE_SIZE + CANVAS_PADDING,
-      node.position.y + NODE_SIZE + CANVAS_PADDING
-    );
-    
-    // Add all chunks in the bounding box
-    for (let x = topLeft.x; x <= bottomRight.x; x++) {
-      for (let y = topLeft.y; y <= bottomRight.y; y++) {
-        chunks.add(`${x},${y}`);
-      }
-    }
-  });
-
-  return Array.from(chunks).map(key => {
-    const [x, y] = key.split(',').map(Number);
-    return { x, y };
-  });
-};
-
-// Helper to calculate canvas bounds from chunks
-const calculateCanvasBounds = (chunks: CanvasChunk[]): CanvasBounds => {
-  if (chunks.length === 0) {
-    return {
-      minX: 0,
-      minY: 0,
-      maxX: CHUNK_SIZE,
-      maxY: CHUNK_SIZE,
-    };
-  }
-
-  const xs = chunks.map(c => c.x);
-  const ys = chunks.map(c => c.y);
-  const minChunkX = Math.min(...xs);
-  const minChunkY = Math.min(...ys);
-  const maxChunkX = Math.max(...xs);
-  const maxChunkY = Math.max(...ys);
-
-  return {
-    minX: minChunkX * CHUNK_SIZE,
-    minY: minChunkY * CHUNK_SIZE,
-    maxX: (maxChunkX + 1) * CHUNK_SIZE,
-    maxY: (maxChunkY + 1) * CHUNK_SIZE,
-  };
-};
+// Chunks и bounds логика вынесена в отдельный модуль canvasChunks.ts
 
 export const useCanvasStore = create<CanvasStore>((set, get) => {
   // Load initial state from localStorage
@@ -149,6 +74,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
   // Track drag operation state
   let isDragging = false;
+  let isGroupDragging = false; // Флаг для перетаскивания группы
   let draggedNodeInitialState: CanvasNode | null = null;
 
   // Helper to get current diagram state
@@ -168,7 +94,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     useHistoryStore.getState().pushState(getDiagramState());
   };
 
-  const initialChunks = calculateCanvasChunks(initialDiagram.nodes);
+  const initialChunks = calculateCanvasChunks(initialDiagram.nodes, initialDiagram.connections || []);
   const initialBounds = calculateCanvasBounds(initialChunks);
 
   return {
@@ -185,7 +111,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
     updateCanvasBounds: () =>
       set((state) => {
-        const chunks = calculateCanvasChunks(state.nodes);
+        const chunks = calculateCanvasChunks(state.nodes, state.connections);
         return {
           canvasChunks: chunks,
           canvasBounds: calculateCanvasBounds(chunks),
@@ -196,7 +122,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       set((state) => {
         saveToHistory();
         const newNodes = [...state.nodes, node];
-        const chunks = calculateCanvasChunks(newNodes);
+        const chunks = calculateCanvasChunks(newNodes, state.connections);
         const newState = {
           nodes: newNodes,
           canvasChunks: chunks,
@@ -216,15 +142,55 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
           node.id === id ? { ...node, ...updates } : node
         );
         
-        // Recalculate chunks based on new node positions
-        const chunks = calculateCanvasChunks(newNodes);
+        // Always recalculate chunks based on new node positions
+        // Chunks should update in real-time, even during drag, to ensure proper attachment/detachment
+        const chunks = calculateCanvasChunks(newNodes, state.connections);
         
         const newState = {
           nodes: newNodes,
           canvasChunks: chunks,
           canvasBounds: calculateCanvasBounds(chunks),
         };
-        saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        
+        // Only save to storage if not dragging (for performance during drag)
+        if (!isDragging || !skipHistory) {
+          saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        }
+        
+        return newState;
+      }),
+
+    updateNodes: (updates, skipHistory = false) =>
+      set((state) => {
+        // Only save to history if not dragging or explicitly requested
+        if (!skipHistory && !isDragging && !isGroupDragging) {
+          saveToHistory();
+        }
+        
+        // Create a map for quick lookup
+        const updatesMap = new Map(updates.map(u => [u.id, u.updates]));
+        
+        const newNodes = state.nodes.map((node) => {
+          const nodeUpdates = updatesMap.get(node.id);
+          return nodeUpdates ? { ...node, ...nodeUpdates } : node;
+        });
+        
+        // Always recalculate chunks based on new node positions
+        // Chunks should update in real-time to ensure proper attachment/detachment
+        // For group dragging, we still recalculate but don't save to storage for performance
+        const chunks = calculateCanvasChunks(newNodes, state.connections);
+        
+        const newState = {
+          nodes: newNodes,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
+        };
+        
+        // Only save to storage if not dragging (for performance during drag)
+        if (!isGroupDragging || !skipHistory) {
+          saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
+        }
+        
         return newState;
       }),
 
@@ -232,12 +198,13 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       set((state) => {
         saveToHistory();
         const newNodes = state.nodes.filter((node) => node.id !== id);
-        const chunks = calculateCanvasChunks(newNodes);
+        const newConnections = state.connections.filter(
+          (conn) => conn.source !== id && conn.target !== id
+        );
+        const chunks = calculateCanvasChunks(newNodes, newConnections);
         const newState = {
           nodes: newNodes,
-          connections: state.connections.filter(
-            (conn) => conn.source !== id && conn.target !== id
-          ),
+          connections: newConnections,
           selectedNodeId: state.selectedNodeId === id ? null : state.selectedNodeId,
           canvasChunks: chunks,
           canvasBounds: calculateCanvasBounds(chunks),
@@ -288,8 +255,40 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
           ...connection,
           type: connection.type || 'async',
         };
+        
+        // Найти source и target nodes
+        const sourceNode = state.nodes.find(n => n.id === fullConnection.source);
+        const targetNode = state.nodes.find(n => n.id === fullConnection.target);
+        
+        // Обновить конфиги через ConnectionHandler
+        let updatedNodes = [...state.nodes];
+        if (sourceNode && targetNode) {
+          const handler = getConnectionHandler();
+          
+          // Создаем функцию для обновления узла
+          const updateNodeInState = (id: string, updates: Partial<CanvasNode>) => {
+            const nodeIndex = updatedNodes.findIndex(n => n.id === id);
+            if (nodeIndex !== -1) {
+              updatedNodes[nodeIndex] = { ...updatedNodes[nodeIndex], ...updates };
+            }
+          };
+          
+          // Обработать создание связи
+          handler.handleConnectionCreated(
+            sourceNode,
+            targetNode,
+            fullConnection,
+            updateNodeInState
+          );
+        }
+        
+        const newConnections = [...state.connections, fullConnection];
+        const chunks = calculateCanvasChunks(updatedNodes, newConnections);
         const newState = {
-          connections: [...state.connections, fullConnection],
+          nodes: updatedNodes,
+          connections: newConnections,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
         };
         saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
         return newState;
@@ -310,9 +309,44 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     deleteConnection: (id) =>
       set((state) => {
         saveToHistory();
+        
+        // Найти connection перед удалением
+        const connectionToDelete = state.connections.find(c => c.id === id);
+        
+        // Обновить конфиги через ConnectionHandler (если нужно cleanup)
+        let updatedNodes = [...state.nodes];
+        if (connectionToDelete) {
+          const sourceNode = state.nodes.find(n => n.id === connectionToDelete.source);
+          const targetNode = state.nodes.find(n => n.id === connectionToDelete.target);
+          
+          if (sourceNode && targetNode) {
+            const handler = getConnectionHandler();
+            
+            const updateNodeInState = (id: string, updates: Partial<CanvasNode>) => {
+              const nodeIndex = updatedNodes.findIndex(n => n.id === id);
+              if (nodeIndex !== -1) {
+                updatedNodes[nodeIndex] = { ...updatedNodes[nodeIndex], ...updates };
+              }
+            };
+            
+            // Обработать удаление связи (cleanup)
+            handler.handleConnectionDeleted(
+              sourceNode,
+              targetNode,
+              connectionToDelete,
+              updateNodeInState
+            );
+          }
+        }
+        
+        const newConnections = state.connections.filter((conn) => conn.id !== id);
+        const chunks = calculateCanvasChunks(updatedNodes, newConnections);
         const newState = {
-          connections: state.connections.filter((conn) => conn.id !== id),
+          nodes: updatedNodes,
+          connections: newConnections,
           selectedConnectionId: state.selectedConnectionId === id ? null : state.selectedConnectionId,
+          canvasChunks: chunks,
+          canvasBounds: calculateCanvasBounds(chunks),
         };
         saveDiagramToStorage({ ...state, ...newState }, state.diagramName);
         return newState;
@@ -439,10 +473,13 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         const parent = new Map<string, string>();
         const find = (id: string): string => {
           if (!parent.has(id)) parent.set(id, id);
-          if (parent.get(id) !== id) {
-            parent.set(id, find(parent.get(id)!));
+          const currentParent = parent.get(id);
+          if (currentParent !== undefined && currentParent !== id) {
+            const root = find(currentParent);
+            parent.set(id, root);
+            return root;
           }
-          return parent.get(id)!;
+          return currentParent ?? id;
         };
         const union = (a: string, b: string) => {
           const rootA = find(a);
@@ -467,7 +504,10 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
             if (!groupsMap.has(root)) {
               groupsMap.set(root, []);
             }
-            groupsMap.get(root)!.push(node.id);
+            const group = groupsMap.get(root);
+            if (group) {
+              group.push(node.id);
+            }
           }
         });
 
@@ -521,7 +561,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
         if (!skipHistory) {
           saveToHistory();
         }
-        const chunks = calculateCanvasChunks(state.nodes || []);
+        const chunks = calculateCanvasChunks(state.nodes || [], state.connections || []);
         const newState = {
           ...state,
           canvasChunks: chunks,
@@ -538,7 +578,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
 
     resetCanvas: () => {
       saveToHistory();
-      const chunks = calculateCanvasChunks([]);
+      const chunks = calculateCanvasChunks([], []);
       set({
         ...initialState,
         canvasChunks: chunks,
@@ -550,7 +590,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       const previousState = useHistoryStore.getState().undo();
       if (previousState) {
         set(() => {
-          const chunks = calculateCanvasChunks(previousState.nodes || []);
+          const chunks = calculateCanvasChunks(previousState.nodes || [], previousState.connections || []);
           const newState = {
             ...previousState,
             canvasChunks: chunks,
@@ -566,7 +606,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
       const nextState = useHistoryStore.getState().redo();
       if (nextState) {
         set(() => {
-          const chunks = calculateCanvasChunks(nextState.nodes || []);
+          const chunks = calculateCanvasChunks(nextState.nodes || [], nextState.connections || []);
           const newState = {
             ...nextState,
             canvasChunks: chunks,
@@ -589,7 +629,19 @@ export const useCanvasStore = create<CanvasStore>((set, get) => {
     endDragOperation: () => {
       isDragging = false;
       draggedNodeInitialState = null;
+      // Chunks are already recalculated in updateNode during drag
+      // Just ensure final state is saved to storage
+      const state = get();
+      saveDiagramToStorage(state, state.diagramName);
       // No need to save history here - it was saved at the start
+    },
+
+    setGroupDragging: (value: boolean) => {
+      isGroupDragging = value;
+    },
+
+    getIsGroupDragging: () => {
+      return isGroupDragging;
     },
 
     bringToFront: (nodeId) =>

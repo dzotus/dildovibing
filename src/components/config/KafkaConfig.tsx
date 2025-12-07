@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Plus, Trash2 } from 'lucide-react';
+import { getTypedConfig } from '@/lib/utils';
 
 interface KafkaConfigProps {
   componentId: string;
@@ -23,7 +24,7 @@ export function KafkaConfig({ componentId }: KafkaConfigProps) {
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
-  const config = (node.data.config as any) || {} as KafkaConfig;
+  const config = getTypedConfig(node.data.config, {} as KafkaConfig);
   const brokers = config.brokers || ['localhost:9092'];
   const topics = config.topics || [{ name: 'default-topic', partitions: 3, replication: 1 }];
   const groupId = config.groupId || 'default-group';

@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
 import { 
   Database, 
   Table, 
@@ -64,6 +66,9 @@ export function DatabaseConfigAdvanced({ componentId }: DatabaseConfigProps) {
   ];
   const activeConnections = config.activeConnections || 15;
   const queryLatency = config.queryLatency || 12;
+
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
 
   const updateConfig = (updates: Partial<DatabaseConfig>) => {
     updateNode(componentId, {
@@ -169,7 +174,14 @@ export function DatabaseConfigAdvanced({ componentId }: DatabaseConfigProps) {
                       value={host}
                       onChange={(e) => updateConfig({ host: e.target.value })}
                       placeholder="localhost"
+                      className={hostError ? 'border-destructive' : ''}
                     />
+                    {hostError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{hostError}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="port">Port</Label>
@@ -179,7 +191,23 @@ export function DatabaseConfigAdvanced({ componentId }: DatabaseConfigProps) {
                       value={port}
                       onChange={(e) => updateConfig({ port: parseInt(e.target.value) || port })}
                       placeholder={port.toString()}
+                      className={portError || portConflict.hasConflict ? 'border-destructive' : ''}
                     />
+                    {portError && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{portError}</span>
+                      </div>
+                    )}
+                    {!portError && portConflict.hasConflict && portConflict.conflictingNode && (
+                      <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>
+                          Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                          уже использует {host}:{port}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-4">

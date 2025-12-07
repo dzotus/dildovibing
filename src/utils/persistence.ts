@@ -1,7 +1,10 @@
 import { DiagramState } from '@/types';
+import { debounce } from './debounce';
+import { logWarn, logError } from './logger';
 
 const STORAGE_KEY = 'archiphoenix_diagram';
 const CURRENT_VERSION = 1;
+const SAVE_DEBOUNCE_MS = 500; // Задержка для debounce сохранения
 
 export interface StoredDiagram extends DiagramState {
   version: number;
@@ -22,21 +25,21 @@ export const loadDiagramFromStorage = (): StoredDiagram | null => {
     
     // Validate version
     if (diagram.version !== CURRENT_VERSION) {
-      console.warn('Diagram version mismatch, using defaults');
+      logWarn('Diagram version mismatch, using defaults');
       return null;
     }
 
     return diagram;
   } catch (error) {
-    console.error('Failed to load diagram from storage:', error);
+    logError('Failed to load diagram from storage', error instanceof Error ? error : new Error(String(error)));
     return null;
   }
 };
 
 /**
- * Save diagram to localStorage
+ * Save diagram to localStorage (internal, without debounce)
  */
-export const saveDiagramToStorage = (
+const _saveDiagramToStorage = (
   state: DiagramState,
   name: string = 'My Diagram'
 ): void => {
@@ -52,8 +55,25 @@ export const saveDiagramToStorage = (
     localStorage.setItem(STORAGE_KEY, JSON.stringify(diagram));
     localStorage.setItem(`${STORAGE_KEY}_createdAt`, diagram.createdAt);
   } catch (error) {
-    console.error('Failed to save diagram to storage:', error);
+    logError('Failed to save diagram to storage', error instanceof Error ? error : new Error(String(error)));
   }
+};
+
+/**
+ * Save diagram to localStorage with debounce
+ * Использует debounce для оптимизации частых сохранений
+ */
+export const saveDiagramToStorage = debounce(_saveDiagramToStorage, SAVE_DEBOUNCE_MS);
+
+/**
+ * Save diagram to localStorage immediately (without debounce)
+ * Используется для критичных сохранений (например, перед закрытием)
+ */
+export const saveDiagramToStorageImmediate = (
+  state: DiagramState,
+  name: string = 'My Diagram'
+): void => {
+  _saveDiagramToStorage(state, name);
 };
 
 /**
@@ -64,7 +84,7 @@ export const clearDiagramStorage = (): void => {
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(`${STORAGE_KEY}_createdAt`);
   } catch (error) {
-    console.error('Failed to clear diagram storage:', error);
+    logError('Failed to clear diagram storage', error instanceof Error ? error : new Error(String(error)));
   }
 };
 
@@ -95,7 +115,7 @@ export const exportDiagramAsJSON = (
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   } catch (error) {
-    console.error('Failed to export diagram:', error);
+    logError('Failed to export diagram', error instanceof Error ? error : new Error(String(error)));
   }
 };
 
@@ -128,13 +148,13 @@ export const importDiagramFromJSON = (file: File): Promise<StoredDiagram | null>
 
           resolve(diagram);
         } catch (error) {
-          console.error('Failed to parse diagram file:', error);
+          logError('Failed to parse diagram file', error instanceof Error ? error : new Error(String(error)));
           resolve(null);
         }
       };
       reader.readAsText(file);
     } catch (error) {
-      console.error('Failed to import diagram:', error);
+      logError('Failed to import diagram', error instanceof Error ? error : new Error(String(error)));
       resolve(null);
     }
   });

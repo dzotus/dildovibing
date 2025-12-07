@@ -67,8 +67,8 @@ export interface ComponentConfig {
   avgPayloadSize?: number; // bytes
   responseLatency?: number; // ms
   
-  // Custom
-  [key: string]: any;
+  // Custom - используем unknown для безопасности типов
+  [key: string]: unknown;
 }
 
 export class EmulationEngine {

@@ -4,6 +4,11 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Textarea } from '@/components/ui/textarea';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
+import { useState } from 'react';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
+import { showSuccess, showError } from '@/utils/toast';
 
 interface DatabaseConfigProps {
   componentId: string;
@@ -32,6 +37,27 @@ export function DatabaseConfig({ componentId }: DatabaseConfigProps) {
   const maxConnections = config.maxConnections || 100;
   const schema = config.schema || '';
 
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+    { field: 'database', label: 'Database' },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port, database },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
+  };
+
   const updateConfig = (updates: Partial<DatabaseConfig>) => {
     updateNode(componentId, {
       data: {
@@ -39,6 +65,14 @@ export function DatabaseConfig({ componentId }: DatabaseConfigProps) {
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port', 'database'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
   };
 
   const getDbName = () => {
@@ -75,13 +109,40 @@ export function DatabaseConfig({ componentId }: DatabaseConfigProps) {
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="host">Host</Label>
+              <Label htmlFor="host">
+                Host <span className="text-destructive">*</span>
+              </Label>
               <Input
                 id="host"
                 value={host}
-                onChange={(e) => updateConfig({ host: e.target.value })}
+                onChange={(e) => {
+                  updateConfig({ host: e.target.value });
+                  if (fieldErrors.host) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
                 placeholder="localhost"
+                className={hostError || fieldErrors.host ? 'border-destructive' : ''}
               />
+              {hostError && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{hostError}</span>
+                </div>
+              )}
+              {!hostError && fieldErrors.host && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.host}</span>
+                </div>
+              )}
+            {!hostError && fieldErrors.host && (
+              <div className="flex items-center gap-1 text-sm text-destructive">
+                <AlertCircle className="h-3 w-3" />
+                <span>{fieldErrors.host}</span>
+              </div>
+            )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="port">Port</Label>
@@ -91,19 +152,56 @@ export function DatabaseConfig({ componentId }: DatabaseConfigProps) {
                 value={port}
                 onChange={(e) => updateConfig({ port: parseInt(e.target.value) || port })}
                 placeholder={port.toString()}
+                className={portError || portConflict.hasConflict ? 'border-destructive' : ''}
               />
+              {portError && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{portError}</span>
+                </div>
+              )}
+            {!portError && !fieldErrors.port && portConflict.hasConflict && portConflict.conflictingNode && (
+              <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                <AlertCircle className="h-3 w-3" />
+                <span>
+                  Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                  уже использует {host}:{port}
+                </span>
+              </div>
+            )}
+            {!portError && fieldErrors.port && (
+              <div className="flex items-center gap-1 text-sm text-destructive">
+                <AlertCircle className="h-3 w-3" />
+                <span>{fieldErrors.port}</span>
+              </div>
+            )}
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="database">Database Name</Label>
+              <Label htmlFor="database">
+                Database Name <span className="text-destructive">*</span>
+              </Label>
               <Input
                 id="database"
                 value={database}
-                onChange={(e) => updateConfig({ database: e.target.value })}
+                onChange={(e) => {
+                  updateConfig({ database: e.target.value });
+                  if (fieldErrors.database) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
                 placeholder="default_db"
+                className={fieldErrors.database ? 'border-destructive' : ''}
               />
+              {fieldErrors.database && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.database}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>

@@ -11,6 +11,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { usePortValidation } from '@/hooks/usePortValidation';
+import { AlertCircle } from 'lucide-react';
+import { showError, showSuccess } from '@/utils/toast';
+import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
 import {
   Database,
   FileText,
@@ -131,6 +135,27 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
   const [queryFilter, setQueryFilter] = useState<string>('{}');
   const [showAggregationBuilder, setShowAggregationBuilder] = useState(false);
 
+  // Валидация портов и хостов
+  const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
+  
+  // Валидация обязательных полей
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  
+  const requiredFields: RequiredField[] = [
+    { field: 'host', label: 'Host' },
+    { field: 'port', label: 'Port', validator: (v) => typeof v === 'number' && v > 0 && v <= 65535 },
+    { field: 'database', label: 'Database' },
+  ];
+  
+  const validateConnectionFields = () => {
+    const result = validateRequiredFields(
+      { host, port, database },
+      requiredFields
+    );
+    setFieldErrors(result.errors);
+    return result.isValid;
+  };
+
   const updateConfig = (updates: Partial<MongoDBConfig>) => {
     updateNode(componentId, {
       data: {
@@ -138,11 +163,28 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
         config: { ...config, ...updates },
       },
     });
+    // Очистка ошибок валидации при успешном обновлении
+    if (Object.keys(updates).some(key => ['host', 'port', 'database'].includes(key))) {
+      const newErrors = { ...fieldErrors };
+      Object.keys(updates).forEach(key => {
+        if (newErrors[key]) delete newErrors[key];
+      });
+      setFieldErrors(newErrors);
+    }
   };
 
   const addCollection = () => {
+    const collectionName = 'new_collection';
+    
+    // Проверка на дубликаты
+    const collectionExists = collections.some(c => c.name === collectionName && c.database === selectedDatabase);
+    if (collectionExists) {
+      showError(`Коллекция "${collectionName}" уже существует в базе "${selectedDatabase}"`);
+      return;
+    }
+
     const newCollection: Collection = {
-      name: 'new_collection',
+      name: collectionName,
       database: selectedDatabase,
       documentCount: 0,
       size: 0,
@@ -150,6 +192,7 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
     };
     updateConfig({ collections: [...collections, newCollection] });
     setShowCreateCollection(false);
+    showSuccess(`Коллекция "${collectionName}" успешно создана`);
   };
 
   const removeCollection = (index: number) => {
@@ -263,26 +306,92 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
           </CardHeader>
           <CardContent className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Host</Label>
+              <Label>
+                Host <span className="text-destructive">*</span>
+              </Label>
               <Input
                 value={host}
-                onChange={(e) => updateConfig({ host: e.target.value })}
+                onChange={(e) => {
+                  updateConfig({ host: e.target.value });
+                  if (fieldErrors.host) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
+                className={hostError || fieldErrors.host ? 'border-destructive' : ''}
               />
+              {hostError && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{hostError}</span>
+                </div>
+              )}
+              {!hostError && fieldErrors.host && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.host}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
-              <Label>Port</Label>
+              <Label>
+                Port <span className="text-destructive">*</span>
+              </Label>
               <Input
                 type="number"
                 value={port}
-                onChange={(e) => updateConfig({ port: parseInt(e.target.value) || 27017 })}
+                onChange={(e) => {
+                  updateConfig({ port: parseInt(e.target.value) || 27017 });
+                  if (fieldErrors.port) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
+                className={portError || portConflict.hasConflict || fieldErrors.port ? 'border-destructive' : ''}
               />
+              {portError && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{portError}</span>
+                </div>
+              )}
+                    {!portError && !fieldErrors.port && portConflict.hasConflict && portConflict.conflictingNode && (
+                      <div className="flex items-center gap-1 text-sm text-amber-600 dark:text-amber-400">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>
+                          Конфликт порта: компонент "{portConflict.conflictingNode.data.label || portConflict.conflictingNode.type}" 
+                          уже использует {host}:{port}
+                        </span>
+                      </div>
+                    )}
+                    {!portError && fieldErrors.port && (
+                      <div className="flex items-center gap-1 text-sm text-destructive">
+                        <AlertCircle className="h-3 w-3" />
+                        <span>{fieldErrors.port}</span>
+                      </div>
+                    )}
             </div>
             <div className="space-y-2">
-              <Label>Database</Label>
+              <Label>
+                Database <span className="text-destructive">*</span>
+              </Label>
               <Input
                 value={database}
-                onChange={(e) => updateConfig({ database: e.target.value })}
+                onChange={(e) => {
+                  updateConfig({ database: e.target.value });
+                  if (fieldErrors.database) {
+                    validateConnectionFields();
+                  }
+                }}
+                onBlur={validateConnectionFields}
+                className={fieldErrors.database ? 'border-destructive' : ''}
               />
+              {fieldErrors.database && (
+                <div className="flex items-center gap-1 text-sm text-destructive">
+                  <AlertCircle className="h-3 w-3" />
+                  <span>{fieldErrors.database}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label>Username</Label>
@@ -305,6 +414,31 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
                 value={authSource}
                 onChange={(e) => updateConfig({ authSource: e.target.value })}
               />
+            </div>
+            <div className="flex gap-2 pt-4 border-t">
+              <Button
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения сохранены');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Сохранить настройки
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (validateConnectionFields()) {
+                    showSuccess('Параметры подключения валидны');
+                  } else {
+                    showError('Пожалуйста, заполните все обязательные поля');
+                  }
+                }}
+              >
+                Проверить подключение
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -443,7 +577,9 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
                                   validationLevel: collection.validation?.validationLevel || 'strict',
                                   validationAction: collection.validation?.validationAction || 'error'
                                 });
-                              } catch {}
+                              } catch (error) {
+                                showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                              }
                             }}
                             placeholder='{"$jsonSchema": {"required": ["field"]}}'
                           />
@@ -502,8 +638,8 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
                           updateConfig({ documents: [...documents, doc] });
                           setNewDocument('{}');
                           setShowCreateDocument(false);
-                        } catch (e) {
-                          alert('Invalid JSON');
+                        } catch (error) {
+                          showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
                         }
                       }}>Insert Document</Button>
                       <Button variant="outline" onClick={() => setShowCreateDocument(false)}>Cancel</Button>
@@ -748,7 +884,9 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
                           try {
                             const parsed = JSON.parse(e.target.value);
                             updateConfig({ shardConfig: { ...shardConfig, shardKey: parsed } });
-                          } catch {}
+                          } catch (error) {
+                            showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                          }
                         }}
                         placeholder='{"_id": "hashed"}'
                       />
