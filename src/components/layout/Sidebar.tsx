@@ -28,14 +28,33 @@ export function Sidebar() {
   const [isResizing, setIsResizing] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>(
-    () =>
-      COMPONENT_CATEGORIES.reduce(
+    () => {
+      // Load from localStorage if available
+      const saved = localStorage.getItem('sidebar-expanded-categories');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          // Merge with default values for any new categories
+          return COMPONENT_CATEGORIES.reduce(
+            (acc, category) => {
+              acc[category.id] = parsed[category.id] !== undefined ? parsed[category.id] : true;
+              return acc;
+            },
+            {} as Record<string, boolean>
+          );
+        } catch (e) {
+          // If parsing fails, use defaults
+        }
+      }
+      // Default: all categories expanded
+      return COMPONENT_CATEGORIES.reduce(
         (acc, category) => {
           acc[category.id] = true;
           return acc;
         },
         {} as Record<string, boolean>
-      )
+      );
+    }
   );
   const {
     favorites,
@@ -141,6 +160,11 @@ export function Sidebar() {
     setEditingCollection(collection);
     setShowCreateCollectionDialog(true);
   };
+
+  // Save expanded categories to localStorage
+  useEffect(() => {
+    localStorage.setItem('sidebar-expanded-categories', JSON.stringify(expandedCategories));
+  }, [expandedCategories]);
 
   // Resize handle logic
   useEffect(() => {
@@ -483,24 +507,6 @@ export function Sidebar() {
           </div>
         </ScrollArea>
       </div>
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] uppercase font-semibold text-muted-foreground">Collections</span>
-          <Button 
-            size="xs" 
-            variant="outline" 
-            className="h-6 text-[10px] px-2" 
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              handleCreateCollection();
-            }}
-            type="button"
-          >
-            <Plus className="h-3 w-3 mr-0.5" />
-            New
-          </Button>
-        </div>
-
 
       {/* Create/Rename Collection Dialog */}
       <CollectionNameDialog
