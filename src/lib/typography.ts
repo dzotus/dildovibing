@@ -66,3 +66,4 @@ export function getTypographyClass(
   }
   return '';
 }
+

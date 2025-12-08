@@ -1,6 +1,7 @@
 import { CanvasNode, CanvasConnection } from '@/types';
 import { dataFlowEngine } from './DataFlowEngine';
 import { componentStateEngine } from './ComponentStateEngine';
+import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -87,6 +88,10 @@ export class EmulationEngine {
   private latencyHistory: Map<string, number[]> = new Map(); // component latencies
   private connectionLatencyHistory: Map<string, number[]> = new Map(); // connection latencies
   private readonly HISTORY_SIZE = 500; // Keep last 500 samples for percentile calculation
+  
+  // RabbitMQ routing engines per node
+  private rabbitMQRoutingEngines: Map<string, RabbitMQRoutingEngine> = new Map();
+  private lastRabbitMQUpdate: Map<string, number> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -189,6 +194,11 @@ export class EmulationEngine {
       if (!this.metrics.has(node.id)) {
         this.metrics.set(node.id, this.createDefaultMetrics(node.id, node.type));
       }
+      
+      // Initialize RabbitMQ routing engine for RabbitMQ nodes
+      if (node.type === 'rabbitmq') {
+        this.initializeRabbitMQRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -196,6 +206,8 @@ export class EmulationEngine {
     for (const [nodeId] of this.metrics.entries()) {
       if (!nodeIds.has(nodeId)) {
         this.metrics.delete(nodeId);
+        this.rabbitMQRoutingEngines.delete(nodeId);
+        this.lastRabbitMQUpdate.delete(nodeId);
       }
     }
     
@@ -271,6 +283,17 @@ export class EmulationEngine {
    */
   private simulate() {
     this.simulationTime = Date.now() - this.baseTime;
+    
+    // Process RabbitMQ consumption (before updating metrics)
+    const now = Date.now();
+    for (const [nodeId, routingEngine] of this.rabbitMQRoutingEngines.entries()) {
+      const lastUpdate = this.lastRabbitMQUpdate.get(nodeId) || now;
+      const deltaTime = now - lastUpdate;
+      if (deltaTime > 0) {
+        routingEngine.processConsumption(deltaTime);
+        this.lastRabbitMQUpdate.set(nodeId, now);
+      }
+    }
     
     // Update component metrics based on their configuration
     for (const node of this.nodes) {
@@ -1257,37 +1280,144 @@ export class EmulationEngine {
    * RabbitMQ broker emulation
    */
   private simulateRabbitMQ(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.rabbitMQRoutingEngines.has(node.id)) {
+      this.initializeRabbitMQRoutingEngine(node);
+    }
+    
+    const routingEngine = this.rabbitMQRoutingEngines.get(node.id)!;
+    const rabbitMQConfig = (node.data.config as any) || {};
+    
     if (!hasIncomingConnections) {
-      // No incoming data, reset metrics
+      // No incoming data, reset metrics but keep queue state
       metrics.throughput = 0;
-      metrics.latency = 0;
+      metrics.latency = 2; // Base latency even with no traffic
       metrics.errorRate = 0;
-      metrics.utilization = 0;
+      
+      // Calculate utilization from existing queue depth
+      const totalQueueDepth = routingEngine.getTotalQueueDepth();
+      metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+      
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const connections = routingEngine.getActiveConnections();
+      
+      metrics.customMetrics = {
+        'queue_depth': totalQueueDepth,
+        'connections': connections,
+        'replication': config.replicationFactor || 1,
+      };
+      
+      // Update queue metrics in config
+      this.updateQueueMetricsInConfig(node, allQueueMetrics);
       return;
     }
     
-    const throughputMsgs = config.throughputMsgs || 1000; // msgs/sec
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+    
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate messages per second from connection traffic
+        // Assume average message size of 1KB
+        const avgMessageSize = 1024;
+        const msgPerSec = connMetrics.traffic / avgMessageSize;
+        totalIncomingThroughput += msgPerSec;
+      }
+    }
+    
+    // Use configured throughput if available, otherwise use calculated
+    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
     const replicationFactor = config.replicationFactor || 1;
     
     // Throughput with random jitter
     const jitter = (Math.random() - 0.5) * 0.1;
     metrics.throughput = throughputMsgs * (1 + jitter);
     
-    // Latency 2-20ms
-    metrics.latency = 2 + replicationFactor * 5 + Math.random() * 10;
+    // Latency based on queue depth and replication
+    const totalQueueDepth = routingEngine.getTotalQueueDepth();
+    const baseLatency = 2; // Base routing latency
+    const queueLatency = Math.min(50, totalQueueDepth / 1000); // 1ms per 1000 messages, max 50ms
+    metrics.latency = baseLatency + replicationFactor * 5 + queueLatency + Math.random() * 5;
     
-    // Error rate for queue delivery failures
-    metrics.errorRate = 0.0005;
+    // Error rate for queue delivery failures (increases with queue depth)
+    const baseErrorRate = 0.0005;
+    const depthErrorRate = Math.min(0.01, totalQueueDepth / 1000000); // 0.01% per 100k messages
+    metrics.errorRate = baseErrorRate + depthErrorRate;
     
     // Utilization based on message queue backlog
-    const queueBacklog = Math.random() * 10000; // simulated queue size
-    metrics.utilization = Math.min(1, queueBacklog / 100000);
+    metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+    
+    // Get queue metrics
+    const allQueueMetrics = routingEngine.getAllQueueMetrics();
+    const connections = routingEngine.getActiveConnections();
+    
+    // Calculate total consumers
+    let totalConsumers = 0;
+    for (const queueMetrics of allQueueMetrics.values()) {
+      totalConsumers += queueMetrics.consumers;
+    }
     
     metrics.customMetrics = {
-      'queue_depth': Math.round(queueBacklog),
-      'connections': Math.floor(Math.random() * 50) + 10,
+      'queue_depth': totalQueueDepth,
+      'connections': connections,
       'replication': replicationFactor,
+      'queues': allQueueMetrics.size,
+      'consumers': totalConsumers,
     };
+    
+    // Update queue metrics in node config (for UI display)
+    this.updateQueueMetricsInConfig(node, allQueueMetrics);
+  }
+  
+  /**
+   * Initialize RabbitMQ routing engine for a node
+   */
+  private initializeRabbitMQRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new RabbitMQRoutingEngine();
+    
+    routingEngine.initialize({
+      queues: config.queues || [],
+      exchanges: config.exchanges || [
+        { name: 'amq.direct', type: 'direct', durable: true, autoDelete: false, internal: false },
+        { name: 'amq.topic', type: 'topic', durable: true, autoDelete: false, internal: false },
+        { name: 'amq.fanout', type: 'fanout', durable: true, autoDelete: false, internal: false },
+      ],
+      bindings: config.bindings || [],
+    });
+    
+    this.rabbitMQRoutingEngines.set(node.id, routingEngine);
+    this.lastRabbitMQUpdate.set(node.id, Date.now());
+  }
+  
+  /**
+   * Update queue metrics in node config (for UI display)
+   */
+  private updateQueueMetricsInConfig(
+    node: CanvasNode,
+    queueMetrics: Map<string, { messages: number; ready: number; unacked: number; consumers: number }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    const queues = config.queues || [];
+    
+    for (let i = 0; i < queues.length; i++) {
+      const queue = queues[i];
+      const metrics = queueMetrics.get(queue.name);
+      if (metrics) {
+        queues[i] = {
+          ...queue,
+          messages: metrics.messages,
+          ready: metrics.ready,
+          unacked: metrics.unacked,
+          consumers: metrics.consumers,
+        };
+      }
+    }
+    
+    // Update node config (this will be reflected in UI)
+    config.queues = queues;
   }
 
   /**
@@ -1604,6 +1734,13 @@ export class EmulationEngine {
    */
   public getComponentMetrics(nodeId: string): ComponentMetrics | undefined {
     return this.metrics.get(nodeId);
+  }
+  
+  /**
+   * Get RabbitMQ routing engine for a node
+   */
+  public getRabbitMQRoutingEngine(nodeId: string): RabbitMQRoutingEngine | undefined {
+    return this.rabbitMQRoutingEngines.get(nodeId);
   }
 
   /**

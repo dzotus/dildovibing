@@ -694,17 +694,17 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                               <div className="p-2 rounded bg-primary/10">
                                 <Users className="h-4 w-4 text-primary" />
                               </div>
-                              <div>
+                          <div>
                                 <CardTitle className="text-lg">{group.id}</CardTitle>
                                 <CardDescription className="text-xs mt-1">
                                   Topic: {group.topic} • {group.members || 0} members
                                 </CardDescription>
-                              </div>
+                          </div>
                             </div>
                             <div className="flex items-center gap-2">
-                              <Badge variant={group.lag && group.lag > 1000 ? 'destructive' : 'secondary'}>
+                          <Badge variant={group.lag && group.lag > 1000 ? 'destructive' : 'secondary'}>
                                 Lag: {Math.round(group.lag || 0)}
-                              </Badge>
+                          </Badge>
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -719,14 +719,14 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
-                            </div>
+                        </div>
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-4">
                           {editingConsumerGroupIndex === index ? (
                             <div className="space-y-4 pt-2 border-t border-border">
                               <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
+                        <div className="space-y-2">
                                   <Label>Group ID</Label>
                                   <Input
                                     value={group.id}
@@ -796,7 +796,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                             <div className="space-y-2">
                               <div className="grid grid-cols-2 gap-4 text-sm">
                                 <div>
-                                  <span className="text-muted-foreground">Members:</span>
+                            <span className="text-muted-foreground">Members:</span>
                                   <span className="ml-2 font-semibold">{group.members || 0}</span>
                                 </div>
                                 <div>
@@ -807,11 +807,11 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                                   <span className="text-muted-foreground">Auto Commit:</span>
                                   <span className="ml-2 font-semibold">{group.autoCommit !== false ? 'Yes' : 'No'}</span>
                                 </div>
-                              </div>
-                              {group.lag !== undefined && (
-                                <Progress value={Math.min((group.lag / 10000) * 100, 100)} className="h-2" />
-                              )}
-                            </div>
+                          </div>
+                          {group.lag !== undefined && (
+                            <Progress value={Math.min((group.lag / 10000) * 100, 100)} className="h-2" />
+                          )}
+                        </div>
                           )}
                         </CardContent>
                       </Card>

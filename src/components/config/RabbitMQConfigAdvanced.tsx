@@ -90,7 +90,7 @@ interface RabbitMQConfig {
 }
 
 export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -114,10 +114,30 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   // Валидация портов и хостов
   const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
   
+  // Проверка наличия connections для статуса
+  const hasConnections = connections.some(conn => conn.source === componentId || conn.target === componentId);
+  
   const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
   const [showCreateExchange, setShowCreateExchange] = useState(false);
   const [showCreateBinding, setShowCreateBinding] = useState(false);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
+  
+  // Состояние для форм создания
+  const [newExchange, setNewExchange] = useState<{ name: string; type: 'direct' | 'topic' | 'fanout' | 'headers' }>({
+    name: '',
+    type: 'direct',
+  });
+  const [newBinding, setNewBinding] = useState<{ source: string; destination: string; routingKey: string }>({
+    source: exchanges[0]?.name || '',
+    destination: queues[0]?.name || '',
+    routingKey: '',
+  });
+  const [newPolicy, setNewPolicy] = useState<{ name: string; pattern: string; applyTo: 'queues' | 'exchanges' | 'all' }>({
+    name: '',
+    pattern: '.*',
+    applyTo: 'all',
+  });
+  const [editingPolicyIndex, setEditingPolicyIndex] = useState<number | null>(null);
 
   const updateConfig = (updates: Partial<RabbitMQConfig>) => {
     updateNode(componentId, {
@@ -173,15 +193,26 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   };
 
   const addExchange = () => {
-    const newExchange: Exchange = {
-      name: 'new-exchange',
-      type: 'direct',
+    if (!newExchange.name.trim()) {
+      showError('Имя exchange не может быть пустым');
+      return;
+    }
+    // Проверка на уникальность имени
+    if (exchanges.some(ex => ex.name === newExchange.name.trim())) {
+      showError('Exchange с таким именем уже существует');
+      return;
+    }
+    const exchange: Exchange = {
+      name: newExchange.name.trim(),
+      type: newExchange.type,
       durable: true,
       autoDelete: false,
       internal: false,
     };
-    updateConfig({ exchanges: [...exchanges, newExchange] });
+    updateConfig({ exchanges: [...exchanges, exchange] });
     setShowCreateExchange(false);
+    setNewExchange({ name: '', type: 'direct' });
+    showSuccess('Exchange создан');
   };
 
   const removeExchange = (index: number) => {
@@ -195,14 +226,20 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   };
 
   const addBinding = () => {
-    const newBinding: Binding = {
+    if (!newBinding.source || !newBinding.destination) {
+      showError('Необходимо выбрать exchange и queue');
+      return;
+    }
+    const binding: Binding = {
       id: `binding-${Date.now()}`,
-      source: exchanges[0]?.name || '',
-      destination: queues[0]?.name || '',
-      routingKey: '',
+      source: newBinding.source,
+      destination: newBinding.destination,
+      routingKey: newBinding.routingKey || '',
     };
-    updateConfig({ bindings: [...bindings, newBinding] });
+    updateConfig({ bindings: [...bindings, binding] });
     setShowCreateBinding(false);
+    setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '' });
+    showSuccess('Binding создан');
   };
 
   const removeBinding = (id: string) => {
@@ -217,15 +254,32 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   };
 
   const addPolicy = () => {
-    const newPolicy: Policy = {
-      name: 'new-policy',
-      pattern: '.*',
+    if (!newPolicy.name.trim()) {
+      showError('Имя policy не может быть пустым');
+      return;
+    }
+    // Проверка на уникальность имени
+    if (policies.some(p => p.name === newPolicy.name.trim())) {
+      showError('Policy с таким именем уже существует');
+      return;
+    }
+    const policy: Policy = {
+      name: newPolicy.name.trim(),
+      pattern: newPolicy.pattern || '.*',
       definition: {},
       priority: 0,
-      applyTo: 'all',
+      applyTo: newPolicy.applyTo,
     };
-    updateConfig({ policies: [...policies, newPolicy] });
+    updateConfig({ policies: [...policies, policy] });
     setShowCreatePolicy(false);
+    setNewPolicy({ name: '', pattern: '.*', applyTo: 'all' });
+    showSuccess('Policy создана');
+  };
+  
+  const updatePolicy = (index: number, field: string, value: any) => {
+    const newPolicies = [...policies];
+    newPolicies[index] = { ...newPolicies[index], [field]: value };
+    updateConfig({ policies: newPolicies });
   };
 
   const removePolicy = (index: number) => {
@@ -253,8 +307,8 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Connected
+              <div className={`h-2 w-2 rounded-full ${hasConnections ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {hasConnections ? 'Connected' : 'Not Connected'}
             </Badge>
             <Button size="sm" variant="outline">
               <Settings className="h-4 w-4 mr-2" />
@@ -363,14 +417,27 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                               <div className="flex items-center gap-2">
                                 <Switch
                                   checked={queue.durable}
-                                  onCheckedChange={(checked) => updateQueue(index, 'durable', checked)}
+                                  onCheckedChange={(checked) => {
+                                    if (checked && queue.exclusive) {
+                                      // Exclusive queue cannot be durable
+                                      updateQueue(index, 'exclusive', false);
+                                    }
+                                    updateQueue(index, 'durable', checked);
+                                  }}
+                                  disabled={queue.exclusive}
                                 />
                                 <Label className="text-xs">Durable</Label>
                               </div>
                               <div className="flex items-center gap-2">
                                 <Switch
                                   checked={queue.exclusive}
-                                  onCheckedChange={(checked) => updateQueue(index, 'exclusive', checked)}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) {
+                                      // Exclusive queue cannot be durable
+                                      updateQueue(index, 'durable', false);
+                                    }
+                                    updateQueue(index, 'exclusive', checked);
+                                  }}
                                 />
                                 <Label className="text-xs">Exclusive</Label>
                               </div>
@@ -480,11 +547,20 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Exchange Name</Label>
-                      <Input placeholder="my-exchange" />
+                      <Input 
+                        placeholder="my-exchange" 
+                        value={newExchange.name}
+                        onChange={(e) => setNewExchange({ ...newExchange, name: e.target.value })}
+                      />
                     </div>
                     <div className="space-y-2">
                       <Label>Type</Label>
-                      <Select defaultValue="direct">
+                      <Select 
+                        value={newExchange.type}
+                        onValueChange={(value: 'direct' | 'topic' | 'fanout' | 'headers') => 
+                          setNewExchange({ ...newExchange, type: value })
+                        }
+                      >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
@@ -499,7 +575,10 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   </div>
                   <div className="flex gap-2">
                     <Button onClick={addExchange}>Create Exchange</Button>
-                    <Button variant="outline" onClick={() => setShowCreateExchange(false)}>Cancel</Button>
+                    <Button variant="outline" onClick={() => {
+                      setShowCreateExchange(false);
+                      setNewExchange({ name: '', type: 'direct' });
+                    }}>Cancel</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -616,7 +695,10 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Source Exchange</Label>
-                      <Select>
+                      <Select 
+                        value={newBinding.source}
+                        onValueChange={(value) => setNewBinding({ ...newBinding, source: value })}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Select exchange" />
                         </SelectTrigger>
@@ -629,7 +711,10 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                     </div>
                     <div className="space-y-2">
                       <Label>Destination Queue</Label>
-                      <Select>
+                      <Select 
+                        value={newBinding.destination}
+                        onValueChange={(value) => setNewBinding({ ...newBinding, destination: value })}
+                      >
                         <SelectTrigger>
                           <SelectValue placeholder="Select queue" />
                         </SelectTrigger>
@@ -643,11 +728,18 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   </div>
                   <div className="space-y-2">
                     <Label>Routing Key</Label>
-                    <Input placeholder="routing.key" />
+                    <Input 
+                      placeholder="routing.key" 
+                      value={newBinding.routingKey}
+                      onChange={(e) => setNewBinding({ ...newBinding, routingKey: e.target.value })}
+                    />
                   </div>
                   <div className="flex gap-2">
                     <Button onClick={addBinding}>Create Binding</Button>
-                    <Button variant="outline" onClick={() => setShowCreateBinding(false)}>Cancel</Button>
+                    <Button variant="outline" onClick={() => {
+                      setShowCreateBinding(false);
+                      setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '' });
+                    }}>Cancel</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -730,15 +822,28 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 <CardContent className="space-y-4">
                   <div className="space-y-2">
                     <Label>Policy Name</Label>
-                    <Input placeholder="ha-policy" />
+                    <Input 
+                      placeholder="ha-policy" 
+                      value={newPolicy.name}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, name: e.target.value })}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>Pattern</Label>
-                    <Input placeholder=".*" />
+                    <Input 
+                      placeholder=".*" 
+                      value={newPolicy.pattern}
+                      onChange={(e) => setNewPolicy({ ...newPolicy, pattern: e.target.value })}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label>Apply To</Label>
-                    <Select defaultValue="all">
+                    <Select 
+                      value={newPolicy.applyTo}
+                      onValueChange={(value: 'queues' | 'exchanges' | 'all') => 
+                        setNewPolicy({ ...newPolicy, applyTo: value })
+                      }
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
@@ -751,7 +856,10 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   </div>
                   <div className="flex gap-2">
                     <Button onClick={addPolicy}>Create Policy</Button>
-                    <Button variant="outline" onClick={() => setShowCreatePolicy(false)}>Cancel</Button>
+                    <Button variant="outline" onClick={() => {
+                      setShowCreatePolicy(false);
+                      setNewPolicy({ name: '', pattern: '.*', applyTo: 'all' });
+                    }}>Cancel</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -780,17 +888,69 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   <div className="space-y-3">
                     {policies.map((policy, index) => (
                       <Card key={index} className="p-3">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-semibold">{policy.name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              Pattern: {policy.pattern} • Apply to: {policy.applyTo} • Priority: {policy.priority}
+                        {editingPolicyIndex === index ? (
+                          <div className="space-y-4">
+                            <div className="space-y-2">
+                              <Label>Policy Name</Label>
+                              <Input
+                                value={policy.name}
+                                onChange={(e) => updatePolicy(index, 'name', e.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Pattern</Label>
+                              <Input
+                                value={policy.pattern}
+                                onChange={(e) => updatePolicy(index, 'pattern', e.target.value)}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Apply To</Label>
+                              <Select
+                                value={policy.applyTo}
+                                onValueChange={(value: 'queues' | 'exchanges' | 'all') => updatePolicy(index, 'applyTo', value)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="queues">Queues</SelectItem>
+                                  <SelectItem value="exchanges">Exchanges</SelectItem>
+                                  <SelectItem value="all">All</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Priority</Label>
+                              <Input
+                                type="number"
+                                value={policy.priority}
+                                onChange={(e) => updatePolicy(index, 'priority', parseInt(e.target.value) || 0)}
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="sm" onClick={() => setEditingPolicyIndex(null)}>Save</Button>
+                              <Button size="sm" variant="outline" onClick={() => setEditingPolicyIndex(null)}>Cancel</Button>
                             </div>
                           </div>
-                          <Button size="icon" variant="ghost" onClick={() => removePolicy(index)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        ) : (
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <div className="font-semibold">{policy.name}</div>
+                              <div className="text-xs text-muted-foreground">
+                                Pattern: {policy.pattern} • Apply to: {policy.applyTo} • Priority: {policy.priority}
+                              </div>
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="icon" variant="ghost" onClick={() => setEditingPolicyIndex(index)}>
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => removePolicy(index)}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </Card>
                     ))}
                   </div>
@@ -907,30 +1067,11 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                     placeholder="/"
               />
             </div>
-            <div className="flex gap-2 pt-4 border-t">
-              <Button
-                onClick={() => {
-                  if (validateConnectionFields()) {
-                    showSuccess('Параметры подключения сохранены');
-                  } else {
-                    showError('Пожалуйста, заполните все обязательные поля');
-                  }
-                }}
-              >
-                Сохранить настройки
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  if (validateConnectionFields()) {
-                    showSuccess('Параметры подключения валидны');
-                  } else {
-                    showError('Пожалуйста, заполните все обязательные поля');
-                  }
-                }}
-              >
-                Проверить подключение
-              </Button>
+            <div className="pt-4 border-t">
+              <p className="text-sm text-muted-foreground">
+                Параметры подключения сохраняются автоматически при изменении. 
+                Эти настройки используются для симуляции работы RabbitMQ брокера.
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -944,26 +1085,52 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 <CardDescription>Real-time queue statistics and metrics</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {queues.map((queue, index) => (
-                    <div key={index} className="p-4 border border-border rounded-lg">
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="font-semibold">{queue.name}</div>
-                        <Badge variant="secondary">{queue.messages || 0} messages</Badge>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Ready Messages</span>
-                          <span className="font-semibold">{(queue.ready || 0).toLocaleString()}</span>
+                {queues.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Activity className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>Нет очередей для мониторинга</p>
+                    <p className="text-xs mt-2">Создайте очереди во вкладке "Queues" для отслеживания метрик</p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {queues.map((queue, index) => (
+                      <div key={index} className="p-4 border border-border rounded-lg">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="font-semibold">{queue.name}</div>
+                          <Badge variant="secondary">{queue.messages || 0} messages</Badge>
                         </div>
-                        <Progress value={queue.messages ? ((queue.ready || 0) / queue.messages) * 100 : 0} className="h-2" />
-                        <div className="flex justify-between text-sm mt-2">
-                          <span className="text-muted-foreground">Consumers</span>
-                          <span className="font-semibold">{queue.consumers || 0}</span>
+                        <div className="space-y-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Ready Messages</span>
+                            <span className="font-semibold">{(queue.ready || 0).toLocaleString()}</span>
+                          </div>
+                          <Progress value={queue.messages ? ((queue.ready || 0) / queue.messages) * 100 : 0} className="h-2" />
+                          <div className="flex justify-between text-sm mt-2">
+                            <span className="text-muted-foreground">Unacked Messages</span>
+                            <span className="font-semibold">{(queue.unacked || 0).toLocaleString()}</span>
+                          </div>
+                          <div className="flex justify-between text-sm mt-2">
+                            <span className="text-muted-foreground">Consumers</span>
+                            <span className="font-semibold">{queue.consumers || 0}</span>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
+                )}
+                <div className="mt-6 p-4 bg-muted/50 rounded-lg border border-border">
+                  <h4 className="font-semibold mb-2 flex items-center gap-2">
+                    <Activity className="h-4 w-4" />
+                    Как проверить мониторинг
+                  </h4>
+                  <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
+                    <li>Запустите симуляцию (кнопка Play в панели управления)</li>
+                    <li>Подключите компоненты к RabbitMQ через connections</li>
+                    <li>Метрики обновляются автоматически во время симуляции</li>
+                    <li>Обратите внимание на значения Ready, Unacked и Consumers</li>
+                    <li>Если очередь растет (Ready увеличивается), проверьте количество Consumers</li>
+                    <li>Unacked показывает сообщения в обработке у consumers</li>
+                  </ul>
                 </div>
               </CardContent>
             </Card>

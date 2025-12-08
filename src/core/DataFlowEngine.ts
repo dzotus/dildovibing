@@ -1,4 +1,5 @@
 import { CanvasNode, CanvasConnection, ComponentConfig } from '@/types';
+import { emulationEngine } from './EmulationEngine';
 
 /**
  * Data message format for transmission between components
@@ -689,10 +690,61 @@ export class DataFlowEngine {
    * Create handler for message brokers
    */
   private createMessageBrokerHandler(type: string): ComponentDataHandler {
+    if (type === 'rabbitmq') {
+      return {
+        processData: (node, message, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getRabbitMQRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract exchange and routing key from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const exchange = messagingConfig.exchange || 'amq.topic';
+          const routingKey = messagingConfig.routingKey || message.metadata?.routingKey || 'default';
+          const headers = message.metadata?.headers;
+          const priority = message.metadata?.priority;
+          
+          // Route message through exchange
+          const targetQueues = routingEngine.routeMessage(
+            exchange,
+            routingKey,
+            message.payload,
+            message.size,
+            headers,
+            priority
+          );
+          
+          if (targetQueues.length > 0) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              routedQueues: targetQueues,
+              exchange,
+              routingKey,
+            };
+          } else {
+            // No queues matched, message is lost (or could go to DLX)
+            message.status = 'failed';
+            message.error = `No queues bound to exchange '${exchange}' with routing key '${routingKey}'`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
+    // Default handler for other message brokers (Kafka, etc.)
     return {
       processData: (node, message, config) => {
         // Message broker just passes through messages
-        // Could add queue/topic routing here
         message.status = 'delivered';
         return message;
       },
