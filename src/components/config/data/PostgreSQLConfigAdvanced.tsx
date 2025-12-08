@@ -15,6 +15,7 @@ import { usePortValidation } from '@/hooks/usePortValidation';
 import { AlertCircle } from 'lucide-react';
 import { showSuccess, showError } from '@/utils/toast';
 import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
+import { PageTitle, Description } from '@/components/ui/typography';
 import { 
   Database, 
   Table, 
@@ -293,10 +294,10 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
               <Database className="h-6 w-6 text-blue-500" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-foreground">PostgreSQL</h2>
-              <p className="text-sm text-muted-foreground mt-1">
+              <PageTitle>PostgreSQL</PageTitle>
+              <Description>
                 Database: {database} @ {host}:{port}
-              </p>
+              </Description>
             </div>
           </div>
           <div className="flex items-center gap-2">

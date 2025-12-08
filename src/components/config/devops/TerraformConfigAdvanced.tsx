@@ -201,7 +201,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
 
         {/* Enhanced Stats with Visual Indicators */}
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Workspaces</CardTitle>
@@ -215,7 +215,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Active Runs</CardTitle>
@@ -229,7 +229,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Completed</CardTitle>
@@ -243,7 +243,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">State Versions</CardTitle>
@@ -296,7 +296,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {workspaces.map((workspace) => (
-                    <Card key={workspace.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={workspace.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -428,10 +428,10 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                       <Card
                         key={run.id}
                         className={`border-l-4 hover:shadow-md transition-all ${
-                          run.status === 'applied' ? 'border-l-green-500 bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10' :
-                          run.status === 'errored' ? 'border-l-red-500 bg-gradient-to-r from-red-50/50 to-transparent dark:from-red-950/10' :
-                          run.status === 'canceled' ? 'border-l-gray-500 bg-gradient-to-r from-gray-50/50 to-transparent dark:from-gray-950/10' :
-                          ['pending', 'planning', 'applying'].includes(run.status) ? 'border-l-blue-500 bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10' : 'border-l-yellow-500 bg-gradient-to-r from-yellow-50/50 to-transparent dark:from-yellow-950/10'
+                          run.status === 'applied' ? 'border-l-green-500 bg-card' :
+                          run.status === 'errored' ? 'border-l-red-500 bg-card' :
+                          run.status === 'canceled' ? 'border-l-gray-500 bg-card' :
+                          ['pending', 'planning', 'applying'].includes(run.status) ? 'border-l-blue-500 bg-card' : 'border-l-yellow-500 bg-card'
                         }`}
                       >
                         <CardContent className="pt-4">

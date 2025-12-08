@@ -248,7 +248,7 @@ export function RPABotConfigAdvanced({ componentId }: RPABotConfigProps) {
                                   <Badge variant="outline">{bot.executions} executions</Badge>
                                 )}
                                 {bot.successRate && (
-                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                     {bot.successRate.toFixed(1)}% success
                                   </Badge>
                                 )}

@@ -253,7 +253,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-5 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -266,7 +266,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Responses</CardTitle>
@@ -279,7 +279,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Connections</CardTitle>
@@ -292,7 +292,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Bytes In</CardTitle>
@@ -306,7 +306,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-orange-500 bg-gradient-to-br from-orange-50 to-white dark:from-orange-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-orange-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Bytes Out</CardTitle>
@@ -359,7 +359,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {backends.map((backend) => (
-                    <Card key={backend.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={backend.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -371,10 +371,10 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
                               <div className="flex items-center gap-2 mt-2">
                                 <Badge variant="outline">{backend.mode.toUpperCase()}</Badge>
                                 <Badge variant="outline">{backend.balance}</Badge>
-                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                   {backend.servers.length} servers
                                 </Badge>
-                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                   {backend.servers.filter((s) => s.status === 'up').length} up
                                 </Badge>
                               </div>
@@ -521,7 +521,7 @@ export function HAProxyConfigAdvanced({ componentId }: HAProxyConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {frontends.map((frontend) => (
-                    <Card key={frontend.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-gradient-to-r from-purple-50/50 to-transparent dark:from-purple-950/10">
+                    <Card key={frontend.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">

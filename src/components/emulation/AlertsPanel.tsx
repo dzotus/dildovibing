@@ -104,7 +104,7 @@ export function AlertsPanel() {
                                 ? 'outline'
                                 : 'secondary'
                             }
-                            className="text-[10px]"
+                            className="text-xs"
                           >
                             {alert.type}
                           </Badge>
@@ -120,7 +120,7 @@ export function AlertsPanel() {
                             View: {alert.nodeLabel}
                           </Button>
                         )}
-                        <div className="text-[10px] text-muted-foreground mt-1">
+                        <div className="text-xs text-muted-foreground mt-1">
                           {new Date(alert.timestamp).toLocaleTimeString()}
                         </div>
                       </div>

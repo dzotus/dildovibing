@@ -161,7 +161,7 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
     updateConfig({ distributions: distributions.filter((d) => d.id !== id) });
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusBgColor = (status: string) => {
     switch (status) {
       case 'deployed':
       case 'active':
@@ -172,7 +172,22 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
       case 'inactive':
         return 'bg-red-500';
       default:
-        return 'bg-gray-500';
+        return 'bg-muted';
+    }
+  };
+
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case 'deployed':
+      case 'active':
+        return 'bg-green-500 text-white';
+      case 'deploying':
+        return 'bg-yellow-500 text-white';
+      case 'failed':
+      case 'inactive':
+        return 'bg-red-500 text-white';
+      default:
+        return 'bg-muted text-foreground';
     }
   };
 
@@ -205,7 +220,7 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Distributions</CardTitle>
@@ -219,7 +234,7 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Edge Locations</CardTitle>
@@ -233,7 +248,7 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -246,7 +261,7 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Cache Hit Rate</CardTitle>
@@ -294,27 +309,27 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {distributions.map((dist) => (
-                    <Card key={dist.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={dist.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
-                            <div className={`p-2 rounded-lg ${getStatusColor(dist.status)}/20`}>
+                            <div className={`p-2 rounded-lg ${getStatusBgColor(dist.status)}/20`}>
                               <Globe className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                             </div>
                             <div>
                               <CardTitle className="text-lg font-semibold">{dist.domain}</CardTitle>
                               <div className="flex items-center gap-2 mt-2">
-                                <Badge variant="outline" className={getStatusColor(dist.status)}>
+                                <Badge variant="outline" className={`${getStatusBadgeColor(dist.status)} border-0`}>
                                   {dist.status}
                                 </Badge>
                                 <Badge variant="outline" className="font-mono text-xs">{dist.origin}</Badge>
                                 {dist.edgeLocations && (
-                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                     {dist.edgeLocations} edges
                                   </Badge>
                                 )}
                                 {dist.cacheHitRate && (
-                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20">
+                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300">
                                     {dist.cacheHitRate.toFixed(1)}% cache
                                   </Badge>
                                 )}
@@ -363,16 +378,16 @@ export function CDNConfigAdvanced({ componentId }: CDNConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {edgeLocations.map((location) => (
-                    <Card key={location.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={location.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
-                          <div className={`p-2 rounded-lg ${getStatusColor(location.status)}/20`}>
+                          <div className={`p-2 rounded-lg ${getStatusBgColor(location.status)}/20`}>
                             <MapPin className="h-5 w-5 text-green-600 dark:text-green-400" />
                           </div>
                           <div>
                             <CardTitle className="text-lg font-semibold">{location.city}</CardTitle>
                             <div className="flex items-center gap-2 mt-2">
-                              <Badge variant="outline" className={getStatusColor(location.status)}>
+                              <Badge variant="outline" className={`${getStatusBadgeColor(location.status)} border-0`}>
                                 {location.status}
                               </Badge>
                               <Badge variant="outline">{location.region}</Badge>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, memo, useMemo } from 'react';
+import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useTabStore } from '@/store/useTabStore';
 import { useEmulationStore } from '@/store/useEmulationStore';
@@ -18,7 +18,7 @@ import { useNodeRefs } from '@/contexts/NodeRefsContext';
 
 interface CanvasNodeProps {
   node: CanvasNodeType;
-  onConnectionStart?: () => void;
+  onConnectionStart?: (portIndex?: number) => void;
   onConnectionEnd?: (portIndex?: number) => void;
   isConnecting?: boolean;
   onContextMenu?: (x: number, y: number) => void;
@@ -274,23 +274,21 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
         
         if (selectedNodes.length > 1 && hasInitialPositions) {
           // Multiple nodes selected - move all of them
-          const updates = selectedNodes
-            .map(selectedNode => {
-              const initialPos = selectedNodesInitialPositionsRef.current[selectedNode.id];
-              if (initialPos) {
-                return {
-                  id: selectedNode.id,
-                  updates: {
-                    position: {
-                      x: initialPos.x + deltaX,
-                      y: initialPos.y + deltaY,
-                    },
+          const updates: Array<{ id: string; updates: Partial<CanvasNodeType> }> = [];
+          selectedNodes.forEach(selectedNode => {
+            const initialPos = selectedNodesInitialPositionsRef.current[selectedNode.id];
+            if (initialPos) {
+              updates.push({
+                id: selectedNode.id,
+                updates: {
+                  position: {
+                    x: initialPos.x + deltaX,
+                    y: initialPos.y + deltaY,
                   },
-                };
-              }
-              return null;
-            })
-            .filter((update): update is { id: string; updates: Partial<CanvasNodeType> } => update !== null);
+                },
+              });
+            }
+          });
           
           if (updates.length > 0) {
             updateNodes(updates, true);
@@ -498,9 +496,9 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
     toast.success('Sent backward');
   };
 
-  const handleConnectionPointMouseDown = (e: React.MouseEvent) => {
+  const handleConnectionPointMouseDown = (e: React.MouseEvent, portIndex: number) => {
     e.stopPropagation();
-    onConnectionStart?.();
+    onConnectionStart?.(portIndex);
   };
 
   const handleConnectionPointMouseUp = (e: React.MouseEvent) => {
@@ -510,16 +508,32 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
     }
   };
 
+  // Helper function to get node dimensions from DOM
+  const getNodeDimensions = useCallback((): { width: number; height: number } => {
+    if (!nodeElementRef.current) {
+      return { width: 140, height: 100 };
+    }
+    const innerElement = nodeElementRef.current.querySelector('.bg-card') as HTMLElement | null;
+    const targetElement = innerElement || nodeElementRef.current;
+    const rect = targetElement.getBoundingClientRect();
+    return {
+      width: rect.width / zoom,
+      height: rect.height / zoom,
+    };
+  }, [zoom]);
+
   // Allow connection to complete when mouse is released anywhere on the node
   const handleNodeMouseUp = (e: React.MouseEvent) => {
     if (isConnecting) {
       e.stopPropagation();
+      // Get real node dimensions
+      const dims = getNodeDimensions();
       // Find nearest connection point to mouse position
       const connectionPoints = getConnectionPoints(
         node.position.x,
         node.position.y,
-        140,
-        100,
+        dims.width,
+        dims.height,
         16
       );
       const canvasElement = document.querySelector('.flex-1.overflow-hidden.relative') as HTMLElement;
@@ -604,11 +618,22 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
 
           {/* Connection points - visible on hover or when connecting */}
           {(isHovered || isConnecting) && (() => {
+            // Get real node dimensions from DOM
+            const dims = nodeElementRef.current ? (() => {
+              const innerElement = nodeElementRef.current.querySelector('.bg-card') as HTMLElement | null;
+              const targetElement = innerElement || nodeElementRef.current;
+              const rect = targetElement.getBoundingClientRect();
+              return {
+                width: rect.width / zoom,
+                height: rect.height / zoom,
+              };
+            })() : { width: 140, height: 100 };
+            
             const connectionPoints = getConnectionPoints(
               node.position.x,
               node.position.y,
-              140,
-              100,
+              dims.width,
+              dims.height,
               16
             );
             
@@ -628,7 +653,7 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
                       }}
                       onMouseDown={(e) => {
                         e.stopPropagation();
-                        handleConnectionPointMouseDown(e);
+                        handleConnectionPointMouseDown(e, index);
                       }}
                       onMouseUp={(e) => {
                         e.stopPropagation();

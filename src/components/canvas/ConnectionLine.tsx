@@ -1,11 +1,13 @@
 import { CanvasConnection, CanvasNode } from '@/types';
-import { useState, memo, useMemo } from 'react';
+import { useState, memo, useMemo, useEffect } from 'react';
 import { useEmulationStore } from '@/store/useEmulationStore';
 import { useDataFlowStore } from '@/store/useDataFlowStore';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { useShallow } from 'zustand/react/shallow';
 import { useIsPathHighlighted } from './DataPathVisualization';
 import { getConnectionPoints } from '@/utils/connectionPoints';
+import { useNodeRefs } from '@/contexts/NodeRefsContext';
+import { useResizeObserver } from '@/contexts/ResizeObserverContext';
 
 interface ConnectionLineProps {
   connection: CanvasConnection;
@@ -65,29 +67,112 @@ function ConnectionLineComponent({
     [connections, connection.target, connection.source]
   );
 
+  const { getNodeRef } = useNodeRefs();
+  const { observe } = useResizeObserver();
+  const [nodeDimensions, setNodeDimensions] = useState<{
+    source: { width: number; height: number };
+    target: { width: number; height: number };
+  }>(() => {
+    const getNodeDimensions = (nodeId: string): { width: number; height: number } => {
+      const nodeElement = getNodeRef(nodeId);
+      if (!nodeElement) {
+        return { width: 140, height: 100 };
+      }
+      const innerElement = nodeElement.querySelector('.bg-card') as HTMLElement | null;
+      const targetElement = innerElement || nodeElement;
+      const rect = targetElement.getBoundingClientRect();
+      return {
+        width: rect.width / zoom,
+        height: rect.height / zoom,
+      };
+    };
+    
+    return {
+      source: getNodeDimensions(sourceNode.id),
+      target: getNodeDimensions(targetNode.id),
+    };
+  });
+
+  // Update dimensions when nodes resize
+  useEffect(() => {
+    const updateDimensions = () => {
+      const getNodeDimensions = (nodeId: string): { width: number; height: number } => {
+        const nodeElement = getNodeRef(nodeId);
+        if (!nodeElement) {
+          return { width: 140, height: 100 };
+        }
+        const innerElement = nodeElement.querySelector('.bg-card') as HTMLElement | null;
+        const targetElement = innerElement || nodeElement;
+        const rect = targetElement.getBoundingClientRect();
+        return {
+          width: rect.width / zoom,
+          height: rect.height / zoom,
+        };
+      };
+      
+      setNodeDimensions({
+        source: getNodeDimensions(sourceNode.id),
+        target: getNodeDimensions(targetNode.id),
+      });
+    };
+
+    // Initial update
+    updateDimensions();
+
+    // Observe both nodes for size changes
+    const sourceElement = getNodeRef(sourceNode.id);
+    const targetElement = getNodeRef(targetNode.id);
+    
+    const sourceInnerElement = sourceElement?.querySelector('.bg-card') as HTMLElement | null;
+    const targetInnerElement = targetElement?.querySelector('.bg-card') as HTMLElement | null;
+    
+    const sourceTarget = sourceInnerElement || sourceElement;
+    const targetTarget = targetInnerElement || targetElement;
+    
+    const unobserveCallbacks: Array<() => void> = [];
+    
+    if (sourceTarget) {
+      const unobserve = observe(sourceTarget, updateDimensions);
+      unobserveCallbacks.push(unobserve);
+    }
+    
+    if (targetTarget) {
+      const unobserve = observe(targetTarget, updateDimensions);
+      unobserveCallbacks.push(unobserve);
+    }
+
+    return () => {
+      unobserveCallbacks.forEach((unobserve) => unobserve());
+    };
+  }, [sourceNode.id, targetNode.id, zoom, getNodeRef, observe]);
+
   // Node dimensions
-  const nodeWidth = 140;
-  const nodeHeight = 100; // approximate height with padding
-  const nodeHalfWidth = nodeWidth / 2;
-  const nodeHalfHeight = nodeHeight / 2;
+  const sourceWidth = nodeDimensions.source.width;
+  const sourceHeight = nodeDimensions.source.height;
+  const targetWidth = nodeDimensions.target.width;
+  const targetHeight = nodeDimensions.target.height;
+  const sourceHalfWidth = sourceWidth / 2;
+  const sourceHalfHeight = sourceHeight / 2;
+  const targetHalfWidth = targetWidth / 2;
+  const targetHalfHeight = targetHeight / 2;
 
   // Use connection points if available, otherwise fall back to edge intersection
   let sourceX: number, sourceY: number, targetX: number, targetY: number;
   
   if (connection.sourcePort !== undefined && connection.targetPort !== undefined) {
-    // Use saved connection points
+    // Use saved connection points with real dimensions
     const sourcePoints = getConnectionPoints(
       sourceNode.position.x,
       sourceNode.position.y,
-      nodeWidth,
-      nodeHeight,
+      sourceWidth,
+      sourceHeight,
       16
     );
     const targetPoints = getConnectionPoints(
       targetNode.position.x,
       targetNode.position.y,
-      nodeWidth,
-      nodeHeight,
+      targetWidth,
+      targetHeight,
       16
     );
     
@@ -100,10 +185,10 @@ function ConnectionLineComponent({
     targetY = targetPoint.y;
   } else {
     // Fallback to old edge intersection logic for backward compatibility
-    const sourceCenterX = sourceNode.position.x + nodeHalfWidth;
-    const sourceCenterY = sourceNode.position.y + nodeHalfHeight;
-    const targetCenterX = targetNode.position.x + nodeHalfWidth;
-    const targetCenterY = targetNode.position.y + nodeHalfHeight;
+    const sourceCenterX = sourceNode.position.x + sourceHalfWidth;
+    const sourceCenterY = sourceNode.position.y + sourceHalfHeight;
+    const targetCenterX = targetNode.position.x + targetHalfWidth;
+    const targetCenterY = targetNode.position.y + targetHalfHeight;
 
     // Calculate angle between centers
     const angle = Math.atan2(targetCenterY - sourceCenterY, targetCenterX - sourceCenterX);
@@ -111,7 +196,9 @@ function ConnectionLineComponent({
     // Calculate intersection points with node edges
     const getEdgePoint = (centerX: number, centerY: number, angle: number, isSource: boolean) => {
       const absAngle = Math.abs(angle);
-      const edgeAngle = Math.atan2(nodeHalfHeight, nodeHalfWidth);
+      const halfWidth = isSource ? sourceHalfWidth : targetHalfWidth;
+      const halfHeight = isSource ? sourceHalfHeight : targetHalfHeight;
+      const edgeAngle = Math.atan2(halfHeight, halfWidth);
       
       let x, y;
       
@@ -119,13 +206,13 @@ function ConnectionLineComponent({
       if (absAngle < edgeAngle || absAngle > Math.PI - edgeAngle) {
         // Intersects left or right edge
         const sign = isSource ? 1 : -1;
-        x = centerX + sign * nodeHalfWidth * Math.sign(Math.cos(angle));
-        y = centerY + sign * nodeHalfWidth * Math.tan(angle) * Math.sign(Math.cos(angle));
+        x = centerX + sign * halfWidth * Math.sign(Math.cos(angle));
+        y = centerY + sign * halfWidth * Math.tan(angle) * Math.sign(Math.cos(angle));
       } else {
         // Intersects top or bottom edge
         const sign = isSource ? 1 : -1;
-        x = centerX + sign * nodeHalfHeight / Math.tan(angle) * Math.sign(Math.sin(angle));
-        y = centerY + sign * nodeHalfHeight * Math.sign(Math.sin(angle));
+        x = centerX + sign * halfHeight / Math.tan(angle) * Math.sign(Math.sin(angle));
+        y = centerY + sign * halfHeight * Math.sign(Math.sin(angle));
       }
       
       return { x, y };

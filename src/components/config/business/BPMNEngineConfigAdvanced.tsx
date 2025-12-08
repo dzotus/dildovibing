@@ -248,7 +248,7 @@ export function BPMNEngineConfigAdvanced({ componentId }: BPMNEngineConfigProps)
                               <div className="flex items-center gap-2 mt-2">
                                 <Badge variant="outline" className="font-mono text-xs">{proc.key}</Badge>
                                 <Badge variant="outline">v{proc.version}</Badge>
-                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                   {proc.activeInstances || 0} active
                                 </Badge>
                                 <Badge variant="outline">

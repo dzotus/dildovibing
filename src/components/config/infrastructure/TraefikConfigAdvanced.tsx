@@ -229,7 +229,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Routers</CardTitle>
@@ -243,7 +243,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Services</CardTitle>
@@ -257,7 +257,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -270,7 +270,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Responses</CardTitle>
@@ -322,7 +322,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {routers.map((router) => (
-                    <Card key={router.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={router.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -441,7 +441,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {services.map((service) => (
-                    <Card key={service.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={service.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -453,7 +453,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                               <div className="flex items-center gap-2 mt-2">
                                 <Badge variant="outline">{service.loadBalancer || 'roundrobin'}</Badge>
                                 {service.servers && (
-                                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20">
+                                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
                                     {service.servers.length} servers
                                   </Badge>
                                 )}
@@ -558,7 +558,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {middlewares.map((middleware) => (
-                    <Card key={middleware.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-gradient-to-r from-purple-50/50 to-transparent dark:from-purple-950/10">
+                    <Card key={middleware.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">

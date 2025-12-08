@@ -21,7 +21,8 @@ import {
   Network,
   CheckCircle,
   Zap,
-  Lock
+  Lock,
+  Clock
 } from 'lucide-react';
 
 interface VPNConfigProps {
@@ -185,7 +186,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Connections</CardTitle>
@@ -199,7 +200,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Tunnels</CardTitle>
@@ -213,7 +214,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Data Transferred</CardTitle>
@@ -227,7 +228,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Encryption</CardTitle>
@@ -265,7 +266,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {connections.map((conn) => (
-                    <Card key={conn.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={conn.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -326,7 +327,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {tunnels.map((tunnel) => (
-                    <Card key={tunnel.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={tunnel.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
                           <div className={`p-2 rounded-lg ${getStatusColor(tunnel.status)}/20`}>
@@ -341,7 +342,7 @@ export function VPNConfigAdvanced({ componentId }: VPNConfigProps) {
                               <Badge variant="outline">{tunnel.type}</Badge>
                               <Badge variant="outline" className="font-mono text-xs">{tunnel.remoteEndpoint}</Badge>
                               {tunnel.connections && (
-                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20">
+                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
                                   {tunnel.connections} connections
                                 </Badge>
                               )}

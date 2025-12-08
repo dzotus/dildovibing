@@ -178,7 +178,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Services</CardTitle>
@@ -192,7 +192,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Policies</CardTitle>
@@ -206,7 +206,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -219,7 +219,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Avg Latency</CardTitle>
@@ -260,7 +260,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               <CardContent>
                 <div className="space-y-4">
                   {services.map((service) => (
-                    <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30">
@@ -323,7 +323,7 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
               <CardContent>
                 <div className="space-y-4">
                   {policies.map((policy) => (
-                    <Card key={policy.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={policy.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">

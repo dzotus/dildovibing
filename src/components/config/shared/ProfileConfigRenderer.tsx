@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Plus, Trash2, ExternalLink } from 'lucide-react';
 import { ComponentProfile, ConfigField, ConfigFieldValue } from './types';
 import { deepClone } from '@/lib/deepClone';
+import { PageTitle, SectionTitle, Description, Text } from '@/components/ui/typography';
 
 interface ProfileConfigRendererProps {
   componentId: string;
@@ -200,11 +201,11 @@ export function ProfileConfigRenderer({
       <div className="p-6 space-y-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase text-muted-foreground tracking-wide">
+            <Text size="small" muted className="uppercase tracking-wide">
               {profile.badge || 'Component'}
-            </p>
-            <h2 className="text-2xl font-bold text-foreground">{profile.title}</h2>
-            <p className="text-sm text-muted-foreground mt-1">{profile.description}</p>
+            </Text>
+            <PageTitle>{profile.title}</PageTitle>
+            <Description>{profile.description}</Description>
           </div>
           {profile.docsUrl && (
             <Button variant="ghost" size="sm" asChild>
@@ -221,9 +222,9 @@ export function ProfileConfigRenderer({
         {profile.sections.map((section, sectionIndex) => (
           <div key={section.id} className="space-y-4">
             <div>
-              <h3 className="text-lg font-semibold text-foreground">{section.title}</h3>
+              <SectionTitle>{section.title}</SectionTitle>
               {section.description && (
-                <p className="text-sm text-muted-foreground">{section.description}</p>
+                <Description>{section.description}</Description>
               )}
             </div>
             <div className="grid gap-4">

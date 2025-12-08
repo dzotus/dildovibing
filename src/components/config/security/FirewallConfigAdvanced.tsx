@@ -217,7 +217,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Rules</CardTitle>
@@ -231,7 +231,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Allowed</CardTitle>
@@ -245,7 +245,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-red-500 bg-gradient-to-br from-red-50 to-white dark:from-red-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-red-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Blocked</CardTitle>
@@ -259,7 +259,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Hits</CardTitle>
@@ -309,7 +309,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {rules.map((rule) => (
-                    <Card key={rule.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={rule.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -332,7 +332,7 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
                                 )}
                                 <Badge variant="outline">Priority: {rule.priority}</Badge>
                                 {rule.hits && (
-                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20">
+                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300">
                                     {rule.hits} hits
                                   </Badge>
                                 )}
@@ -388,8 +388,8 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
                 <div className="space-y-4">
                   {logs.map((log) => (
                     <Card key={log.id} className={`border-l-4 ${
-                      log.action === 'allowed' ? 'border-l-green-500 bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10' :
-                      'border-l-red-500 bg-gradient-to-r from-red-50/50 to-transparent dark:from-red-950/10'
+                      log.action === 'allowed' ? 'border-l-green-500 bg-card' :
+                      'border-l-red-500 bg-card'
                     } hover:shadow-md transition-shadow`}>
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">

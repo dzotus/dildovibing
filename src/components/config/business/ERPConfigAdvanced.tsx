@@ -239,7 +239,7 @@ export function ERPConfigAdvanced({ componentId }: ERPConfigProps) {
                                   <Building className="h-3 w-3 mr-1" />
                                   {order.customer}
                                 </Badge>
-                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                   ${order.total.toLocaleString()}
                                 </Badge>
                                 <Badge variant="outline">{order.items} items</Badge>

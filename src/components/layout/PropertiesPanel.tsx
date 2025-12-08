@@ -14,6 +14,7 @@ import { AlertsPanel } from '@/components/emulation/AlertsPanel';
 import { SystemStatsPanel } from '@/components/emulation/SystemStatsPanel';
 import { GroupPropertiesPanel } from '@/components/config/GroupPropertiesPanel';
 import { Settings2, X } from 'lucide-react';
+import { PanelTitle, Text } from '@/components/ui/typography';
 
 export function PropertiesPanel() {
   const { selectedNodeId, nodes, updateNode, selectNode, connections, updateConnection, selectedConnectionId, selectConnection, selectedGroupId, groups, selectGroup } = useCanvasStore();
@@ -25,24 +26,24 @@ export function PropertiesPanel() {
   // Render group properties
   if (selectedGroup) {
     return (
-      <div className="w-56 md:w-64 lg:w-72 h-full bg-card border-l border-border flex flex-col">
-        <div className="p-2 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
-            <h2 className="text-xs font-semibold text-foreground">Group Properties</h2>
+      <div className="w-60 h-full bg-card border-l border-border flex flex-col">
+        <div className="p-1.5 border-b border-border flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <Settings2 className="h-3 w-3 text-muted-foreground" />
+            <PanelTitle>Group Properties</PanelTitle>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-5 w-5"
             onClick={() => selectGroup(null)}
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3 w-3" />
           </Button>
         </div>
 
         <ScrollArea className="flex-1">
-          <div className="p-2">
+          <div className="p-1.5">
             <GroupPropertiesPanel group={selectedGroup} />
           </div>
         </ScrollArea>
@@ -52,20 +53,20 @@ export function PropertiesPanel() {
 
   if (!selectedNode && !selectedConnection) {
     return (
-      <div className="w-56 md:w-64 lg:w-72 h-full bg-card border-l border-border flex flex-col">
+      <div className="w-60 h-full bg-card border-l border-border flex flex-col">
         <Tabs defaultValue="stats" className="h-full flex flex-col">
-          <div className="p-1.5 border-b border-border">
+          <div className="p-1 border-b border-border">
             <TabsList className="grid w-full grid-cols-5 h-6 gap-0.5 p-0.5">
-              <TabsTrigger value="stats" className="text-[9px] px-0.5 py-0.5">Stats</TabsTrigger>
-              <TabsTrigger value="diagnostics" className="text-[9px] px-0.5 py-0.5">Diag</TabsTrigger>
-              <TabsTrigger value="alerts" className="text-[9px] px-0.5 py-0.5">Alerts</TabsTrigger>
-              <TabsTrigger value="filters" className="text-[9px] px-0.5 py-0.5">Filter</TabsTrigger>
-              <TabsTrigger value="properties" className="text-[9px] px-0.5 py-0.5">Props</TabsTrigger>
+              <TabsTrigger value="stats" className="text-xs px-1 py-0.5">Stats</TabsTrigger>
+              <TabsTrigger value="diagnostics" className="text-xs px-1 py-0.5">Diag</TabsTrigger>
+              <TabsTrigger value="alerts" className="text-xs px-1 py-0.5">Alerts</TabsTrigger>
+              <TabsTrigger value="filters" className="text-xs px-1 py-0.5">Filter</TabsTrigger>
+              <TabsTrigger value="properties" className="text-xs px-1 py-0.5">Groups</TabsTrigger>
             </TabsList>
           </div>
           <TabsContent value="stats" className="flex-1 m-0 p-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="p-2">
+              <div className="p-1.5">
                 <SystemStatsPanel />
               </div>
             </ScrollArea>
@@ -78,33 +79,33 @@ export function PropertiesPanel() {
           </TabsContent>
           <TabsContent value="filters" className="flex-1 m-0 p-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="p-2">
+              <div className="p-1.5">
                 <ProblemFilters />
               </div>
             </ScrollArea>
           </TabsContent>
           <TabsContent value="properties" className="flex-1 m-0 p-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="p-2 space-y-2">
+              <div className="p-1.5 space-y-1.5">
                 <div>
-                  <h3 className="text-xs font-semibold mb-1.5">Groups ({groups.length})</h3>
+                  <PanelTitle as="h4" className="mb-1">Groups ({groups.length})</PanelTitle>
                   {groups.length > 0 ? (
-                    <div className="space-y-1.5">
+                    <div className="space-y-1">
                       {groups.map((group) => (
                         <div
                           key={group.id}
-                          className="p-2 bg-secondary/50 rounded border border-border cursor-pointer hover:bg-secondary transition-colors"
+                          className="p-1.5 bg-secondary/50 rounded border border-border cursor-pointer hover:bg-secondary transition-colors"
                           onClick={() => selectGroup(group.id)}
                         >
                           <div className="flex items-center justify-between">
                             <div className="flex-1 min-w-0">
-                              <div className="text-xs font-medium truncate">{group.name}</div>
-                              <div className="text-[10px] text-muted-foreground">
+                              <Text size="small" className="font-medium truncate">{group.name}</Text>
+                              <Text size="micro" muted>
                                 {group.nodeIds.length} component{group.nodeIds.length !== 1 ? 's' : ''}
-                              </div>
+                              </Text>
                             </div>
                             <div
-                              className="w-3 h-3 rounded border-2 border-border flex-shrink-0 ml-1.5"
+                              className="w-2.5 h-2.5 rounded border-2 border-border flex-shrink-0 ml-1"
                               style={{ backgroundColor: group.color || 'hsl(var(--primary))' }}
                             />
                           </div>
@@ -112,9 +113,9 @@ export function PropertiesPanel() {
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-muted-foreground text-center py-3">
+                    <Text size="micro" muted className="text-center py-2">
                       No groups created yet
-                    </p>
+                    </Text>
                   )}
                 </div>
               </div>
@@ -128,24 +129,24 @@ export function PropertiesPanel() {
   // Render connection properties
   if (selectedConnection) {
     return (
-      <div className="w-56 md:w-64 lg:w-72 h-full bg-card border-l border-border flex flex-col">
-        <div className="p-2 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
-            <h2 className="text-xs font-semibold text-foreground">Connection</h2>
+      <div className="w-60 h-full bg-card border-l border-border flex flex-col">
+        <div className="p-1.5 border-b border-border flex items-center justify-between">
+          <div className="flex items-center gap-1">
+            <Settings2 className="h-3 w-3 text-muted-foreground" />
+            <PanelTitle>Connection</PanelTitle>
           </div>
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6"
+            className="h-5 w-5"
             onClick={() => selectConnection(null)}
           >
-            <X className="h-3.5 w-3.5" />
+            <X className="h-3 w-3" />
           </Button>
         </div>
 
         <ScrollArea className="flex-1">
-          <div className="p-2">
+          <div className="p-1.5">
             <ConnectionPropertiesPanel
               connection={selectedConnection}
               onUpdate={(id, updates) => updateConnection(id, updates)}
@@ -157,24 +158,24 @@ export function PropertiesPanel() {
   }
 
   return (
-    <div className="w-56 md:w-64 lg:w-72 h-full bg-card border-l border-border flex flex-col">
-      <div className="p-2 border-b border-border flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
-          <h2 className="text-xs font-semibold text-foreground">Properties</h2>
+    <div className="w-60 h-full bg-card border-l border-border flex flex-col">
+      <div className="p-1.5 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-1">
+          <Settings2 className="h-3 w-3 text-muted-foreground" />
+          <PanelTitle>Properties</PanelTitle>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6"
+          className="h-5 w-5"
           onClick={() => selectNode(null)}
         >
-          <X className="h-3.5 w-3.5" />
+          <X className="h-3 w-3" />
         </Button>
       </div>
 
       <ScrollArea className="flex-1">
-        <div className="p-2 space-y-2">
+        <div className="p-1.5 space-y-1.5">
           {/* Component State Control */}
           <ComponentStateControl 
             componentId={selectedNode!.id}
@@ -195,17 +196,17 @@ export function PropertiesPanel() {
                   data: { ...selectedNode!.data, label: e.target.value },
                 })
               }
-              className="mt-1 h-8 text-xs"
+              className="mt-0.5 h-7 text-xs"
             />
           </div>
 
           <Separator />
 
           <div>
-            <h3 className="text-xs font-semibold mb-1.5">Position</h3>
-            <div className="grid grid-cols-2 gap-2">
+            <PanelTitle as="h4" className="mb-1">Position</PanelTitle>
+            <div className="grid grid-cols-2 gap-1.5">
               <div>
-                <Label htmlFor="pos-x" className="text-[10px] text-muted-foreground">
+                <Label htmlFor="pos-x" className="text-xs text-muted-foreground">
                   X
                 </Label>
                 <Input
@@ -220,11 +221,11 @@ export function PropertiesPanel() {
                       },
                     })
                   }
-                  className="mt-1 h-8 text-xs"
+                  className="mt-0.5 h-7 text-xs"
                 />
               </div>
               <div>
-                <Label htmlFor="pos-y" className="text-[10px] text-muted-foreground">
+                <Label htmlFor="pos-y" className="text-xs text-muted-foreground">
                   Y
                 </Label>
                 <Input
@@ -239,7 +240,7 @@ export function PropertiesPanel() {
                       },
                     })
                   }
-                  className="mt-1 h-8 text-xs"
+                  className="mt-0.5 h-7 text-xs"
                 />
               </div>
             </div>
@@ -248,20 +249,20 @@ export function PropertiesPanel() {
           <Separator />
 
           <div>
-            <h3 className="text-xs font-semibold mb-1.5">Component Type</h3>
-            <div className="bg-secondary/50 rounded-md p-2 border border-border">
-              <p className="text-xs font-mono">{selectedNode!.type}</p>
+            <PanelTitle as="h4" className="mb-1">Component Type</PanelTitle>
+            <div className="bg-secondary/50 rounded-md p-1.5 border border-border">
+              <Text mono size="small">{selectedNode!.type}</Text>
             </div>
           </div>
 
           <Separator />
 
           <div>
-            <h3 className="text-xs font-semibold mb-1.5">Configuration</h3>
+            <PanelTitle as="h4" className="mb-1">Configuration</PanelTitle>
             <Button 
               variant="outline" 
               size="sm" 
-              className="w-full h-8 text-xs"
+              className="w-full h-7 text-xs"
               onClick={() => {
                 addTab({
                   title: `${selectedNode!.data.label} Config`,

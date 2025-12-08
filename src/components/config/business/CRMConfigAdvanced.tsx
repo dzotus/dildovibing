@@ -248,7 +248,7 @@ export function CRMConfigAdvanced({ componentId }: CRMConfigProps) {
                                   </Badge>
                                 )}
                                 {contact.value && (
-                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                     ${contact.value.toLocaleString()}
                                   </Badge>
                                 )}

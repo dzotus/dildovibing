@@ -142,7 +142,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-3 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Endpoints</CardTitle>
@@ -156,7 +156,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Deliveries</CardTitle>
@@ -170,7 +170,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Success Rate</CardTitle>
@@ -218,7 +218,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {endpoints.map((endpoint) => (
-                    <Card key={endpoint.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={endpoint.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -280,7 +280,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {deliveries.map((delivery) => (
-                    <Card key={delivery.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={delivery.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">

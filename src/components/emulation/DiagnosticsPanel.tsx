@@ -185,19 +185,19 @@ export function DiagnosticsPanel() {
   const getSeverityBadge = (severity: string) => {
     switch (severity) {
       case 'critical':
-        return <Badge variant="destructive">Critical</Badge>;
+        return <Badge variant="destructive" className="text-xs">Critical</Badge>;
       case 'warning':
-        return <Badge variant="outline" className="border-yellow-500 text-yellow-600">Warning</Badge>;
+        return <Badge variant="outline" className="border-yellow-500 text-yellow-600 text-xs">Warning</Badge>;
       default:
-        return <Badge variant="outline">Info</Badge>;
+        return <Badge variant="outline" className="text-xs">Info</Badge>;
     }
   };
 
   return (
     <Card className="h-full flex flex-col">
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm">Diagnostics</CardTitle>
-        <CardDescription className="text-xs">
+        <CardTitle className="text-sm font-semibold">Diagnostics</CardTitle>
+        <CardDescription className="text-xs text-muted-foreground">
           {filteredProblems.length} problem{filteredProblems.length !== 1 ? 's' : ''} detected
         </CardDescription>
       </CardHeader>
@@ -212,11 +212,11 @@ export function DiagnosticsPanel() {
               className="pl-8 h-8 text-xs"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-1">
             <Button
               variant={selectedSeverity === 'all' ? 'default' : 'outline'}
               size="sm"
-              className="h-7 text-xs"
+              className="h-7 text-xs px-2"
               onClick={() => setSelectedSeverity('all')}
             >
               All
@@ -224,7 +224,7 @@ export function DiagnosticsPanel() {
             <Button
               variant={selectedSeverity === 'critical' ? 'default' : 'outline'}
               size="sm"
-              className="h-7 text-xs"
+              className="h-7 text-xs px-2"
               onClick={() => setSelectedSeverity('critical')}
             >
               Critical
@@ -232,7 +232,7 @@ export function DiagnosticsPanel() {
             <Button
               variant={selectedSeverity === 'warning' ? 'default' : 'outline'}
               size="sm"
-              className="h-7 text-xs"
+              className="h-7 text-xs px-2"
               onClick={() => setSelectedSeverity('warning')}
             >
               Warning
@@ -241,10 +241,10 @@ export function DiagnosticsPanel() {
         </div>
 
         <ScrollArea className="flex-1">
-          <div className="p-4 space-y-3">
+          <div className="p-4 space-y-2">
             {filteredProblems.length === 0 ? (
-              <div className="text-center text-sm text-muted-foreground py-8">
-                <Activity className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              <div className="text-center text-sm text-muted-foreground py-6">
+                <Activity className="w-6 h-6 mx-auto mb-1.5 opacity-50" />
                 <p>No problems detected</p>
               </div>
             ) : (
@@ -256,11 +256,11 @@ export function DiagnosticsPanel() {
                     ? 'border-l-yellow-500' 
                     : 'border-l-blue-500'
                 }`}>
-                  <CardHeader className="pb-2">
+                  <CardHeader className="pb-2 p-3">
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5">
                         {getSeverityIcon(problem.severity)}
-                        <CardTitle className="text-sm">{problem.nodeLabel}</CardTitle>
+                        <CardTitle className="text-xs font-semibold">{problem.nodeLabel}</CardTitle>
                         {getSeverityBadge(problem.severity)}
                       </div>
                       <Button
@@ -274,12 +274,12 @@ export function DiagnosticsPanel() {
                           }
                         }}
                       >
-                        <ArrowRight className="w-4 h-4" />
+                        <ArrowRight className="w-3.5 h-3.5" />
                       </Button>
                     </div>
-                    <CardDescription className="text-xs mt-1">{problem.problem}</CardDescription>
+                    <CardDescription className="text-xs mt-0.5">{problem.problem}</CardDescription>
                   </CardHeader>
-                  <CardContent className="pt-0 space-y-3">
+                  <CardContent className="pt-0 p-3 space-y-2">
                     {/* Metrics */}
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       {problem.metrics.throughput !== undefined && (
@@ -311,7 +311,7 @@ export function DiagnosticsPanel() {
                     {/* Root Cause */}
                     {problem.rootCause && (
                       <div>
-                        <div className="text-xs font-semibold text-muted-foreground mb-1">Root Cause:</div>
+                        <div className="text-xs font-semibold text-muted-foreground mb-0.5">Root Cause:</div>
                         <div className="text-xs">{problem.rootCause}</div>
                       </div>
                     )}
@@ -319,8 +319,8 @@ export function DiagnosticsPanel() {
                     {/* Recommendations */}
                     {problem.recommendations.length > 0 && (
                       <div>
-                        <div className="text-xs font-semibold text-muted-foreground mb-1">Recommendations:</div>
-                        <ul className="text-xs space-y-1 list-disc list-inside">
+                        <div className="text-xs font-semibold text-muted-foreground mb-0.5">Recommendations:</div>
+                        <ul className="text-xs space-y-0.5 list-disc list-inside">
                           {problem.recommendations.map((rec, i) => (
                             <li key={i} className="text-muted-foreground">{rec}</li>
                           ))}

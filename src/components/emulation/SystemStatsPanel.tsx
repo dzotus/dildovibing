@@ -14,6 +14,7 @@ import {
   Database
 } from 'lucide-react';
 import { useMemo } from 'react';
+import { StatusText, Heading, Text } from '@/components/ui/typography';
 
 export function SystemStatsPanel() {
   const { nodes, connections } = useCanvasStore();
@@ -113,70 +114,70 @@ export function SystemStatsPanel() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2.5">
         {/* Overall metrics */}
-        <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase">Performance</h4>
-          <div className="grid grid-cols-2 gap-2">
-            <div className="p-2 bg-card border border-border rounded">
-              <div className="text-xs text-muted-foreground mb-1">Total Throughput</div>
-              <div className="text-lg font-bold text-green-500">
+        <div className="space-y-1.5">
+          <Heading level={5}>Performance</Heading>
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="p-1.5 bg-card border border-border rounded">
+              <Text size="micro" muted className="mb-0.5">Total Throughput</Text>
+              <StatusText status="success" size="base" weight="bold">
                 {stats.totalThroughput.toFixed(0)}
-                <span className="text-xs font-normal text-muted-foreground ml-1">ops/s</span>
-              </div>
+                <Text size="micro" muted className="ml-0.5">ops/s</Text>
+              </StatusText>
             </div>
-            <div className="p-2 bg-card border border-border rounded">
-              <div className="text-xs text-muted-foreground mb-1">Avg Latency</div>
-              <div className="text-lg font-bold text-yellow-500">
+            <div className="p-1.5 bg-card border border-border rounded">
+              <Text size="micro" muted className="mb-0.5">Avg Latency</Text>
+              <StatusText status="warning" size="base" weight="bold">
                 {stats.averageLatency.toFixed(0)}
-                <span className="text-xs font-normal text-muted-foreground ml-1">ms</span>
-              </div>
+                <Text size="micro" muted className="ml-0.5">ms</Text>
+              </StatusText>
             </div>
-            <div className="p-2 bg-card border border-border rounded">
-              <div className="text-xs text-muted-foreground mb-1">Error Rate</div>
-              <div className="text-lg font-bold text-red-500">
+            <div className="p-1.5 bg-card border border-border rounded">
+              <Text size="micro" muted className="mb-0.5">Error Rate</Text>
+              <StatusText status="error" size="base" weight="bold">
                 {(stats.totalErrorRate * 100).toFixed(2)}
-                <span className="text-xs font-normal text-muted-foreground ml-1">%</span>
-              </div>
+                <Text size="micro" muted className="ml-0.5">%</Text>
+              </StatusText>
             </div>
-            <div className="p-2 bg-card border border-border rounded">
-              <div className="text-xs text-muted-foreground mb-1">Bottlenecks</div>
-              <div className="text-lg font-bold text-orange-500">
+            <div className="p-1.5 bg-card border border-border rounded">
+              <Text size="micro" muted className="mb-0.5">Bottlenecks</Text>
+              <StatusText status="warning" size="base" weight="bold">
                 {stats.bottlenecks}
-                <span className="text-xs font-normal text-muted-foreground ml-1">conn</span>
-              </div>
+                <Text size="micro" muted className="ml-0.5">conn</Text>
+              </StatusText>
             </div>
           </div>
         </div>
 
         {/* Component health */}
-        <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase">Component Health</h4>
-          <div className="space-y-1">
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                <span>Healthy</span>
+        <div className="space-y-1.5">
+          <Heading level={5}>Component Health</Heading>
+          <div className="space-y-0.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-success" />
+                <Text size="micro">Healthy</Text>
               </div>
-              <Badge variant="outline" className="bg-green-500/20 border-green-500/50 text-green-500">
+              <Badge variant="outline" className="bg-success/20 border-success/50 text-success text-xs px-1 py-0">
                 {stats.healthyComponents}
               </Badge>
             </div>
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-3 h-3 text-yellow-500" />
-                <span>Degraded</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-warning" />
+                <Text size="micro">Degraded</Text>
               </div>
-              <Badge variant="outline" className="bg-yellow-500/20 border-yellow-500/50 text-yellow-500">
+              <Badge variant="outline" className="bg-warning/20 border-warning/50 text-warning text-xs px-1 py-0">
                 {stats.degradedComponents}
               </Badge>
             </div>
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="w-3 h-3 text-red-500" />
-                <span>Critical/Down</span>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle className="w-4 h-4 text-destructive" />
+                <Text size="micro">Critical/Down</Text>
               </div>
-              <Badge variant="outline" className="bg-red-500/20 border-red-500/50 text-red-500">
+              <Badge variant="outline" className="bg-destructive/20 border-destructive/50 text-destructive text-xs px-1 py-0">
                 {stats.criticalComponents}
               </Badge>
             </div>
@@ -184,41 +185,41 @@ export function SystemStatsPanel() {
         </div>
 
         {/* Activity */}
-        <div className="space-y-2">
-          <h4 className="text-xs font-semibold text-muted-foreground uppercase">Activity</h4>
-          <div className="space-y-1 text-xs">
+        <div className="space-y-1.5">
+          <Heading level={5}>Activity</Heading>
+          <div className="space-y-0.5">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Network className="w-3 h-3 text-muted-foreground" />
-                <span>Active Components</span>
+              <div className="flex items-center gap-1.5">
+                <Network className="w-4 h-4 text-muted-foreground" />
+                <Text size="micro">Active Components</Text>
               </div>
-              <span className="font-mono">{stats.activeComponents} / {nodes.length}</span>
+              <Text mono size="micro">{stats.activeComponents} / {nodes.length}</Text>
             </div>
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Zap className="w-3 h-3 text-muted-foreground" />
-                <span>Active Connections</span>
+              <div className="flex items-center gap-1.5">
+                <Zap className="w-4 h-4 text-muted-foreground" />
+                <Text size="micro">Active Connections</Text>
               </div>
-              <span className="font-mono">{stats.activeConnections} / {connections.length}</span>
+              <Text mono size="micro">{stats.activeConnections} / {connections.length}</Text>
             </div>
           </div>
         </div>
 
         {/* Alerts summary */}
         {(criticalAlerts.length > 0 || warningAlerts.length > 0) && (
-          <div className="space-y-2">
-            <h4 className="text-xs font-semibold text-muted-foreground uppercase">Alerts</h4>
-            <div className="space-y-1">
+          <div className="space-y-1.5">
+            <Heading level={5}>Alerts</Heading>
+            <div className="space-y-0.5">
               {criticalAlerts.length > 0 && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-red-500">Critical</span>
-                  <Badge variant="destructive">{criticalAlerts.length}</Badge>
+                <div className="flex items-center justify-between">
+                  <StatusText status="error" size="micro">Critical</StatusText>
+                  <Badge variant="destructive" className="text-xs px-1 py-0">{criticalAlerts.length}</Badge>
                 </div>
               )}
               {warningAlerts.length > 0 && (
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-yellow-500">Warnings</span>
-                  <Badge variant="outline" className="border-yellow-500 text-yellow-500">
+                <div className="flex items-center justify-between">
+                  <StatusText status="warning" size="micro">Warnings</StatusText>
+                  <Badge variant="outline" className="border-warning text-warning text-xs px-1 py-0">
                     {warningAlerts.length}
                   </Badge>
                 </div>

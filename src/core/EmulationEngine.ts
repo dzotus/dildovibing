@@ -712,7 +712,21 @@ export class EmulationEngine {
     
     const maxConnections = config.maxConnections || 100;
     const queryLatency = config.queryLatency || 10; // ms
-    const indexCount = config.indexCount || 5;
+    
+    // Для MongoDB считаем реальное количество индексов из коллекций
+    let indexCount = config.indexCount || 5;
+    if (node.type === 'mongodb') {
+      const mongoConfig = node.data.config as any;
+      const collections = mongoConfig?.collections || [];
+      // Считаем общее количество индексов во всех коллекциях
+      indexCount = collections.reduce((total: number, collection: any) => {
+        return total + (collection.indexes?.length || 0);
+      }, 0);
+      // Если индексов нет, используем дефолтное значение
+      if (indexCount === 0) {
+        indexCount = 1; // Минимум один индекс _id_ для каждой коллекции
+      }
+    }
     
     // Throughput (queries/sec) - based on incoming connections
     const incomingConnections = this.connections.filter(conn => conn.target === node.id);
@@ -725,8 +739,10 @@ export class EmulationEngine {
     const activeConnections = Math.min(maxConnections, Math.floor(totalIncomingThroughput / 10) || Math.floor(maxConnections * 0.3));
     metrics.throughput = activeConnections * (1000 / (queryLatency + Math.random() * 20));
     
-    // Latency increases with active connections
-    metrics.latency = queryLatency + (activeConnections / maxConnections) * 50;
+    // Latency increases with active connections, but decreases with more indexes (better query performance)
+    // Больше индексов = лучше производительность запросов = меньше латентность
+    const indexPerformanceBoost = Math.min(0.3, indexCount * 0.02); // До 30% улучшения
+    metrics.latency = queryLatency + (activeConnections / maxConnections) * 50 * (1 - indexPerformanceBoost);
     
     // Error rate from transaction failures
     metrics.errorRate = 0.001;
@@ -740,6 +756,64 @@ export class EmulationEngine {
       'indexes': indexCount,
       'cache_hit_ratio': Math.random() * 0.8 + 0.2, // 20-100%
     };
+    
+    // Для MongoDB добавляем дополнительную информацию о коллекциях
+    if (node.type === 'mongodb') {
+      const mongoConfig = node.data.config as any;
+      const collections = mongoConfig?.collections || [];
+      
+      // Подсчитываем коллекции с валидацией
+      const collectionsWithValidation = collections.filter((c: any) => 
+        c.validation && c.validation.validationLevel !== 'off'
+      ).length;
+      
+      // Если есть валидация, увеличиваем базовый errorRate (валидация может отклонять документы)
+      if (collectionsWithValidation > 0) {
+        // Базовая вероятность ошибки валидации (1-5% в зависимости от количества правил)
+        const validationErrorRate = Math.min(0.05, collectionsWithValidation * 0.01);
+        metrics.errorRate = Math.max(metrics.errorRate, validationErrorRate);
+      }
+      
+      // Replication влияние на метрики
+      const enableReplicaSet = mongoConfig?.enableReplicaSet || false;
+      const replicaSetMembers = mongoConfig?.replicaSetMembers || [];
+      if (enableReplicaSet && replicaSetMembers.length > 1) {
+        // Replication улучшает availability (снижает errorRate при сбоях)
+        // Больше реплик = лучше доступность
+        const replicaCount = replicaSetMembers.length;
+        const availabilityBoost = Math.min(0.3, (replicaCount - 1) * 0.1); // До 30% улучшения
+        metrics.errorRate = Math.max(0, metrics.errorRate * (1 - availabilityBoost));
+        
+        // Небольшое увеличение latency из-за репликации
+        metrics.latency = metrics.latency * (1 + 0.05 * (replicaCount - 1));
+      }
+      
+      // Sharding влияние на метрики
+      const enableSharding = mongoConfig?.enableSharding || false;
+      const shardConfig = mongoConfig?.shardConfig;
+      if (enableSharding && shardConfig?.shards) {
+        const shardCount = shardConfig.shards.length;
+        // Sharding улучшает throughput (распределение нагрузки)
+        const throughputBoost = 1 + (shardCount - 1) * 0.3; // До 90% улучшения для 4 шардов
+        metrics.throughput = metrics.throughput * throughputBoost;
+        
+        // Небольшое увеличение latency из-за распределения запросов
+        metrics.latency = metrics.latency * (1 + 0.02 * (shardCount - 1));
+      }
+      
+      metrics.customMetrics = {
+        ...metrics.customMetrics,
+        'collections': collections.length,
+        'collections_with_validation': collectionsWithValidation,
+        'total_documents': collections.reduce((total: number, collection: any) => {
+          return total + (collection.documentCount || 0);
+        }, 0),
+        'replica_set_enabled': enableReplicaSet,
+        'replica_members': enableReplicaSet ? replicaSetMembers.length : 0,
+        'sharding_enabled': enableSharding,
+        'shard_count': enableSharding ? (shardConfig?.shards?.length || 0) : 0,
+      };
+    }
   }
 
   /**

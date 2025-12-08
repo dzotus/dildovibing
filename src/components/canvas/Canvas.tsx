@@ -11,10 +11,11 @@ import { DataPathVisualization } from './DataPathVisualization';
 import { CanvasMinimap } from './CanvasMinimap';
 import { ComponentGroup } from './ComponentGroup';
 import { CanvasRuler } from './CanvasRuler';
-import { findBestConnectionPoint } from '@/utils/connectionPoints';
+import { findBestConnectionPoint, getConnectionPoints } from '@/utils/connectionPoints';
 import { ContextMenu } from './ContextMenu';
 import { deepClone } from '@/lib/deepClone';
 import { toast } from 'sonner';
+import { useNodeRefs } from '@/contexts/NodeRefsContext';
 
 // Add to Group Dialog component
 function AddToGroupDialog({
@@ -310,10 +311,12 @@ export function Canvas() {
   } = useCanvasStore();
   const { isRunning } = useEmulationStore();
   const { showMinimap, showHeatMapLegend, showRuler } = useUIStore();
+  const { getNodeRef } = useNodeRefs();
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStart, setConnectionStart] = useState<string | null>(null);
+  const [connectionStartPort, setConnectionStartPort] = useState<number | undefined>(undefined);
   const [tempLineEnd, setTempLineEnd] = useState<{ x: number; y: number } | null>(null);
   const [contextMenuConnection, setContextMenuConnection] = useState<{
     connectionId: string;
@@ -367,6 +370,32 @@ export function Canvas() {
       window.removeEventListener('resize', updateSize);
     };
   }, [setViewportSize]);
+
+  // Prevent browser zoom when using Ctrl+wheel over canvas
+  useEffect(() => {
+    const handleWheel = (e: WheelEvent) => {
+      // Only prevent browser zoom when Ctrl is pressed AND cursor is over canvas
+      if ((e.ctrlKey || e.metaKey) && canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const isOverCanvas = 
+          e.clientX >= rect.left &&
+          e.clientX <= rect.right &&
+          e.clientY >= rect.top &&
+          e.clientY <= rect.bottom;
+        
+        if (isOverCanvas) {
+          e.preventDefault();
+        }
+      }
+    };
+
+    // Use capture phase and non-passive listener to ensure preventDefault works
+    document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+
+    return () => {
+      document.removeEventListener('wheel', handleWheel, { capture: true });
+    };
+  }, []);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -482,10 +511,26 @@ export function Canvas() {
     }
   };
 
-  const handleNodeConnectionStart = useCallback((nodeId: string) => {
+  const handleNodeConnectionStart = useCallback((nodeId: string, portIndex?: number) => {
     setIsConnecting(true);
     setConnectionStart(nodeId);
+    setConnectionStartPort(portIndex);
   }, []);
+
+  // Helper function to get node dimensions from DOM
+  const getNodeDimensions = useCallback((nodeId: string): { width: number; height: number } => {
+    const nodeElement = getNodeRef(nodeId);
+    if (!nodeElement) {
+      return { width: 140, height: 100 };
+    }
+    const innerElement = nodeElement.querySelector('.bg-card') as HTMLElement | null;
+    const targetElement = innerElement || nodeElement;
+    const rect = targetElement.getBoundingClientRect();
+    return {
+      width: rect.width / zoom,
+      height: rect.height / zoom,
+    };
+  }, [getNodeRef, zoom]);
 
   const handleNodeConnectionEnd = useCallback((nodeId: string, targetPort?: number) => {
     if (isConnecting && connectionStart && connectionStart !== nodeId) {
@@ -493,25 +538,41 @@ export function Canvas() {
       const targetNode = nodes.find(n => n.id === nodeId);
       
       if (sourceNode && targetNode) {
-        // Find best connection points
-        const sourcePort = findBestConnectionPoint(
-          connectionStart,
-          nodeId,
-          targetNode.position.x + 70,
-          targetNode.position.y + 50,
-          connections,
-          sourceNode.position.x,
-          sourceNode.position.y
-        );
+        // Get real node dimensions
+        const sourceDims = getNodeDimensions(connectionStart);
+        const targetDims = getNodeDimensions(nodeId);
+        
+        // Use actual mouse position from tempLineEnd if available, otherwise use node center
+        const targetX = tempLineEnd?.x ?? (targetNode.position.x + targetDims.width / 2);
+        const targetY = tempLineEnd?.y ?? (targetNode.position.y + targetDims.height / 2);
+        const sourceX = sourceNode.position.x + sourceDims.width / 2;
+        const sourceY = sourceNode.position.y + sourceDims.height / 2;
+        
+        // Use saved sourcePort if available, otherwise find best connection point
+        const sourcePort = connectionStartPort !== undefined 
+          ? connectionStartPort 
+          : findBestConnectionPoint(
+              connectionStart,
+              nodeId,
+              targetX,
+              targetY,
+              connections,
+              sourceNode.position.x,
+              sourceNode.position.y,
+              sourceDims.width,
+              sourceDims.height
+            );
         
         const finalTargetPort = targetPort !== undefined ? targetPort : findBestConnectionPoint(
           nodeId,
           connectionStart,
-          sourceNode.position.x + 70,
-          sourceNode.position.y + 50,
+          sourceX,
+          sourceY,
           connections,
           targetNode.position.x,
-          targetNode.position.y
+          targetNode.position.y,
+          targetDims.width,
+          targetDims.height
         );
         
         const newConnection: CanvasConnection = {
@@ -527,8 +588,9 @@ export function Canvas() {
     }
     setIsConnecting(false);
     setConnectionStart(null);
+    setConnectionStartPort(undefined);
     setTempLineEnd(null);
-  }, [isConnecting, connectionStart, nodes, connections, addConnection]);
+  }, [isConnecting, connectionStart, connectionStartPort, nodes, connections, addConnection, tempLineEnd, getNodeDimensions]);
 
   const handleConnectionClick = useCallback((connectionId: string) => {
     selectConnection(connectionId);
@@ -578,11 +640,11 @@ export function Canvas() {
 
   // Memoize node callbacks to prevent recreating functions on every render
   // Use node IDs as dependency string for stable comparison
-  const nodeIdsString = useMemo(() => nodes.map(n => n.id).join(','), [nodes.length, nodes.map(n => n.id).join(',')]);
+  const nodeIdsString = useMemo(() => nodes.map(n => n.id).join(','), [nodes]);
   
   const nodeCallbacks = useMemo(() => {
     const callbacksMap = new Map<string, {
-      onConnectionStart: () => void;
+      onConnectionStart: (portIndex?: number) => void;
       onConnectionEnd: (portIndex?: number) => void;
       onContextMenu: (x: number, y: number) => void;
     }>();
@@ -591,18 +653,18 @@ export function Canvas() {
       // Create stable callbacks using closures - these will only be recreated when nodes array changes
       const nodeId = node.id; // Capture in closure
       callbacksMap.set(nodeId, {
-        onConnectionStart: () => handleNodeConnectionStart(nodeId),
+        onConnectionStart: (portIndex?: number) => handleNodeConnectionStart(nodeId, portIndex),
         onConnectionEnd: (portIndex?: number) => handleNodeConnectionEnd(nodeId, portIndex),
         onContextMenu: (x: number, y: number) => setContextMenuNode({ nodeId, x, y }),
       });
     });
     
     return callbacksMap;
-  }, [nodeIdsString, handleNodeConnectionStart, handleNodeConnectionEnd]);
+  }, [nodeIdsString, handleNodeConnectionStart, handleNodeConnectionEnd, nodes]);
 
   // Memoize connection callbacks to prevent recreating functions on every render
   // Use connection IDs as dependency string for stable comparison
-  const connectionIdsString = useMemo(() => connections.map(c => c.id).join(','), [connections.length, connections.map(c => c.id).join(',')]);
+  const connectionIdsString = useMemo(() => connections.map(c => c.id).join(','), [connections]);
   
   const connectionCallbacks = useMemo(() => {
     const callbacksMap = new Map<string, {
@@ -620,7 +682,7 @@ export function Canvas() {
     });
     
     return callbacksMap;
-  }, [connectionIdsString, handleConnectionClick, handleConnectionContextMenu]);
+  }, [connectionIdsString, handleConnectionClick, handleConnectionContextMenu, connections]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey && canvasRef.current) {
@@ -761,6 +823,27 @@ export function Canvas() {
             c => c.x === chunk.x && c.y === chunk.y + 1
           );
           
+          // Компенсируем pan для закрепления сетки в мировых координатах
+          // backgroundPosition работает в локальных координатах элемента ДО transform
+          // Когда transform применяет translate(pan.x, pan.y) scale(zoom), элемент двигается
+          // Чтобы сетка оставалась закрепленной, нужно компенсировать pan в backgroundPosition
+          // pan.x в экранных координатах, backgroundPosition в локальных координатах элемента
+          // После scale(zoom) локальные координаты масштабируются, поэтому компенсация: -pan.x/zoom
+          // Но backgroundPosition работает ДО transform, поэтому компенсация должна быть в локальных координатах
+          // Правильная формула: компенсируем pan.x/zoom для X и pan.y/zoom для Y
+          const worldPanX = pan.x / zoom;
+          const worldPanY = pan.y / zoom;
+          
+          // Компенсируем движение transform отрицательным смещением
+          // Используем gridSize (не scaledGridSize) для модульной арифметики, 
+          // потому что backgroundPosition работает в локальных координатах ДО scale(zoom)
+          const gridOffsetX = ((-worldPanX % gridSize) + gridSize) % gridSize;
+          const gridOffsetY = ((-worldPanY % gridSize) + gridSize) % gridSize;
+          
+          // chunkOffset в мировых координатах, преобразуем в локальные для backgroundPosition
+          const chunkOffsetX = (chunkX % gridSize);
+          const chunkOffsetY = (chunkY % gridSize);
+          
           return (
             <div
               key={`chunk-${chunk.x}-${chunk.y}`}
@@ -775,8 +858,8 @@ export function Canvas() {
                   linear-gradient(hsl(var(--canvas-grid)) 1px, transparent 1px),
                   linear-gradient(90deg, hsl(var(--canvas-grid)) 1px, transparent 1px)
                 `,
-                backgroundSize: `${scaledGridSize}px ${scaledGridSize}px`,
-                backgroundPosition: `${(pan.x % scaledGridSize) + (chunkX % scaledGridSize)}px ${(pan.y % scaledGridSize) + (chunkY % scaledGridSize)}px`,
+                backgroundSize: `${gridSize}px ${gridSize}px`,
+                backgroundPosition: `${gridOffsetX + chunkOffsetX}px ${gridOffsetY + chunkOffsetY}px`,
                 border: showCanvasBoundaries 
                   ? '2px dashed hsl(var(--border) / 0.6)' 
                   : 'none',
@@ -911,8 +994,29 @@ export function Canvas() {
             {isConnecting && connectionStart && tempLineEnd && (() => {
               const sourceNode = nodes.find((n) => n.id === connectionStart);
               if (!sourceNode) return null;
-              const sourceX = sourceNode.position.x + 70;
-              const sourceY = sourceNode.position.y + 70;
+              
+              // Get real node dimensions
+              const sourceDims = getNodeDimensions(connectionStart);
+              
+              // Use saved connection point if available, otherwise use node center
+              let sourceX: number, sourceY: number;
+              if (connectionStartPort !== undefined) {
+                const sourcePoints = getConnectionPoints(
+                  sourceNode.position.x,
+                  sourceNode.position.y,
+                  sourceDims.width,
+                  sourceDims.height,
+                  16
+                );
+                const sourcePoint = sourcePoints[connectionStartPort];
+                sourceX = sourcePoint.x;
+                sourceY = sourcePoint.y;
+              } else {
+                // Fallback to center if no port specified
+                sourceX = sourceNode.position.x + sourceDims.width / 2;
+                sourceY = sourceNode.position.y + sourceDims.height / 2;
+              }
+              
               return (
                 <line
                   x1={sourceX}

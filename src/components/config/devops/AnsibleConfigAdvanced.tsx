@@ -242,7 +242,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
 
         {/* Enhanced Stats with Visual Indicators */}
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Inventories</CardTitle>
@@ -256,7 +256,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Job Templates</CardTitle>
@@ -270,7 +270,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Active Jobs</CardTitle>
@@ -284,7 +284,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Successful</CardTitle>
@@ -337,7 +337,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {inventories.map((inventory) => (
-                    <Card key={inventory.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={inventory.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -351,13 +351,13 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
                                   {inventory.type === 'static' ? 'Static' : 'Dynamic'}
                                 </Badge>
                                 {inventory.hosts && (
-                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                     <Server className="h-3 w-3 mr-1" />
                                     {inventory.hosts.length} hosts
                                   </Badge>
                                 )}
                                 {inventory.groups && (
-                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20">
+                                  <Badge variant="outline" className="bg-purple-50 dark:bg-purple-950/20 text-purple-700 dark:text-purple-300">
                                     <Layers className="h-3 w-3 mr-1" />
                                     {inventory.groups.length} groups
                                   </Badge>
@@ -438,7 +438,7 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {jobTemplates.map((template) => (
-                    <Card key={template.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={template.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -588,9 +588,9 @@ export function AnsibleConfigAdvanced({ componentId }: AnsibleConfigProps) {
                       <Card
                         key={job.id}
                         className={`border-l-4 hover:shadow-md transition-all ${
-                          job.status === 'successful' ? 'border-l-green-500 bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10' :
-                          job.status === 'failed' ? 'border-l-red-500 bg-gradient-to-r from-red-50/50 to-transparent dark:from-red-950/10' :
-                          job.status === 'running' ? 'border-l-blue-500 bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10' : 'border-l-gray-500 bg-gradient-to-r from-gray-50/50 to-transparent dark:from-gray-950/10'
+                          job.status === 'successful' ? 'border-l-green-500 bg-card' :
+                          job.status === 'failed' ? 'border-l-red-500 bg-card' :
+                          job.status === 'running' ? 'border-l-blue-500 bg-card' : 'border-l-gray-500 bg-card'
                         }`}
                       >
                         <CardContent className="pt-4">

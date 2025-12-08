@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { showError } from '@/utils/toast';
+import { PageTitle, Description } from '@/components/ui/typography';
 
 interface PrometheusConfigProps {
   componentId: string;
@@ -242,8 +243,8 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
               <Activity className="h-6 w-6 text-primary" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Prometheus</h2>
-              <p className="text-sm text-muted-foreground mt-1">Metrics collection & rule evaluation</p>
+              <PageTitle>Prometheus</PageTitle>
+              <Description>Metrics collection & rule evaluation</Description>
             </div>
           </div>
           <div className="flex items-center gap-2">

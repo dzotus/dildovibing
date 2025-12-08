@@ -178,7 +178,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-5 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Jobs</CardTitle>
@@ -193,7 +193,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               <div className="text-xs text-muted-foreground mt-1">{activeJobs} active</div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Executors</CardTitle>
@@ -207,7 +207,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Cores</CardTitle>
@@ -221,7 +221,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Memory</CardTitle>
@@ -235,7 +235,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-orange-500 bg-gradient-to-br from-orange-50 to-white dark:from-orange-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-orange-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">App Name</CardTitle>
@@ -277,7 +277,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {jobs.map((job) => (
-                    <Card key={job.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={job.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -355,7 +355,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {stages.map((stage) => (
-                    <Card key={stage.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={stage.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -424,7 +424,7 @@ export function SparkConfigAdvanced({ componentId }: SparkConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {executors.map((executor) => (
-                    <Card key={executor.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-gradient-to-r from-purple-50/50 to-transparent dark:from-purple-950/10">
+                    <Card key={executor.id} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">

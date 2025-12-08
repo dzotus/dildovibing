@@ -3,7 +3,7 @@ import { useCanvasStore } from '@/store/useCanvasStore';
 
 interface CanvasRulerProps {
   isVisible: boolean;
-  canvasRef?: React.RefObject<HTMLDivElement>;
+  canvasRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export function CanvasRuler({ isVisible, canvasRef }: CanvasRulerProps) {

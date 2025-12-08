@@ -118,7 +118,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
         <Separator />
 
         <div className="grid grid-cols-3 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Features</CardTitle>
@@ -132,7 +132,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Feature Sets</CardTitle>
@@ -146,7 +146,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Total Usage</CardTitle>
@@ -195,7 +195,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
               <CardContent>
                 <div className="space-y-4">
                   {features.map((feature) => (
-                    <Card key={`${feature.name}-${feature.version}`} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={`${feature.name}-${feature.version}`} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -209,7 +209,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
                                 <Badge variant="outline">{feature.type}</Badge>
                                 <Badge variant="outline">{feature.dataType}</Badge>
                                 {feature.usage && (
-                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20">
+                                  <Badge variant="outline" className="bg-green-50 dark:bg-green-950/20 text-green-700 dark:text-green-300">
                                     {feature.usage} uses
                                   </Badge>
                                 )}
@@ -260,7 +260,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
               <CardContent>
                 <div className="space-y-4">
                   {featureSets.map((set) => (
-                    <Card key={`${set.name}-${set.version}`} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={`${set.name}-${set.version}`} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
@@ -272,7 +272,7 @@ export function FeatureStoreConfigAdvanced({ componentId }: FeatureStoreConfigPr
                               <Badge variant="outline">v{set.version}</Badge>
                               <Badge variant="outline">{set.features.length} features</Badge>
                               {set.usage && (
-                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20">
+                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
                                   {set.usage} uses
                                 </Badge>
                               )}

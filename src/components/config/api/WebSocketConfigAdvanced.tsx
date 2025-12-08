@@ -137,7 +137,7 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Connections</CardTitle>
@@ -151,7 +151,7 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Messages</CardTitle>
@@ -165,7 +165,7 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Sent</CardTitle>
@@ -180,7 +180,7 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Received</CardTitle>
@@ -271,7 +271,7 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {connections.map((conn) => (
-                    <Card key={conn.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={conn.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -335,8 +335,8 @@ export function WebSocketConfigAdvanced({ componentId }: WebSocketConfigProps) {
                 <div className="space-y-4">
                   {messages.map((msg) => (
                     <Card key={msg.id} className={`border-l-4 ${
-                      msg.type === 'sent' ? 'border-l-green-500 bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10' :
-                      'border-l-blue-500 bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10'
+                      msg.type === 'sent' ? 'border-l-green-500 bg-card' :
+                      'border-l-blue-500 bg-card'
                     } hover:shadow-md transition-shadow`}>
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">

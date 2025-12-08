@@ -275,13 +275,13 @@ export function ProblemFilters({ onFilterChange }: ProblemFiltersProps) {
                   >
                     <div className="flex items-center gap-2 w-full">
                       {status?.criticalPath && (
-                        <Badge variant="outline" className="bg-purple-500/20 text-purple-500 border-purple-500/50 text-[10px] px-1">
+                        <Badge variant="outline" className="bg-purple-500/20 text-purple-500 border-purple-500/50 text-xs px-1">
                           Critical
                         </Badge>
                       )}
                       <span className="flex-1 text-left truncate">{node.data.label}</span>
                       {metrics && metrics.errorRate * 100 >= minErrorRate && (
-                        <Badge variant="destructive" className="text-[10px] px-1">
+                        <Badge variant="destructive" className="text-xs px-1">
                           {(metrics.errorRate * 100).toFixed(0)}%
                         </Badge>
                       )}

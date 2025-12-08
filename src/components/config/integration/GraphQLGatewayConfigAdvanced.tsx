@@ -101,16 +101,29 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
     updateConfig({ services: services.filter((s) => s.id !== id) });
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusBgColor = (status: string) => {
     switch (status) {
       case 'connected':
         return 'bg-green-500';
       case 'disconnected':
-        return 'bg-gray-500';
+        return 'bg-muted';
       case 'error':
         return 'bg-red-500';
       default:
-        return 'bg-gray-500';
+        return 'bg-muted';
+    }
+  };
+
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case 'connected':
+        return 'bg-green-500 text-white';
+      case 'disconnected':
+        return 'bg-muted text-foreground';
+      case 'error':
+        return 'bg-red-500 text-white';
+      default:
+        return 'bg-muted text-foreground';
     }
   };
 
@@ -136,7 +149,7 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Services</CardTitle>
@@ -150,7 +163,7 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -163,7 +176,7 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-red-500 bg-gradient-to-br from-red-50 to-white dark:from-red-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-red-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Errors</CardTitle>
@@ -176,7 +189,7 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Federation</CardTitle>
@@ -226,17 +239,17 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
               <CardContent>
                 <div className="space-y-4">
                   {services.map((service) => (
-                    <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
-                            <div className={`p-2 rounded-lg ${getStatusColor(service.status)}/20`}>
+                            <div className={`p-2 rounded-lg ${getStatusBgColor(service.status)}/20`}>
                               <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                             </div>
                             <div>
                               <CardTitle className="text-lg font-semibold">{service.name}</CardTitle>
                               <div className="flex items-center gap-2 mt-2">
-                                <Badge variant="outline" className={getStatusColor(service.status)}>
+                                <Badge variant="outline" className={`${getStatusBadgeColor(service.status)} border-0`}>
                                   {service.status}
                                 </Badge>
                                 <Badge variant="outline" className="font-mono text-xs">{service.endpoint}</Badge>

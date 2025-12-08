@@ -202,7 +202,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-5 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Clusters</CardTitle>
@@ -216,7 +216,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Listeners</CardTitle>
@@ -230,7 +230,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Routes</CardTitle>
@@ -244,7 +244,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -257,7 +257,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-red-500 bg-gradient-to-br from-red-50 to-white dark:from-red-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-red-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Errors</CardTitle>
@@ -309,7 +309,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {clusters.map((cluster) => (
-                    <Card key={cluster.name} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={cluster.name} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -386,7 +386,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {listeners.map((listener) => (
-                    <Card key={listener.name} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={listener.name} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-green-100 dark:bg-green-900/30">
@@ -397,7 +397,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
                             <div className="flex items-center gap-2 mt-2">
                               <Badge variant="outline" className="font-mono">{listener.address}:{listener.port}</Badge>
                               {listener.activeConnections && (
-                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20">
+                                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
                                   {listener.activeConnections} connections
                                 </Badge>
                               )}
@@ -437,7 +437,7 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               <CardContent>
                 <div className="space-y-4">
                   {routes.map((route) => (
-                    <Card key={route.name} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-gradient-to-r from-purple-50/50 to-transparent dark:from-purple-950/10">
+                    <Card key={route.name} className="border-l-4 border-l-purple-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-start gap-3">
                           <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">

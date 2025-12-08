@@ -135,16 +135,29 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
     updateConfig({ endpoints: endpoints.filter((e) => e.id !== id) });
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusBgColor = (status: string) => {
     switch (status) {
       case 'connected':
         return 'bg-green-500';
       case 'disconnected':
-        return 'bg-gray-500';
+        return 'bg-muted';
       case 'error':
         return 'bg-red-500';
       default:
-        return 'bg-gray-500';
+        return 'bg-muted';
+    }
+  };
+
+  const getStatusBadgeColor = (status: string) => {
+    switch (status) {
+      case 'connected':
+        return 'bg-green-500 text-white';
+      case 'disconnected':
+        return 'bg-muted text-foreground';
+      case 'error':
+        return 'bg-red-500 text-white';
+      default:
+        return 'bg-muted text-foreground';
     }
   };
 
@@ -170,7 +183,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card className="border-l-4 border-l-blue-500 bg-gradient-to-br from-blue-50 to-white dark:from-blue-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-blue-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Backends</CardTitle>
@@ -184,7 +197,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-green-500 bg-gradient-to-br from-green-50 to-white dark:from-green-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-green-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Endpoints</CardTitle>
@@ -198,7 +211,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-purple-500 bg-gradient-to-br from-purple-50 to-white dark:from-purple-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-purple-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Requests</CardTitle>
@@ -211,7 +224,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               </div>
             </CardContent>
           </Card>
-          <Card className="border-l-4 border-l-cyan-500 bg-gradient-to-br from-cyan-50 to-white dark:from-cyan-950/20 dark:to-background">
+          <Card className="border-l-4 border-l-cyan-500 bg-card">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Avg Latency</CardTitle>
@@ -260,7 +273,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               <CardContent>
                 <div className="space-y-4">
                   {endpoints.map((endpoint) => (
-                    <Card key={endpoint.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-gradient-to-r from-green-50/50 to-transparent dark:from-green-950/10">
+                    <Card key={endpoint.id} className="border-l-4 border-l-green-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
@@ -273,7 +286,7 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
                                 <Badge variant="outline">{endpoint.aggregator || 'merge'}</Badge>
                                 <Badge variant="outline">{endpoint.backends.length} backends</Badge>
                                 {endpoint.requests && (
-                                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20">
+                                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950/20 text-blue-700 dark:text-blue-300">
                                     {endpoint.requests} requests
                                   </Badge>
                                 )}
@@ -329,17 +342,17 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
               <CardContent>
                 <div className="space-y-4">
                   {backends.map((backend) => (
-                    <Card key={backend.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-gradient-to-r from-blue-50/50 to-transparent dark:from-blue-950/10">
+                    <Card key={backend.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-start gap-3">
-                            <div className={`p-2 rounded-lg ${getStatusColor(backend.status)}/20`}>
+                            <div className={`p-2 rounded-lg ${getStatusBgColor(backend.status)}/20`}>
                               <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
                             </div>
                             <div>
                               <CardTitle className="text-lg font-semibold">{backend.name}</CardTitle>
                               <div className="flex items-center gap-2 mt-2">
-                                <Badge variant="outline" className={getStatusColor(backend.status)}>
+                                <Badge variant="outline" className={`${getStatusBadgeColor(backend.status)} border-0`}>
                                   {backend.status}
                                 </Badge>
                                 <Badge variant="outline">{backend.protocol.toUpperCase()}</Badge>
