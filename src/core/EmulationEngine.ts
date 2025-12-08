@@ -620,43 +620,637 @@ export class EmulationEngine {
   }
 
   /**
-   * Kafka broker emulation
+   * Kafka broker emulation with realistic simulation based on actual configuration
    */
   private simulateKafka(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
-    if (!hasIncomingConnections) {
+    // Extract real Kafka configuration from node.data.config
+    const kafkaConfig = node.data.config as any;
+    const brokers = kafkaConfig?.brokers || ['localhost:9092'];
+    const topics = kafkaConfig?.topics || [];
+    const consumerGroups = kafkaConfig?.consumerGroups || [];
+    
+    // Fallback to generic config if Kafka-specific config not available
+    const topicCount = topics.length || config.topicCount || 5;
+    const totalPartitions = topics.reduce((sum: number, topic: any) => sum + (topic.partitions || 3), 0) || config.partitions || 3;
+    const avgReplicationFactor = topics.length > 0 
+      ? topics.reduce((sum: number, topic: any) => sum + (topic.replication || 1), 0) / topics.length 
+      : config.replicationFactor || 1;
+    
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let incomingThroughput = 0;
+    for (const conn of incomingConnections) {
+      const sourceMetrics = this.metrics.get(conn.source);
+      if (sourceMetrics) {
+        incomingThroughput += sourceMetrics.throughput || 0;
+      }
+    }
+    
+    // Use configured throughput or calculate from incoming connections
+    const baseThroughputMsgs = config.throughputMsgs || Math.max(1000, incomingThroughput);
+    
+    if (!hasIncomingConnections && baseThroughputMsgs <= 0) {
       // No incoming data, reset metrics
       metrics.throughput = 0;
       metrics.latency = 0;
       metrics.errorRate = 0;
       metrics.utilization = 0;
+      
+      // Reset topic metrics
+      if (topics.length > 0) {
+        for (const topic of topics) {
+          topic.messages = topic.messages || 0;
+          topic.size = topic.size || 0;
+        }
+      }
+      
+      // Reset consumer group lag
+      for (const group of consumerGroups) {
+        group.lag = 0;
+      }
+      
+      metrics.customMetrics = {
+        'topics': topicCount,
+        'partitions': totalPartitions,
+        'replication': Math.round(avgReplicationFactor * 10) / 10,
+        'brokers': brokers.length,
+        'consumer_groups': consumerGroups.length,
+        'total_lag': 0,
+      };
       return;
     }
     
-    const topicCount = config.topicCount || 5;
-    const partitions = config.partitions || 3;
-    const throughputMsgs = config.throughputMsgs || 1000; // msgs/sec
-    const replicationFactor = config.replicationFactor || 1;
-    
     // Throughput varies slightly with a sine wave pattern (realistic broker behavior)
     const variation = 0.2 * Math.sin(this.simulationTime / 1000);
-    metrics.throughput = throughputMsgs * (1 + variation);
+    metrics.throughput = baseThroughputMsgs * (1 + variation);
     
-    // Latency 5-50ms depending on partition count and replication
-    metrics.latency = 5 + partitions * 2 + replicationFactor * 3;
+    // Calculate latency based on realistic factors
+    // Base latency: 2-5ms for broker processing
+    // Partition overhead: ~1ms per 10 partitions
+    // Replication overhead: ~2-5ms per replication write (network + disk)
+    // Compression overhead: varies by type
+    const baseLatency = 3;
+    const partitionOverhead = Math.min(totalPartitions / 10, 10); // Max 10ms
+    const replicationNetworkLatency = Math.max(1, (avgReplicationFactor - 1) * 2); // 2ms per additional replica
+    const replicationDiskLatency = Math.max(0, (avgReplicationFactor - 1) * 1); // 1ms per additional replica
     
-    // Error rate increases with replication factor complexity
-    metrics.errorRate = Math.max(0, 0.001 * replicationFactor);
+    // Compression type affects latency (decompression on read)
+    const compressionOverhead = this.calculateCompressionOverhead(topics);
     
-    // Utilization based on topic/partition count
-    metrics.utilization = Math.min(1, (topicCount * partitions) / 100);
+    metrics.latency = baseLatency + partitionOverhead + replicationNetworkLatency + replicationDiskLatency + compressionOverhead;
     
-    // Custom metrics
+    // Add network latency between brokers (if multiple brokers)
+    if (brokers.length > 1) {
+      const interBrokerLatency = Math.min(5, brokers.length * 0.5); // ~0.5ms per additional broker
+      metrics.latency += interBrokerLatency;
+    }
+    
+    // Error rate based on replication and under-replicated partitions
+    const underReplicatedPartitions = this.calculateUnderReplicatedPartitions(topics, brokers.length);
+    const replicationComplexity = avgReplicationFactor > 1 ? (avgReplicationFactor - 1) * 0.0005 : 0;
+    const underReplicationErrorRate = underReplicatedPartitions > 0 ? underReplicatedPartitions * 0.001 : 0;
+    
+    // Check ACL permissions for producers (Write operations)
+    const acls = kafkaConfig?.acls || [];
+    let aclErrorRate = 0;
+    let aclBlockedThroughput = 0;
+    
+    // Check each incoming connection (producer) for Write permissions
+    for (const conn of incomingConnections) {
+      const sourceNode = this.nodes.find(n => n.id === conn.source);
+      if (!sourceNode) continue;
+      
+      // Get producer principal (clientId or component ID)
+      const producerConfig = sourceNode.data.config || {};
+      const producerPrincipal = producerConfig.messaging?.producerId || 
+                                producerConfig.clientId || 
+                                `User:${sourceNode.id.slice(0, 8)}`;
+      
+      // Get target topic from connection metadata or default
+      const targetTopic = producerConfig.messaging?.topic || 
+                         topics[0]?.name || 
+                         'default-topic';
+      
+      // Check if producer has Write permission for this topic
+      const hasWritePermission = this.checkACLPermission(
+        acls,
+        producerPrincipal,
+        'Topic',
+        targetTopic,
+        'Write'
+      );
+      
+      if (!hasWritePermission) {
+        // Producer doesn't have Write permission - block writes
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          // Block 90% of throughput, add to error rate
+          aclBlockedThroughput += sourceMetrics.throughput * 0.9;
+          aclErrorRate += 0.45; // 45% error rate for denied writes
+        }
+      }
+    }
+    
+    // Adjust throughput based on ACL denials
+    if (aclBlockedThroughput > 0) {
+      metrics.throughput = Math.max(0, metrics.throughput - aclBlockedThroughput);
+    }
+    
+    metrics.errorRate = Math.max(0, Math.min(0.1, replicationComplexity + underReplicationErrorRate + aclErrorRate + 0.0001));
+    
+    // Utilization based on topic/partition count and throughput
+    const maxThroughput = 10000; // Estimated max throughput for broker
+    const throughputUtilization = Math.min(1, metrics.throughput / maxThroughput);
+    const partitionUtilization = Math.min(1, totalPartitions / 200); // Assume 200 partitions max per broker
+    metrics.utilization = Math.min(1, (throughputUtilization * 0.7) + (partitionUtilization * 0.3));
+    
+    // Update topic-level metrics (messages, size)
+    const avgMessageSize = (config.avgPayloadSize || 1024); // bytes
+    const timeDelta = this.updateInterval / 1000; // seconds
+    
+    for (const topic of topics) {
+      // Update messages based on throughput distribution
+      const topicThroughput = metrics.throughput / topicCount; // Distribute evenly across topics
+      const messagesIncrement = topicThroughput * timeDelta;
+      topic.messages = (topic.messages || 0) + messagesIncrement;
+      
+      // Update size (with compression consideration)
+      const compressionRatio = this.getCompressionRatio(topic.config?.compressionType);
+      const sizeIncrement = messagesIncrement * avgMessageSize * compressionRatio;
+      topic.size = (topic.size || 0) + sizeIncrement;
+      
+      // Apply retention policy (cleanup old messages)
+      if (topic.config?.retentionMs && topic.config.retentionMs > 0) {
+        // Retention cleanup would happen periodically in real Kafka
+        // For simulation, we can reduce messages proportionally based on age
+        // This is simplified - in real Kafka, segments are deleted
+        const retentionSec = topic.config.retentionMs / 1000;
+        const messagesPerSec = topicThroughput;
+        const maxMessages = messagesPerSec * retentionSec;
+        if (topic.messages > maxMessages) {
+          const excess = topic.messages - maxMessages;
+          topic.messages = maxMessages;
+          topic.size = Math.max(0, topic.size - (excess * avgMessageSize * compressionRatio));
+        }
+      }
+      
+      // Apply retention bytes if configured
+      if (topic.config?.retentionBytes && topic.config.retentionBytes > 0 && topic.size > topic.config.retentionBytes) {
+        const excessRatio = 1 - (topic.config.retentionBytes / topic.size);
+        topic.size = topic.config.retentionBytes;
+        topic.messages = Math.max(0, topic.messages * (1 - excessRatio));
+      }
+      
+      // Apply cleanup policy (delete vs compact)
+      // For compact topics, we simulate log compaction (removes duplicate keys, keeps latest)
+      // This affects the actual message count vs logical message count
+      if (topic.config?.cleanupPolicy === 'compact' || topic.config?.cleanupPolicy === 'delete,compact') {
+        // Log compaction reduces message count (removes duplicates)
+        // In real Kafka, compaction runs periodically
+        // For simulation, we apply a compaction ratio
+        const compactionRatio = 0.85; // 15% reduction due to compaction
+        const compactionInterval = 300000; // 5 minutes
+        
+        // Simulate periodic compaction
+        if (this.simulationTime % compactionInterval < this.updateInterval) {
+          const compactedMessages = Math.round(topic.messages * compactionRatio);
+          const messagesRemoved = topic.messages - compactedMessages;
+          topic.messages = compactedMessages;
+          topic.size = Math.max(0, topic.size - (messagesRemoved * avgMessageSize * compressionRatio));
+        }
+      }
+      
+      // Apply min.insync.replicas to error rate
+      // If not enough replicas are in sync, writes may fail
+      if (topic.config?.minInsyncReplicas) {
+        const minISR = topic.config.minInsyncReplicas;
+        const actualISR = this.getAverageISRCount(topic, brokers.length);
+        
+        if (actualISR < minISR) {
+          // Not enough replicas in sync - increase error rate
+          const isrDeficit = minISR - actualISR;
+          metrics.errorRate += isrDeficit * 0.01; // 1% error rate per missing ISR
+        }
+      }
+      
+      // Apply max.message.bytes constraint
+      if (topic.config?.maxMessageBytes && avgMessageSize > topic.config.maxMessageBytes) {
+        // Messages exceed max size - simulate rejection
+        const rejectionRate = Math.min(0.1, (avgMessageSize - topic.config.maxMessageBytes) / topic.config.maxMessageBytes);
+        metrics.errorRate += rejectionRate * 0.5; // Up to 5% additional error rate
+      }
+    }
+    
+    // Calculate consumer group lag dynamically with partition assignment
+    let totalLag = 0;
+    for (const group of consumerGroups) {
+      const groupTopic = topics.find((t: any) => t.name === group.topic);
+      if (!groupTopic) continue;
+      
+      // Partition assignment logic
+      const members = group.members || 1;
+      const topicPartitions = groupTopic.partitions || 1;
+      
+      // Calculate partition assignment (range assignment strategy)
+      const partitionAssignment = this.assignPartitionsToConsumers(members, topicPartitions);
+      
+      // Calculate consumption rate per partition
+      // Each partition can be consumed at ~200-500 msgs/sec (depends on consumer performance)
+      const consumptionRatePerPartition = 300; // msgs/sec per partition
+      
+      // Total consumption rate = sum of consumption rates for assigned partitions
+      let totalConsumptionRate = 0;
+      for (const assignment of partitionAssignment) {
+        const partitionsAssigned = assignment.partitions.length;
+        totalConsumptionRate += partitionsAssigned * consumptionRatePerPartition;
+      }
+      
+      // If there are more consumers than partitions, some consumers are idle
+      // If there are fewer consumers than partitions, some consumers handle multiple partitions
+      const effectiveConsumptionRate = Math.min(totalConsumptionRate, members * consumptionRatePerPartition);
+      
+      // Calculate topic throughput (produce rate) - distributed across partitions
+      const topicThroughput = (metrics.throughput / topicCount) || 0;
+      const throughputPerPartition = topicThroughput / topicPartitions;
+      
+      // Check ACL permissions for consumer group (Read operations)
+      // Consumer principal = groupId (in real Kafka, groupId is the principal)
+      const consumerPrincipal = group.id || `Group:${group.id}`;
+      
+      // Check Read permission for topic
+      const hasTopicReadPermission = this.checkACLPermission(
+        acls,
+        consumerPrincipal,
+        'Topic',
+        group.topic,
+        'Read'
+      );
+      
+      // Check Read permission for consumer group
+      const hasGroupReadPermission = this.checkACLPermission(
+        acls,
+        consumerPrincipal,
+        'Group',
+        group.id,
+        'Read'
+      );
+      
+      // If no Read permission, block consumption completely
+      let effectiveConsumptionRateWithACL = effectiveConsumptionRate;
+      if (!hasTopicReadPermission || !hasGroupReadPermission) {
+        // Consumer doesn't have Read permission - block all consumption
+        effectiveConsumptionRateWithACL = 0;
+      }
+      
+      // Lag calculation per partition
+      // Lag increases when production > consumption
+      const productionRate = topicThroughput;
+      const consumptionRate = effectiveConsumptionRateWithACL;
+      
+      // Lag increment (if production exceeds consumption)
+      const lagIncrement = Math.max(0, (productionRate - consumptionRate) * timeDelta);
+      
+      // Current lag
+      const currentLag = group.lag || 0;
+      
+      // Update lag: add increment and try to consume
+      const newLag = Math.max(0, currentLag + lagIncrement - (consumptionRate * timeDelta));
+      group.lag = newLag;
+      
+      totalLag += newLag;
+      
+      // Simulate rebalancing effects (if members changed recently)
+      // In real Kafka, rebalancing causes temporary pause in consumption
+      // We can simulate this by reducing consumption rate during rebalance
+      if (this.isRebalancing(node.id, group.id)) {
+        // Reduce consumption during rebalance (30-50% reduction)
+        group.lag = Math.min(newLag * 1.2, newLag + (productionRate * timeDelta * 0.3));
+        totalLag += (newLag * 0.2); // Additional lag during rebalance
+      }
+    }
+    
+    // Custom metrics with detailed information
     metrics.customMetrics = {
       'topics': topicCount,
-      'partitions': partitions,
-      'replication': replicationFactor,
-      'lag': Math.random() * 100, // message lag in broker
+      'partitions': totalPartitions,
+      'replication': Math.round(avgReplicationFactor * 10) / 10,
+      'brokers': brokers.length,
+      'consumer_groups': consumerGroups.length,
+      'total_lag': Math.round(totalLag),
+      'avg_topic_messages': topicCount > 0 ? Math.round(topics.reduce((sum: number, t: any) => sum + (t.messages || 0), 0) / topicCount) : 0,
+      'total_topic_size_mb': Math.round(topics.reduce((sum: number, t: any) => sum + (t.size || 0), 0) / 1024 / 1024 * 100) / 100,
+      'under_replicated_partitions': underReplicatedPartitions,
     };
+  }
+  
+  /**
+   * Calculate compression overhead based on compression types used in topics
+   */
+  private calculateCompressionOverhead(topics: any[]): number {
+    if (topics.length === 0) return 0;
+    
+    const compressionOverheads: Record<string, number> = {
+      'uncompressed': 0,
+      'gzip': 2,
+      'snappy': 0.5,
+      'lz4': 0.3,
+      'zstd': 1,
+    };
+    
+    let totalOverhead = 0;
+    let topicsWithCompression = 0;
+    
+    for (const topic of topics) {
+      const compressionType = topic.config?.compressionType || 'gzip';
+      const overhead = compressionOverheads[compressionType] || 0;
+      if (overhead > 0) {
+        totalOverhead += overhead;
+        topicsWithCompression++;
+      }
+    }
+    
+    return topicsWithCompression > 0 ? totalOverhead / topicsWithCompression : 0;
+  }
+  
+  /**
+   * Get compression ratio for size calculations
+   */
+  private getCompressionRatio(compressionType?: string): number {
+    const ratios: Record<string, number> = {
+      'uncompressed': 1.0,
+      'gzip': 0.3, // ~70% compression
+      'snappy': 0.5, // ~50% compression
+      'lz4': 0.4, // ~60% compression
+      'zstd': 0.25, // ~75% compression
+    };
+    return ratios[compressionType || 'gzip'] || 0.3;
+  }
+  
+  /**
+   * Calculate number of under-replicated partitions
+   * In real Kafka, partitions are under-replicated if not all replicas are in ISR
+   */
+  private calculateUnderReplicatedPartitions(topics: any[], brokerCount: number): number {
+    let underReplicated = 0;
+    
+    for (const topic of topics) {
+      const replicationFactor = topic.replication || 1;
+      const partitions = topic.partitions || 1;
+      
+      // Check partitionInfo if available
+      if (topic.partitionInfo && Array.isArray(topic.partitionInfo)) {
+        for (const partitionInfo of topic.partitionInfo) {
+          const expectedReplicas = replicationFactor;
+          const actualReplicas = partitionInfo.isr?.length || partitionInfo.replicas?.length || 1;
+          
+          if (actualReplicas < expectedReplicas) {
+            underReplicated++;
+          }
+        }
+      } else {
+        // Estimate: if replication factor > available brokers, some partitions will be under-replicated
+        if (replicationFactor > brokerCount) {
+          underReplicated += partitions * Math.max(0, 1 - (brokerCount / replicationFactor));
+        }
+        
+        // Random chance of under-replication (network issues, broker failures)
+        // This simulates transient issues
+        if (Math.random() < 0.05 && replicationFactor > 1) { // 5% chance
+          underReplicated += partitions * 0.1; // ~10% of partitions affected
+        }
+      }
+    }
+    
+    return Math.round(underReplicated);
+  }
+  
+  /**
+   * Assign partitions to consumers using range assignment strategy
+   * This simulates Kafka's partition assignment algorithm
+   */
+  private assignPartitionsToConsumers(memberCount: number, partitionCount: number): Array<{ consumerId: number; partitions: number[] }> {
+    if (memberCount === 0 || partitionCount === 0) return [];
+    
+    const assignment: Array<{ consumerId: number; partitions: number[] }> = [];
+    
+    // Range assignment: partitions are assigned in ranges to consumers
+    // Example: 10 partitions, 3 consumers
+    // Consumer 0: partitions 0-3 (4 partitions)
+    // Consumer 1: partitions 4-6 (3 partitions)
+    // Consumer 2: partitions 7-9 (3 partitions)
+    
+    const partitionsPerConsumer = Math.floor(partitionCount / memberCount);
+    const extraPartitions = partitionCount % memberCount;
+    
+    let partitionIndex = 0;
+    for (let consumerId = 0; consumerId < memberCount; consumerId++) {
+      const assignedPartitions: number[] = [];
+      const countForThisConsumer = partitionsPerConsumer + (consumerId < extraPartitions ? 1 : 0);
+      
+      for (let i = 0; i < countForThisConsumer; i++) {
+        if (partitionIndex < partitionCount) {
+          assignedPartitions.push(partitionIndex);
+          partitionIndex++;
+        }
+      }
+      
+      assignment.push({ consumerId, partitions: assignedPartitions });
+    }
+    
+    return assignment;
+  }
+  
+  /**
+   * Track rebalancing state for consumer groups
+   * Stores previous member counts to detect changes
+   */
+  private consumerGroupMemberCounts: Map<string, number> = new Map();
+  private rebalancingGroups: Map<string, number> = new Map(); // group key -> end time
+  
+  /**
+   * Check if a consumer group is currently rebalancing
+   */
+  private isRebalancing(nodeId: string, groupId: string): boolean {
+    const key = `${nodeId}:${groupId}`;
+    const rebalanceEndTime = this.rebalancingGroups.get(key);
+    
+    if (rebalanceEndTime && Date.now() < rebalanceEndTime) {
+      return true;
+    }
+    
+    // Check if member count changed (triggering rebalance)
+    const currentMembers = this.getCurrentGroupMembers(nodeId, groupId);
+    const previousMembers = this.consumerGroupMemberCounts.get(key);
+    
+    if (previousMembers !== undefined && currentMembers !== previousMembers) {
+      // Member count changed - start rebalancing
+      const rebalanceDuration = 2000; // 2 seconds rebalance time
+      this.rebalancingGroups.set(key, Date.now() + rebalanceDuration);
+      this.consumerGroupMemberCounts.set(key, currentMembers);
+      return true;
+    }
+    
+    // Update member count
+    if (previousMembers === undefined || currentMembers !== previousMembers) {
+      this.consumerGroupMemberCounts.set(key, currentMembers);
+    }
+    
+    return false;
+  }
+  
+  /**
+   * Get current member count for a consumer group
+   */
+  private getCurrentGroupMembers(nodeId: string, groupId: string): number {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return 0;
+    
+    const kafkaConfig = node.data.config as any;
+    const consumerGroups = kafkaConfig?.consumerGroups || [];
+    const group = consumerGroups.find((g: any) => g.id === groupId);
+    
+    return group?.members || 0;
+  }
+  
+  /**
+   * Get average ISR count for a topic
+   * ISR (In-Sync Replicas) = replicas that are up-to-date
+   */
+  private getAverageISRCount(topic: any, brokerCount: number): number {
+    if (!topic.partitionInfo || !Array.isArray(topic.partitionInfo) || topic.partitionInfo.length === 0) {
+      // No partition info - estimate based on replication factor
+      const replicationFactor = topic.replication || 1;
+      // Assume most replicas are in sync (90-100%)
+      return Math.min(replicationFactor, brokerCount) * 0.95;
+    }
+    
+    // Calculate average ISR count from partitionInfo
+    let totalISR = 0;
+    let partitionCount = 0;
+    
+    for (const partitionInfo of topic.partitionInfo) {
+      const isrCount = partitionInfo.isr?.length || partitionInfo.replicas?.length || 1;
+      totalISR += isrCount;
+      partitionCount++;
+    }
+    
+    return partitionCount > 0 ? totalISR / partitionCount : 1;
+  }
+  
+  /**
+   * Check ACL permission for a principal
+   * Implements Kafka ACL logic: Deny takes precedence, then Allow
+   * Supports Literal, Prefixed, and Match pattern types
+   */
+  private checkACLPermission(
+    acls: any[],
+    principal: string,
+    resourceType: 'Topic' | 'Group' | 'Cluster' | 'TransactionalId' | 'DelegationToken',
+    resourceName: string,
+    operation: 'Read' | 'Write' | 'Create' | 'Delete' | 'Alter' | 'Describe' | 'AlterConfigs' | 'DescribeConfigs' | 'ClusterAction' | 'IdempotentWrite' | 'All',
+    host?: string
+  ): boolean {
+    if (!acls || acls.length === 0) {
+      // No ACLs configured - default allow (Kafka default: allow if no ACLs)
+      return true;
+    }
+    
+    // Normalize principal format (User:name or Group:name)
+    const normalizedPrincipal = principal.includes(':') ? principal : `User:${principal}`;
+    
+    // Find matching ACLs
+    const matchingACLs = acls.filter((acl: any) => {
+      // Check principal match
+      const aclPrincipal = acl.principal || '';
+      if (aclPrincipal !== normalizedPrincipal && aclPrincipal !== '*' && !normalizedPrincipal.includes(aclPrincipal)) {
+        return false;
+      }
+      
+      // Check resource type match
+      if (acl.resourceType !== resourceType) {
+        return false;
+      }
+      
+      // Check resource name match based on pattern type
+      const patternType = acl.resourcePatternType || 'Literal';
+      const aclResourceName = acl.resourceName || '';
+      
+      let resourceMatches = false;
+      
+      switch (patternType) {
+        case 'Literal':
+          // Exact match
+          resourceMatches = aclResourceName === resourceName || aclResourceName === '*';
+          break;
+          
+        case 'Prefixed':
+          // Prefix match (resourceName starts with ACL pattern)
+          if (aclResourceName === '*') {
+            resourceMatches = true;
+          } else if (aclResourceName.endsWith('*')) {
+            const prefix = aclResourceName.slice(0, -1);
+            resourceMatches = resourceName.startsWith(prefix);
+          } else {
+            resourceMatches = resourceName.startsWith(aclResourceName);
+          }
+          break;
+          
+        case 'Match':
+          // Wildcard pattern match (simplified: * matches anything)
+          if (aclResourceName === '*') {
+            resourceMatches = true;
+          } else {
+            // Convert simple wildcard pattern to regex
+            const regexPattern = aclResourceName
+              .replace(/\./g, '\\.')
+              .replace(/\*/g, '.*');
+            const regex = new RegExp(`^${regexPattern}$`);
+            resourceMatches = regex.test(resourceName);
+          }
+          break;
+          
+        default:
+          // Default to Literal
+          resourceMatches = aclResourceName === resourceName || aclResourceName === '*';
+      }
+      
+      if (!resourceMatches) {
+        return false;
+      }
+      
+      // Check operation match (operation or 'All')
+      if (acl.operation !== operation && acl.operation !== 'All') {
+        return false;
+      }
+      
+      // Check host match (if specified)
+      if (acl.host && acl.host !== '*' && host && acl.host !== host) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    if (matchingACLs.length === 0) {
+      // No matching ACLs - default deny in Kafka (if ACLs are enabled)
+      return false;
+    }
+    
+    // Kafka ACL logic: Deny takes precedence over Allow
+    // Check for any Deny rules first
+    const denyACLs = matchingACLs.filter((acl: any) => acl.permission === 'Deny');
+    if (denyACLs.length > 0) {
+      return false; // Denied
+    }
+    
+    // Check for Allow rules
+    const allowACLs = matchingACLs.filter((acl: any) => acl.permission === 'Allow');
+    if (allowACLs.length > 0) {
+      return true; // Allowed
+    }
+    
+    // No explicit Allow or Deny (shouldn't happen, but default deny)
+    return false;
   }
 
   /**

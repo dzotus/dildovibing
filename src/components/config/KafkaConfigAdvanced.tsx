@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useState } from 'react';
-import { Plus, Trash2, Play, Pause, Database, Users, Activity, Settings, Gauge, RefreshCcw, Key, Shield, FileText } from 'lucide-react';
+import { Plus, Trash2, Play, Pause, Database, Users, Activity, Settings, Gauge, RefreshCcw, Key, Shield, FileText, AlertCircle } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
@@ -98,6 +98,7 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
   const [showCreateTopic, setShowCreateTopic] = useState(false);
   const [showRegisterSchema, setShowRegisterSchema] = useState(false);
   const [showAddACL, setShowAddACL] = useState(false);
+  const [editingConsumerGroupIndex, setEditingConsumerGroupIndex] = useState<number | null>(null);
   
   // Schema registration form state
   const [schemaForm, setSchemaForm] = useState({
@@ -224,8 +225,27 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
 
   const addConsumerGroup = () => {
     updateConfig({
-      consumerGroups: [...consumerGroups, { id: 'new-group', topic: topics[0]?.name || '', lag: 0, members: 1 }],
+      consumerGroups: [...consumerGroups, { 
+        id: 'new-group', 
+        topic: topics[0]?.name || '', 
+        lag: 0, 
+        members: 1,
+        offsetStrategy: 'latest',
+        autoCommit: true
+      }],
     });
+  };
+
+  const removeConsumerGroup = (index: number) => {
+    updateConfig({
+      consumerGroups: consumerGroups.filter((_, i) => i !== index),
+    });
+  };
+
+  const updateConsumerGroup = (index: number, field: string, value: string | number | boolean) => {
+    const newGroups = [...consumerGroups];
+    newGroups[index] = { ...newGroups[index], [field]: value };
+    updateConfig({ consumerGroups: newGroups });
   };
 
   const registerSchema = () => {
@@ -301,8 +321,8 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
             </div>
           </div>
           <Badge variant="outline" className="gap-2">
-            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-            Connected
+            <div className="h-2 w-2 rounded-full bg-gray-400" />
+            Configured
           </Badge>
         </div>
 
@@ -397,31 +417,6 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                       <span>{fieldErrors.brokers}</span>
                     </div>
                   )}
-                </div>
-                <div className="flex gap-2 pt-4 border-t">
-                  <Button
-                    onClick={() => {
-                      if (validateConnectionFields()) {
-                        showSuccess('Параметры подключения сохранены');
-                      } else {
-                        showError('Пожалуйста, укажите хотя бы один корректный broker (host:port)');
-                      }
-                    }}
-                  >
-                    Сохранить настройки
-                  </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      if (validateConnectionFields()) {
-                        showSuccess('Параметры подключения валидны');
-                      } else {
-                        showError('Пожалуйста, укажите хотя бы один корректный broker (host:port)');
-                      }
-                    }}
-                  >
-                    Проверить подключение
-                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -692,26 +687,134 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                 ) : (
                   <div className="space-y-3">
                     {consumerGroups.map((group, index) => (
-                      <div key={index} className="p-4 border border-border rounded-lg bg-card">
-                        <div className="flex items-center justify-between mb-3">
-                          <div>
-                            <div className="font-semibold">{group.id}</div>
-                            <div className="text-sm text-muted-foreground">Topic: {group.topic}</div>
+                      <Card key={index} className="border-border">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 rounded bg-primary/10">
+                                <Users className="h-4 w-4 text-primary" />
+                              </div>
+                              <div>
+                                <CardTitle className="text-lg">{group.id}</CardTitle>
+                                <CardDescription className="text-xs mt-1">
+                                  Topic: {group.topic} • {group.members || 0} members
+                                </CardDescription>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={group.lag && group.lag > 1000 ? 'destructive' : 'secondary'}>
+                                Lag: {Math.round(group.lag || 0)}
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setEditingConsumerGroupIndex(editingConsumerGroupIndex === index ? null : index)}
+                              >
+                                {editingConsumerGroupIndex === index ? 'Hide' : 'Edit'}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => removeConsumerGroup(index)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
-                          <Badge variant={group.lag && group.lag > 1000 ? 'destructive' : 'secondary'}>
-                            Lag: {group.lag || 0}
-                          </Badge>
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">Members:</span>
-                            <span>{group.members || 0}</span>
-                          </div>
-                          {group.lag !== undefined && (
-                            <Progress value={Math.min((group.lag / 10000) * 100, 100)} className="h-2" />
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {editingConsumerGroupIndex === index ? (
+                            <div className="space-y-4 pt-2 border-t border-border">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                  <Label>Group ID</Label>
+                                  <Input
+                                    value={group.id}
+                                    onChange={(e) => updateConsumerGroup(index, 'id', e.target.value)}
+                                    placeholder="consumer-group-id"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Topic</Label>
+                                  <Select
+                                    value={group.topic}
+                                    onValueChange={(value) => updateConsumerGroup(index, 'topic', value)}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {topics.map((topic) => (
+                                        <SelectItem key={topic.name} value={topic.name}>
+                                          {topic.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Members</Label>
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    value={group.members || 1}
+                                    onChange={(e) => updateConsumerGroup(index, 'members', parseInt(e.target.value) || 1)}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Offset Strategy</Label>
+                                  <Select
+                                    value={group.offsetStrategy || 'latest'}
+                                    onValueChange={(value: 'earliest' | 'latest' | 'none') => updateConsumerGroup(index, 'offsetStrategy', value)}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="earliest">Earliest</SelectItem>
+                                      <SelectItem value="latest">Latest</SelectItem>
+                                      <SelectItem value="none">None</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                  <Label htmlFor={`auto-commit-${index}`}>Auto Commit</Label>
+                                  <p className="text-xs text-muted-foreground">
+                                    Automatically commit offsets after consuming messages
+                                  </p>
+                                </div>
+                                <Switch
+                                  id={`auto-commit-${index}`}
+                                  checked={group.autoCommit !== false}
+                                  onCheckedChange={(checked) => updateConsumerGroup(index, 'autoCommit', checked)}
+                                />
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                  <span className="text-muted-foreground">Members:</span>
+                                  <span className="ml-2 font-semibold">{group.members || 0}</span>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Offset:</span>
+                                  <span className="ml-2 font-semibold capitalize">{group.offsetStrategy || 'latest'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Auto Commit:</span>
+                                  <span className="ml-2 font-semibold">{group.autoCommit !== false ? 'Yes' : 'No'}</span>
+                                </div>
+                              </div>
+                              {group.lag !== undefined && (
+                                <Progress value={Math.min((group.lag / 10000) * 100, 100)} className="h-2" />
+                              )}
+                            </div>
                           )}
-                        </div>
-                      </div>
+                        </CardContent>
+                      </Card>
                     ))}
                   </div>
                 )}
