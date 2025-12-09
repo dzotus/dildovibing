@@ -2,6 +2,7 @@ import { CanvasNode, CanvasConnection } from '@/types';
 import { dataFlowEngine } from './DataFlowEngine';
 import { componentStateEngine } from './ComponentStateEngine';
 import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
+import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -92,6 +93,10 @@ export class EmulationEngine {
   // RabbitMQ routing engines per node
   private rabbitMQRoutingEngines: Map<string, RabbitMQRoutingEngine> = new Map();
   private lastRabbitMQUpdate: Map<string, number> = new Map();
+  
+  // ActiveMQ routing engines per node
+  private activeMQRoutingEngines: Map<string, ActiveMQRoutingEngine> = new Map();
+  private lastActiveMQUpdate: Map<string, number> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -199,6 +204,11 @@ export class EmulationEngine {
       if (node.type === 'rabbitmq') {
         this.initializeRabbitMQRoutingEngine(node);
       }
+      
+      // Initialize ActiveMQ routing engine for ActiveMQ nodes
+      if (node.type === 'activemq') {
+        this.initializeActiveMQRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -207,7 +217,9 @@ export class EmulationEngine {
       if (!nodeIds.has(nodeId)) {
         this.metrics.delete(nodeId);
         this.rabbitMQRoutingEngines.delete(nodeId);
+        this.activeMQRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
+        this.lastActiveMQUpdate.delete(nodeId);
       }
     }
     
@@ -295,6 +307,16 @@ export class EmulationEngine {
       }
     }
     
+    // Process ActiveMQ consumption (before updating metrics)
+    for (const [nodeId, routingEngine] of this.activeMQRoutingEngines.entries()) {
+      const lastUpdate = this.lastActiveMQUpdate.get(nodeId) || now;
+      const deltaTime = now - lastUpdate;
+      if (deltaTime > 0) {
+        routingEngine.processConsumption(deltaTime);
+        this.lastActiveMQUpdate.set(nodeId, now);
+      }
+    }
+    
     // Update component metrics based on their configuration
     for (const node of this.nodes) {
       this.updateComponentMetrics(node);
@@ -337,6 +359,9 @@ export class EmulationEngine {
           break;
         case 'rabbitmq':
           this.simulateRabbitMQ(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'activemq':
+          this.simulateActiveMQ(node, config, metrics, hasIncomingConnections);
           break;
         case 'postgres':
         case 'mongodb':
@@ -610,6 +635,7 @@ export class EmulationEngine {
     switch (node.type) {
       case 'kafka':
       case 'rabbitmq':
+      case 'activemq':
         return config.throughputMsgs || 1000;
       case 'postgres':
       case 'mongodb':
@@ -1421,6 +1447,484 @@ export class EmulationEngine {
   }
 
   /**
+   * ActiveMQ broker emulation
+   */
+  private simulateActiveMQ(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.activeMQRoutingEngines.has(node.id)) {
+      this.initializeActiveMQRoutingEngine(node);
+    }
+    
+    const routingEngine = this.activeMQRoutingEngines.get(node.id)!;
+    const activeMQConfig = (node.data.config as any) || {};
+    
+    // Get protocol for latency calculation
+    const protocol = activeMQConfig.protocol || 'openwire';
+    const persistenceEnabled = activeMQConfig.persistenceEnabled ?? true;
+    const maxConnections = activeMQConfig.maxConnections || 1000;
+    const memoryLimit = activeMQConfig.memoryLimit || 1024;
+    const storeUsage = activeMQConfig.storeUsage || 0;
+    const tempUsage = activeMQConfig.tempUsage || 0;
+    const connections = activeMQConfig.connections || [];
+    
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics but keep queue/topic state
+      metrics.throughput = 0;
+      metrics.latency = this.getProtocolBaseLatency(protocol);
+      metrics.errorRate = 0;
+      
+      // Calculate utilization from existing queue/topic depth
+      const totalQueueDepth = routingEngine.getTotalQueueDepth();
+      const totalTopicMessages = routingEngine.getTotalTopicMessages();
+      const totalMessages = totalQueueDepth + totalTopicMessages;
+      metrics.utilization = Math.min(1, totalMessages / 100000);
+      
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const allTopicMetrics = routingEngine.getAllTopicMetrics();
+      const activeConnections = routingEngine.getActiveConnections();
+      
+      // Calculate total consumers and subscribers
+      let totalConsumers = 0;
+      for (const queueMetrics of allQueueMetrics.values()) {
+        totalConsumers += queueMetrics.consumerCount;
+      }
+      
+      let totalSubscribers = 0;
+      for (const topicMetrics of allTopicMetrics.values()) {
+        totalSubscribers += topicMetrics.subscriberCount;
+      }
+      
+      metrics.customMetrics = {
+        'queue_depth': totalQueueDepth,
+        'topic_messages': totalTopicMessages,
+        'connections': activeConnections,
+        'queues': allQueueMetrics.size,
+        'topics': allTopicMetrics.size,
+        'consumers': totalConsumers,
+        'subscribers': totalSubscribers,
+        'memory_usage': storeUsage + tempUsage,
+        'memory_percent': memoryLimit > 0 ? ((storeUsage + tempUsage) / memoryLimit * 100) : 0,
+      };
+      
+      // Update metrics in config
+      this.updateActiveMQMetricsInConfig(node, allQueueMetrics, allTopicMetrics);
+      return;
+    }
+    
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+    
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate messages per second from connection traffic
+        // Assume average message size of 1KB
+        const avgMessageSize = 1024;
+        const msgPerSec = connMetrics.traffic / avgMessageSize;
+        totalIncomingThroughput += msgPerSec;
+      }
+    }
+    
+    // Use configured throughput if available, otherwise use calculated
+    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
+    
+    // Throughput with random jitter
+    const jitter = (Math.random() - 0.5) * 0.1;
+    metrics.throughput = throughputMsgs * (1 + jitter);
+    
+    // Latency based on queue depth, protocol, and persistence
+    const totalQueueDepth = routingEngine.getTotalQueueDepth();
+    const totalTopicMessages = routingEngine.getTotalTopicMessages();
+    const totalMessages = totalQueueDepth + totalTopicMessages;
+    
+    const protocolLatency = this.getProtocolBaseLatency(protocol);
+    const persistenceLatency = persistenceEnabled ? 5 : 0; // 5ms for persistence
+    const queueLatency = Math.min(50, totalMessages / 1000); // 1ms per 1000 messages, max 50ms
+    const memoryPressureLatency = memoryLimit > 0 && (storeUsage + tempUsage) > memoryLimit * 0.8 
+      ? 10 : 0; // Additional latency when memory is high
+    
+    metrics.latency = protocolLatency + persistenceLatency + queueLatency + memoryPressureLatency + Math.random() * 5;
+    
+    // Check ACL permissions for producers (Write operations) and consumers (Read operations)
+    const acls = activeMQConfig.acls || [];
+    let aclErrorRate = 0;
+    let aclBlockedThroughput = 0;
+    
+    // Check each incoming connection for ACL permissions
+    for (const conn of incomingConnections) {
+      const sourceNode = this.nodes.find(n => n.id === conn.source);
+      if (!sourceNode) continue;
+      
+      const sourceConfig = sourceNode.data.config as any;
+      const messagingConfig = sourceConfig?.messaging || {};
+      
+      // Get principal from source component or use broker username as fallback
+      // In real ActiveMQ, principal comes from authentication (username/password)
+      const principal = sourceConfig?.username || 
+                       sourceConfig?.clientId || 
+                       activeMQConfig.username || // Use broker username if source doesn't have one
+                       `user-${conn.source.slice(0, 8)}`;
+      
+      // Check if sending to queue
+      if (messagingConfig.queue) {
+        const hasWritePermission = this.checkActiveMQACLPermission(
+          acls,
+          principal,
+          `queue://${messagingConfig.queue}`,
+          'write'
+        );
+        
+        if (!hasWritePermission) {
+          // Producer doesn't have Write permission - block writes
+          const sourceMetrics = this.metrics.get(conn.source);
+          if (sourceMetrics) {
+            aclBlockedThroughput += sourceMetrics.throughput * 0.9; // Block 90% of throughput
+            aclErrorRate += 0.45; // 45% error rate for denied writes
+          }
+        }
+      }
+      
+      // Check if publishing to topic
+      if (messagingConfig.topic) {
+        const hasWritePermission = this.checkActiveMQACLPermission(
+          acls,
+          principal,
+          `topic://${messagingConfig.topic}`,
+          'write'
+        );
+        
+        if (!hasWritePermission) {
+          // Producer doesn't have Write permission - block writes
+          const sourceMetrics = this.metrics.get(conn.source);
+          if (sourceMetrics) {
+            aclBlockedThroughput += sourceMetrics.throughput * 0.9;
+            aclErrorRate += 0.45;
+          }
+        }
+      }
+    }
+    
+    // Check ACL for consumers (Read operations on queues)
+    for (const queue of queues) {
+      if (queue.consumerCount && queue.consumerCount > 0) {
+        // Simplified: check if any principal has read permission for this queue
+        // In real ActiveMQ, each consumer would have its own principal
+        const hasReadPermission = this.checkActiveMQACLPermission(
+          acls,
+          activeMQConfig.username || 'admin',
+          `queue://${queue.name}`,
+          'read'
+        );
+        
+        if (!hasReadPermission) {
+          // Consumers don't have Read permission - reduce consumption
+          // This will be handled by routing engine (consumption rate = 0)
+          aclErrorRate += 0.1; // Add error rate for denied reads
+        }
+      }
+    }
+    
+    // Error rate for delivery failures
+    const baseErrorRate = 0.0005;
+    const depthErrorRate = Math.min(0.01, totalMessages / 1000000); // 0.01% per 100k messages
+    const memoryErrorRate = memoryLimit > 0 && (storeUsage + tempUsage) > memoryLimit 
+      ? 0.01 : 0; // Error when memory is full
+    const connectionErrorRate = connections.length >= maxConnections ? 0.005 : 0; // Error when max connections reached
+    
+    // Adjust throughput based on ACL denials
+    if (aclBlockedThroughput > 0) {
+      metrics.throughput = Math.max(0, metrics.throughput - aclBlockedThroughput);
+    }
+    
+    metrics.errorRate = Math.min(1, baseErrorRate + depthErrorRate + memoryErrorRate + connectionErrorRate + aclErrorRate);
+    
+    // Utilization based on message backlog and memory
+    const messageUtilization = Math.min(1, totalMessages / 100000);
+    const memoryUtilization = memoryLimit > 0 ? Math.min(1, (storeUsage + tempUsage) / memoryLimit) : 0;
+    const connectionUtilization = Math.min(1, connections.length / maxConnections);
+    metrics.utilization = Math.max(messageUtilization, memoryUtilization, connectionUtilization);
+    
+    // Get queue and topic metrics
+    const allQueueMetrics = routingEngine.getAllQueueMetrics();
+    const allTopicMetrics = routingEngine.getAllTopicMetrics();
+    const activeConnections = routingEngine.getActiveConnections();
+    
+    // Calculate total consumers and subscribers
+    let totalConsumers = 0;
+    for (const queueMetrics of allQueueMetrics.values()) {
+      totalConsumers += queueMetrics.consumerCount;
+    }
+    
+    let totalSubscribers = 0;
+    for (const topicMetrics of allTopicMetrics.values()) {
+      totalSubscribers += topicMetrics.subscriberCount;
+    }
+    
+    metrics.customMetrics = {
+      'queue_depth': totalQueueDepth,
+      'topic_messages': totalTopicMessages,
+      'connections': activeConnections,
+      'queues': allQueueMetrics.size,
+      'topics': allTopicMetrics.size,
+      'consumers': totalConsumers,
+      'subscribers': totalSubscribers,
+      'memory_usage': storeUsage + tempUsage,
+      'memory_percent': memoryLimit > 0 ? ((storeUsage + tempUsage) / memoryLimit * 100) : 0,
+      'protocol': protocol,
+    };
+    
+    // Update metrics in node config (for UI display)
+    this.updateActiveMQMetricsInConfig(node, allQueueMetrics, allTopicMetrics);
+  }
+
+  /**
+   * Check ActiveMQ ACL permission
+   * ActiveMQ ACL format: resource = "queue://*", "topic://orders", etc.
+   * Operations: "read", "write", "admin", "create"
+   * Permission: "allow" or "deny"
+   * ActiveMQ logic: Deny takes precedence over Allow
+   */
+  private checkActiveMQACLPermission(
+    acls: Array<{
+      principal: string;
+      resource: string;
+      operation: string;
+      permission: 'allow' | 'deny';
+    }>,
+    principal: string,
+    resource: string, // Format: "queue://name" or "topic://name"
+    operation: string // "read", "write", "admin", "create"
+  ): boolean {
+    if (!acls || acls.length === 0) {
+      // No ACLs configured - default allow (ActiveMQ default: allow if no ACLs)
+      return true;
+    }
+    
+    // Find matching ACLs
+    const matchingACLs = acls.filter((acl) => {
+      // Check principal match (supports wildcard *)
+      const aclPrincipal = acl.principal || '';
+      if (aclPrincipal !== principal && aclPrincipal !== '*' && !principal.includes(aclPrincipal)) {
+        return false;
+      }
+      
+      // Check resource match (supports wildcard * and patterns like "queue://*", "topic://*")
+      const aclResource = acl.resource || '';
+      let resourceMatches = false;
+      
+      if (aclResource === '*' || aclResource === resource) {
+        resourceMatches = true;
+      } else if (aclResource.endsWith('*')) {
+        // Pattern match: "queue://*" matches "queue://orders"
+        const prefix = aclResource.slice(0, -1);
+        resourceMatches = resource.startsWith(prefix);
+      } else if (aclResource.includes('://')) {
+        // Full resource match: "queue://orders" matches "queue://orders"
+        resourceMatches = aclResource === resource;
+      } else {
+        // Simple name match: "orders" matches "queue://orders" or "topic://orders"
+        resourceMatches = resource.includes(aclResource);
+      }
+      
+      if (!resourceMatches) {
+        return false;
+      }
+      
+      // Check operation match (supports "read", "write", "admin", "create", or "all")
+      const aclOperation = (acl.operation || '').toLowerCase();
+      const normalizedOperation = operation.toLowerCase();
+      
+      if (aclOperation !== normalizedOperation && aclOperation !== 'all' && aclOperation !== '*') {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    if (matchingACLs.length === 0) {
+      // No matching ACLs - default allow (if ACLs are configured but none match, allow)
+      return true;
+    }
+    
+    // ActiveMQ ACL logic: Deny takes precedence over Allow
+    const denyACLs = matchingACLs.filter((acl) => acl.permission === 'deny');
+    if (denyACLs.length > 0) {
+      return false; // Denied
+    }
+    
+    const allowACLs = matchingACLs.filter((acl) => acl.permission === 'allow');
+    if (allowACLs.length > 0) {
+      return true; // Allowed
+    }
+    
+    // Default: allow if no explicit deny
+    return true;
+  }
+
+  /**
+   * Get base latency for protocol (ms)
+   */
+  private getProtocolBaseLatency(protocol: string): number {
+    const protocolLatencies: Record<string, number> = {
+      'openwire': 2,   // Native protocol, fastest
+      'amqp': 5,
+      'mqtt': 8,
+      'stomp': 10,
+      'ws': 12,        // WebSocket, slowest
+    };
+    return protocolLatencies[protocol] || 5; // Default to AMQP latency
+  }
+
+  /**
+   * Initialize ActiveMQ routing engine for a node
+   */
+  private initializeActiveMQRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new ActiveMQRoutingEngine();
+    
+    routingEngine.initialize({
+      queues: config.queues || [],
+      topics: config.topics || [],
+      subscriptions: config.subscriptions || [],
+    });
+    
+    this.activeMQRoutingEngines.set(node.id, routingEngine);
+    this.lastActiveMQUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Update ActiveMQ metrics in node config (for UI display)
+   */
+  private updateActiveMQMetricsInConfig(
+    node: CanvasNode,
+    queueMetrics: Map<string, { queueSize: number; consumerCount: number; enqueueCount: number; dequeueCount: number }>,
+    topicMetrics: Map<string, { subscriberCount: number; enqueueCount: number; dequeueCount: number }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    const activeMQConfig = config;
+    
+    // Update queue metrics
+    const queues = config.queues || [];
+    for (let i = 0; i < queues.length; i++) {
+      const queue = queues[i];
+      const metrics = queueMetrics.get(queue.name);
+      if (metrics) {
+        queues[i] = {
+          ...queue,
+          queueSize: metrics.queueSize,
+          consumerCount: metrics.consumerCount,
+          enqueueCount: metrics.enqueueCount,
+          dequeueCount: metrics.dequeueCount,
+        };
+      }
+    }
+    config.queues = queues;
+    
+    // Update topic metrics
+    const topics = config.topics || [];
+    for (let i = 0; i < topics.length; i++) {
+      const topic = topics[i];
+      const metrics = topicMetrics.get(topic.name);
+      if (metrics) {
+        topics[i] = {
+          ...topic,
+          subscriberCount: metrics.subscriberCount,
+          enqueueCount: metrics.enqueueCount,
+          dequeueCount: metrics.dequeueCount,
+        };
+      }
+    }
+    config.topics = topics;
+    
+    // Create connections dynamically from incoming canvas connections
+    // In real ActiveMQ, connections are created automatically when clients connect
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    const connections: Array<{
+      id: string;
+      remoteAddress?: string;
+      clientId?: string;
+      userName?: string;
+      connectedSince?: string;
+      messageCount?: number;
+      protocol?: 'OpenWire' | 'AMQP' | 'MQTT' | 'STOMP' | 'WebSocket';
+    }> = [];
+    
+    for (const conn of incomingConnections) {
+      const sourceNode = this.nodes.find(n => n.id === conn.source);
+      if (!sourceNode) continue;
+      
+      const sourceConfig = sourceNode.data.config as any;
+      const messagingConfig = sourceConfig?.messaging || {};
+      const protocol = activeMQConfig.protocol || 'openwire';
+      
+      // Get connection metrics to estimate message count
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      const estimatedMessages = connMetrics ? Math.floor(connMetrics.traffic / 1024) : 0; // Rough estimate
+      
+      connections.push({
+        id: conn.id,
+        remoteAddress: `${sourceNode.label || sourceNode.id}`,
+        clientId: `client-${conn.source.slice(0, 8)}`,
+        userName: activeMQConfig.username || 'admin',
+        connectedSince: new Date().toISOString(),
+        messageCount: estimatedMessages,
+        protocol: protocol === 'openwire' ? 'OpenWire' : 
+                  protocol === 'amqp' ? 'AMQP' :
+                  protocol === 'mqtt' ? 'MQTT' :
+                  protocol === 'stomp' ? 'STOMP' :
+                  protocol === 'ws' ? 'WebSocket' : 'OpenWire',
+      });
+    }
+    
+    config.connections = connections;
+    
+    // Create subscriptions dynamically based on topics and incoming connections
+    // In real ActiveMQ, subscriptions are created when clients subscribe to topics
+    const subscriptions: Array<{
+      id: string;
+      destination: string;
+      clientId: string;
+      selector?: string;
+      pendingQueueSize?: number;
+      dispatchedQueueSize?: number;
+      dispatchedCounter?: number;
+      enqueueCounter?: number;
+      dequeueCounter?: number;
+    }> = [];
+    
+    // For each topic, create subscriptions for connected consumers
+    for (const topic of topics) {
+      // Find connections that might be subscribing to this topic
+      // (simplified: assume all incoming connections can subscribe to topics)
+      for (const conn of incomingConnections) {
+        const sourceNode = this.nodes.find(n => n.id === conn.source);
+        if (!sourceNode) continue;
+        
+        const sourceConfig = sourceNode.data.config as any;
+        const messagingConfig = sourceConfig?.messaging || {};
+        
+        // Check if this connection is for a topic (not a queue)
+        if (messagingConfig.topic === topic.name || !messagingConfig.queue) {
+          const topicMetricsData = topicMetrics.get(topic.name);
+          subscriptions.push({
+            id: `sub-${conn.id}-${topic.name}`,
+            destination: topic.name,
+            clientId: `client-${conn.source.slice(0, 8)}`,
+            pendingQueueSize: 0, // Will be updated by routing engine
+            dispatchedQueueSize: 0,
+            dispatchedCounter: topicMetricsData?.enqueueCount || 0,
+            enqueueCounter: topicMetricsData?.enqueueCount || 0,
+            dequeueCounter: topicMetricsData?.dequeueCount || 0,
+          });
+        }
+      }
+    }
+    
+    config.subscriptions = subscriptions;
+  }
+
+  /**
    * Database emulation (PostgreSQL, MongoDB, Redis)
    */
   private simulateDatabase(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -1741,6 +2245,30 @@ export class EmulationEngine {
    */
   public getRabbitMQRoutingEngine(nodeId: string): RabbitMQRoutingEngine | undefined {
     return this.rabbitMQRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get ActiveMQ routing engine for a node
+   */
+  public getActiveMQRoutingEngine(nodeId: string): ActiveMQRoutingEngine | undefined {
+    return this.activeMQRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Check ActiveMQ ACL permission (public method for DataFlowEngine)
+   */
+  public checkActiveMQACLPermissionPublic(
+    acls: Array<{
+      principal: string;
+      resource: string;
+      operation: string;
+      permission: 'allow' | 'deny';
+    }>,
+    principal: string,
+    resource: string,
+    operation: string
+  ): boolean {
+    return this.checkActiveMQACLPermission(acls, principal, resource, operation);
   }
 
   /**

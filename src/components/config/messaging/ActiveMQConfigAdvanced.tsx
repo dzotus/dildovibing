@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -29,6 +30,8 @@ import {
   RefreshCcw
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Info, CheckCircle2, ArrowRight, Link2 } from 'lucide-react';
 
 interface ActiveMQConfigProps {
   componentId: string;
@@ -101,6 +104,7 @@ interface ActiveMQConfig {
 
 export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { isRunning, start, stop, updateMetrics } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -114,8 +118,10 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const password = config.password || 'admin';
   const queues = config.queues || [];
   const topics = config.topics || [];
-  const connections = config.connections || [];
-  const subscriptions = config.subscriptions || [];
+  // Connections and subscriptions are runtime data - they are created automatically
+  // when other components connect to this broker during simulation
+  const connections = config.connections || []; // Created dynamically from canvas connections
+  const subscriptions = config.subscriptions || []; // Created dynamically when clients subscribe to topics
   const persistenceEnabled = config.persistenceEnabled ?? true;
   const maxConnections = config.maxConnections || 1000;
   const memoryLimit = config.memoryLimit || 1024;
@@ -123,11 +129,13 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const tempUsage = config.tempUsage || 0;
   const acls = config.acls || [];
 
-  const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
-  const [editingTopicIndex, setEditingTopicIndex] = useState<number | null>(null);
-  const [showCreateConnection, setShowCreateConnection] = useState(false);
-  const [showCreateSubscription, setShowCreateSubscription] = useState(false);
   const [showCreateAcl, setShowCreateAcl] = useState(false);
+  const [aclForm, setAclForm] = useState({
+    principal: '',
+    resource: '',
+    operation: 'read' as 'read' | 'write' | 'admin' | 'create',
+    permission: 'allow' as 'allow' | 'deny',
+  });
 
   const updateConfig = (updates: Partial<ActiveMQConfig>) => {
     updateNode(componentId, {
@@ -139,10 +147,11 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   };
 
   const addQueue = () => {
+    const queueName = `queue-${Date.now()}`;
     updateConfig({
       queues: [
         ...queues,
-        { name: 'new-queue', queueSize: 0, consumerCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
+        { name: queueName, queueSize: 0, consumerCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
       ],
     });
   };
@@ -151,17 +160,15 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
     updateConfig({ queues: queues.filter((_, i) => i !== index) });
   };
 
-  const updateQueue = (index: number, field: string, value: string | number) => {
-    const newQueues = [...queues];
-    newQueues[index] = { ...newQueues[index], [field]: value };
-    updateConfig({ queues: newQueues });
-  };
+  // Queues can only be added/removed, not edited
+  // Name editing is not allowed - queues are identified by name
 
   const addTopic = () => {
+    const topicName = `topic-${Date.now()}`;
     updateConfig({
       topics: [
         ...topics,
-        { name: 'new-topic', subscriberCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
+        { name: topicName, subscriberCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
       ],
     });
   };
@@ -170,58 +177,31 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
     updateConfig({ topics: topics.filter((_, i) => i !== index) });
   };
 
-  const updateTopic = (index: number, field: string, value: string | number) => {
-    const newTopics = [...topics];
-    newTopics[index] = { ...newTopics[index], [field]: value };
-    updateConfig({ topics: newTopics });
-  };
+  // Topics can only be added/removed, not edited
+  // Name editing is not allowed - topics are identified by name
 
-  const addConnection = () => {
-    const newConnection: Connection = {
-      id: `conn-${Date.now()}`,
-      remoteAddress: '127.0.0.1',
-      clientId: `client-${Date.now()}`,
-      userName: username,
-      connectedSince: new Date().toISOString(),
-      messageCount: 0,
-      protocol: 'OpenWire',
-    };
-    updateConfig({ connections: [...connections, newConnection] });
-    setShowCreateConnection(false);
-  };
-
-  const removeConnection = (id: string) => {
-    updateConfig({ connections: connections.filter((c) => c.id !== id) });
-  };
-
-  const addSubscription = () => {
-    const newSubscription: Subscription = {
-      id: `sub-${Date.now()}`,
-      destination: topics[0]?.name || 'events',
-      clientId: `client-${Date.now()}`,
-      pendingQueueSize: 0,
-      dispatchedQueueSize: 0,
-      dispatchedCounter: 0,
-      enqueueCounter: 0,
-      dequeueCounter: 0,
-    };
-    updateConfig({ subscriptions: [...subscriptions, newSubscription] });
-    setShowCreateSubscription(false);
-  };
-
-  const removeSubscription = (id: string) => {
-    updateConfig({ subscriptions: subscriptions.filter((s) => s.id !== id) });
-  };
+  // Connections and subscriptions are created dynamically by clients at runtime
+  // They cannot be manually added/removed through the UI
 
   const addAcl = () => {
+    if (!aclForm.principal || !aclForm.resource) {
+      return; // Don't add if required fields are empty
+    }
     const newAcl = {
-      principal: 'user',
-      resource: 'queue://*',
-      operation: 'read',
-      permission: 'allow' as const,
+      principal: aclForm.principal,
+      resource: aclForm.resource,
+      operation: aclForm.operation,
+      permission: aclForm.permission,
     };
     updateConfig({ acls: [...acls, newAcl] });
     setShowCreateAcl(false);
+    // Reset form
+    setAclForm({
+      principal: '',
+      resource: '',
+      operation: 'read',
+      permission: 'allow',
+    });
   };
 
   const removeAcl = (index: number) => {
@@ -245,22 +225,39 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => updateMetrics()}
+              title="Manually refresh broker metrics (metrics update automatically during simulation)"
+            >
               <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Pause className="h-4 w-4 mr-2" />
-              Pause
-            </Button>
-            <Button variant="outline" size="sm">
-              <Play className="h-4 w-4 mr-2" />
-              Resume
+              Refresh Metrics
             </Button>
           </div>
         </div>
 
         <Separator />
+
+        {/* Setup Instructions */}
+        {queues.length === 0 && topics.length === 0 && (
+          <Alert>
+            <Info className="h-4 w-4" />
+            <AlertTitle>Getting Started</AlertTitle>
+            <AlertDescription className="space-y-2 mt-2">
+              <p>To start using ActiveMQ broker, follow these steps:</p>
+              <ol className="list-decimal list-inside space-y-1 text-sm">
+                <li>Configure at least one <strong>Queue</strong> or <strong>Topic</strong> in the tabs below</li>
+                <li>Connect other components (producers/consumers) to this broker</li>
+                <li>Start the simulation from the Emulation Panel to see metrics</li>
+              </ol>
+              <p className="text-xs text-muted-foreground mt-2">
+                <strong>Note:</strong> Queues and Topics are configuration - they define what destinations are available. 
+                Connections and Subscriptions are created automatically by clients at runtime.
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {/* Overview Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -270,8 +267,8 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
             </CardHeader>
             <CardContent>
               <div className="flex items-center gap-2">
-                <div className="h-2 w-2 rounded-full bg-green-500"></div>
-                <span className="text-lg font-semibold">Running</span>
+                <div className={`h-2 w-2 rounded-full ${isRunning ? 'bg-green-500' : 'bg-gray-500'}`}></div>
+                <span className="text-lg font-semibold">{isRunning ? 'Running' : 'Stopped'}</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1">{brokerName}</p>
             </CardContent>
@@ -341,6 +338,13 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
 
           {/* Broker Configuration */}
           <TabsContent value="broker" className="space-y-4">
+            <Alert className="mb-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Broker Configuration</AlertTitle>
+              <AlertDescription className="text-sm">
+                Configure connection settings, protocols, and broker limits. These settings affect how clients connect to the broker and how messages are processed.
+              </AlertDescription>
+            </Alert>
             <Card>
               <CardHeader>
                 <CardTitle>Broker Configuration</CardTitle>
@@ -447,16 +451,26 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
 
           {/* Queues */}
           <TabsContent value="queues" className="space-y-4">
+            <Alert className="mb-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Queue Configuration</AlertTitle>
+              <AlertDescription className="text-sm space-y-1">
+                <p>Configure queues for point-to-point messaging. Each queue represents a destination where producers send messages and consumers receive them.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <strong>Tip:</strong> To send messages to a queue, connect a producer component and specify the queue name in the connection settings.
+                </p>
+              </AlertDescription>
+            </Alert>
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Queues</CardTitle>
-                    <CardDescription>Manage message queues and their properties</CardDescription>
+                    <CardDescription>Configure message queues (queues are created dynamically by clients at runtime)</CardDescription>
                   </div>
                   <Button onClick={addQueue} size="sm">
                     <Plus className="h-4 w-4 mr-2" />
-                    Add Queue
+                    Add Queue Config
                   </Button>
                 </div>
               </CardHeader>
@@ -469,25 +483,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                           <div className="flex items-center gap-2">
                             <MessageSquare className="h-5 w-5 text-blue-500" />
                             <CardTitle className="text-base">
-                              {editingQueueIndex === index ? (
-                                <Input
-                                  value={queue.name}
-                                  onChange={(e) => updateQueue(index, 'name', e.target.value)}
-                                  onBlur={() => setEditingQueueIndex(null)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') setEditingQueueIndex(null);
-                                  }}
-                                  className="h-7"
-                                  autoFocus
-                                />
-                              ) : (
-                                <span
-                                  className="cursor-pointer hover:text-primary"
-                                  onClick={() => setEditingQueueIndex(index)}
-                                >
-                                  {queue.name}
-                                </span>
-                              )}
+                              {queue.name}
                             </CardTitle>
                           </div>
                           <Button
@@ -538,16 +534,26 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
 
           {/* Topics */}
           <TabsContent value="topics" className="space-y-4">
+            <Alert className="mb-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Topic Configuration</AlertTitle>
+              <AlertDescription className="text-sm space-y-1">
+                <p>Configure topics for publish-subscribe messaging. Publishers send messages to topics, and all subscribers receive copies of the messages.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <strong>Tip:</strong> To publish messages, connect a producer component and specify the topic name. Multiple consumers can subscribe to the same topic.
+                </p>
+              </AlertDescription>
+            </Alert>
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Topics</CardTitle>
-                    <CardDescription>Manage publish-subscribe topics</CardDescription>
+                    <CardDescription>Configure publish-subscribe topics (topics are created dynamically by clients at runtime)</CardDescription>
                   </div>
                   <Button onClick={addTopic} size="sm">
                     <Plus className="h-4 w-4 mr-2" />
-                    Add Topic
+                    Add Topic Config
                   </Button>
                 </div>
               </CardHeader>
@@ -560,32 +566,13 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                           <div className="flex items-center gap-2">
                             <Database className="h-5 w-5 text-green-500" />
                             <CardTitle className="text-base">
-                              {editingTopicIndex === index ? (
-                                <Input
-                                  value={topic.name}
-                                  onChange={(e) => updateTopic(index, 'name', e.target.value)}
-                                  onBlur={() => setEditingTopicIndex(null)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') setEditingTopicIndex(null);
-                                  }}
-                                  className="h-7"
-                                  autoFocus
-                                />
-                              ) : (
-                                <span
-                                  className="cursor-pointer hover:text-primary"
-                                  onClick={() => setEditingTopicIndex(index)}
-                                >
-                                  {topic.name}
-                                </span>
-                              )}
+                              {topic.name}
                             </CardTitle>
                           </div>
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => removeTopic(index)}
-                            disabled={topics.length === 1}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -634,12 +621,8 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Connections</CardTitle>
-                    <CardDescription>Active client connections to the broker</CardDescription>
+                    <CardDescription>Active client connections to the broker (read-only, connections are created by clients)</CardDescription>
                   </div>
-                  <Button onClick={addConnection} size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Connection
-                  </Button>
                 </div>
               </CardHeader>
               <CardContent>
@@ -669,13 +652,6 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                 <p className="text-sm font-medium">{conn.messageCount || 0}</p>
                               </div>
                             </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeConnection(conn.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
                           </div>
                           {conn.remoteAddress && (
                             <p className="text-xs text-muted-foreground mt-2">
@@ -698,12 +674,8 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle>Subscriptions</CardTitle>
-                    <CardDescription>Active topic subscriptions</CardDescription>
+                    <CardDescription>Active topic subscriptions (read-only, subscriptions are created by clients)</CardDescription>
                   </div>
-                  <Button onClick={addSubscription} size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Add Subscription
-                  </Button>
                 </div>
               </CardHeader>
               <CardContent>
@@ -733,13 +705,6 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                 <p className="text-sm font-medium">{sub.dispatchedQueueSize || 0}</p>
                               </div>
                             </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeSubscription(sub.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
                           </div>
                           {sub.selector && (
                             <p className="text-xs text-muted-foreground mt-2">
@@ -757,6 +722,18 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
 
           {/* Security */}
           <TabsContent value="security" className="space-y-4">
+            <Alert className="mb-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Access Control Lists (ACLs)</AlertTitle>
+              <AlertDescription className="text-sm space-y-1">
+                <p>Configure permissions to control access to queues and topics. ACLs are enforced during simulation.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <strong>Format:</strong> Resource should be in format <code>queue://name</code> or <code>topic://name</code> (wildcard <code>*</code> supported). 
+                  Operations: <code>read</code>, <code>write</code>, <code>admin</code>, <code>create</code>. 
+                  <strong>Deny</strong> takes precedence over <strong>Allow</strong>.
+                </p>
+              </AlertDescription>
+            </Alert>
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -764,14 +741,100 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                     <CardTitle>Access Control Lists (ACLs)</CardTitle>
                     <CardDescription>Configure permissions for users and resources</CardDescription>
                   </div>
-                  <Button onClick={addAcl} size="sm">
+                  <Button onClick={() => setShowCreateAcl(true)} size="sm">
                     <Plus className="h-4 w-4 mr-2" />
                     Add ACL
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                {acls.length === 0 ? (
+                {showCreateAcl && (
+                  <Card className="mb-4 border-primary">
+                    <CardHeader>
+                      <CardTitle>Create ACL Rule</CardTitle>
+                      <CardDescription>Configure access control for queues and topics</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="acl-principal">Principal (User/Group)</Label>
+                          <Input
+                            id="acl-principal"
+                            value={aclForm.principal}
+                            onChange={(e) => setAclForm({ ...aclForm, principal: e.target.value })}
+                            placeholder="user1 or * for all"
+                          />
+                          <p className="text-xs text-muted-foreground">User or group name, use * for all</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="acl-resource">Resource</Label>
+                          <Input
+                            id="acl-resource"
+                            value={aclForm.resource}
+                            onChange={(e) => setAclForm({ ...aclForm, resource: e.target.value })}
+                            placeholder="queue://orders or topic://events"
+                          />
+                          <p className="text-xs text-muted-foreground">Format: queue://name or topic://name (use * for all)</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label htmlFor="acl-operation">Operation</Label>
+                          <Select
+                            value={aclForm.operation}
+                            onValueChange={(value: 'read' | 'write' | 'admin' | 'create') => 
+                              setAclForm({ ...aclForm, operation: value })
+                            }
+                          >
+                            <SelectTrigger id="acl-operation">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="read">Read</SelectItem>
+                              <SelectItem value="write">Write</SelectItem>
+                              <SelectItem value="admin">Admin</SelectItem>
+                              <SelectItem value="create">Create</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="acl-permission">Permission</Label>
+                          <Select
+                            value={aclForm.permission}
+                            onValueChange={(value: 'allow' | 'deny') => 
+                              setAclForm({ ...aclForm, permission: value })
+                            }
+                          >
+                            <SelectTrigger id="acl-permission">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="allow">Allow</SelectItem>
+                              <SelectItem value="deny">Deny</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button onClick={addAcl} disabled={!aclForm.principal || !aclForm.resource}>
+                          Create ACL
+                        </Button>
+                        <Button variant="outline" onClick={() => {
+                          setShowCreateAcl(false);
+                          setAclForm({
+                            principal: '',
+                            resource: '',
+                            operation: 'read',
+                            permission: 'allow',
+                          });
+                        }}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+                {acls.length === 0 && !showCreateAcl ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No ACLs configured</p>
                 ) : (
                   <div className="space-y-2">

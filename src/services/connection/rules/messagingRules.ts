@@ -44,10 +44,16 @@ export function createMessagingProducerRule(discovery: ServiceDiscovery): Connec
           break;
         
         case 'activemq':
+          // Get first queue from ActiveMQ config if available, otherwise use default
+          const activeMQQueues = queue.data.config?.queues || [];
+          const defaultQueueName = activeMQQueues.length > 0 && typeof activeMQQueues[0] === 'object' 
+            ? activeMQQueues[0].name 
+            : (activeMQQueues.length > 0 ? activeMQQueues[0] : null);
+          
           messagingConfig = {
             messaging: {
               broker: `${metadata.targetHost}:${metadata.targetPort}`,
-              queue: config.messaging?.queue || queue.data.config?.defaultQueue || 'default-queue',
+              queue: config.messaging?.queue || defaultQueueName || 'default-queue',
             },
           };
           break;

@@ -87,6 +87,7 @@ export class DataFlowEngine {
     // Message brokers - pass through messages
     this.registerHandler('kafka', this.createMessageBrokerHandler('kafka'));
     this.registerHandler('rabbitmq', this.createMessageBrokerHandler('rabbitmq'));
+    this.registerHandler('activemq', this.createMessageBrokerHandler('activemq'));
     
     // APIs - transform and route data
     this.registerHandler('rest', this.createAPIHandler('rest'));
@@ -732,6 +733,121 @@ export class DataFlowEngine {
             // No queues matched, message is lost (or could go to DLX)
             message.status = 'failed';
             message.error = `No queues bound to exchange '${exchange}' with routing key '${routingKey}'`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
+    if (type === 'activemq') {
+      return {
+        processData: (node, message, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getActiveMQRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract queue or topic from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const queue = messagingConfig.queue;
+          const topic = messagingConfig.topic;
+          const headers = message.metadata?.headers;
+          const priority = message.metadata?.priority;
+          
+          let routed = false;
+          let destination = '';
+          
+          // Check ACL permissions before routing
+          const activeMQConfig = (node.data.config as any) || {};
+          const acls = activeMQConfig.acls || [];
+          
+          // Get principal from source component config or message metadata
+          const sourceNode = this.nodes.find(n => n.id === message.source);
+          const sourceConfig = sourceNode?.data.config as any;
+          const principal = message.metadata?.principal || 
+                           sourceConfig?.username || 
+                           sourceConfig?.clientId ||
+                           activeMQConfig.username || // Fallback to broker username
+                           `user-${message.source.slice(0, 8)}`;
+          
+          // Route to queue (point-to-point)
+          if (queue) {
+            // Check Write permission for queue
+            const hasPermission = emulationEngine.checkActiveMQACLPermissionPublic?.(
+              acls,
+              principal,
+              `queue://${queue}`,
+              'write'
+            ) ?? true; // Default allow if method doesn't exist
+            
+            if (!hasPermission) {
+              message.status = 'failed';
+              message.error = `Access denied: principal '${principal}' does not have write permission for queue '${queue}'`;
+              return message;
+            }
+            
+            const success = routingEngine.routeToQueue(
+              queue,
+              message.payload,
+              message.size,
+              headers,
+              priority
+            );
+            if (success) {
+              routed = true;
+              destination = queue;
+            }
+          }
+          
+          // Publish to topic (publish-subscribe)
+          if (topic) {
+            // Check Write permission for topic
+            const hasPermission = emulationEngine.checkActiveMQACLPermissionPublic?.(
+              acls,
+              principal,
+              `topic://${topic}`,
+              'write'
+            ) ?? true; // Default allow if method doesn't exist
+            
+            if (!hasPermission) {
+              message.status = 'failed';
+              message.error = `Access denied: principal '${principal}' does not have write permission for topic '${topic}'`;
+              return message;
+            }
+            
+            const subscriptionIds = routingEngine.publishToTopic(
+              topic,
+              message.payload,
+              message.size,
+              headers,
+              priority
+            );
+            if (subscriptionIds.length > 0) {
+              routed = true;
+              destination = topic;
+            }
+          }
+          
+          if (routed) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              destination,
+              queue: queue || undefined,
+              topic: topic || undefined,
+            };
+          } else {
+            // No queue or topic matched, message is lost
+            message.status = 'failed';
+            message.error = `No queue or topic found. Queue: '${queue || 'none'}', Topic: '${topic || 'none'}'`;
           }
           
           return message;
