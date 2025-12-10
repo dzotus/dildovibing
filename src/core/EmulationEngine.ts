@@ -6,6 +6,7 @@ import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 import { SQSRoutingEngine } from './SQSRoutingEngine';
 import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
 import { PubSubRoutingEngine } from './PubSubRoutingEngine';
+import { KongRoutingEngine } from './KongRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -112,6 +113,9 @@ export class EmulationEngine {
   // Pub/Sub routing engines per node
   private pubSubRoutingEngines: Map<string, PubSubRoutingEngine> = new Map();
   private lastPubSubUpdate: Map<string, number> = new Map();
+  
+  // Kong Gateway routing engines per node
+  private kongRoutingEngines: Map<string, KongRoutingEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -259,6 +263,11 @@ export class EmulationEngine {
       if (node.type === 'gcp-pubsub') {
         this.initializePubSubRoutingEngine(node);
       }
+      
+      // Initialize Kong routing engine for Kong Gateway nodes
+      if (node.type === 'kong') {
+        this.initializeKongRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -271,6 +280,7 @@ export class EmulationEngine {
         this.sqsRoutingEngines.delete(nodeId);
         this.azureServiceBusRoutingEngines.delete(nodeId);
         this.pubSubRoutingEngines.delete(nodeId);
+        this.kongRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -474,6 +484,9 @@ export class EmulationEngine {
         case 'grpc':
         case 'websocket':
           this.simulateAPI(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'kong':
+          this.simulateKong(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -2874,6 +2887,96 @@ export class EmulationEngine {
   }
 
   /**
+   * Kong Gateway emulation
+   */
+  private simulateKong(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+
+    // Get Kong routing engine
+    const routingEngine = this.kongRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+
+    // Get Kong config
+    const kongConfig = (config as any) || {};
+    const requestsPerSecond = kongConfig.requestsPerSecond || config.requestsPerSecond || 450;
+    const stats = routingEngine.getStats();
+
+    // Calculate throughput based on incoming connections and rate limits
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+
+    // Apply rate limiting effects from plugins
+    const rateLimitPlugins = (kongConfig.plugins || []).filter((p: any) => 
+      p.name === 'rate-limiting' && p.enabled
+    );
+    
+    if (rateLimitPlugins.length > 0) {
+      // Rate limiting reduces effective throughput
+      const minLimit = Math.min(...rateLimitPlugins.map((p: any) => 
+        p.config?.minute || 1000
+      ));
+      baseThroughput = Math.min(baseThroughput, minLimit * loadVariation);
+    }
+
+    metrics.throughput = baseThroughput;
+
+    // Latency: base gateway latency (1-5ms) + plugin overhead
+    const baseLatency = 2 + Math.random() * 3;
+    const pluginOverhead = stats.plugins * 0.5; // Each plugin adds ~0.5ms
+    const upstreamLatency = 10 + Math.random() * 40; // Simulated upstream latency
+    metrics.latency = baseLatency + pluginOverhead + upstreamLatency;
+
+    // Error rate: base + plugin rejections
+    const baseErrorRate = 0.001; // 0.1% base error rate
+    const authErrorRate = stats.consumers > 0 ? 0.02 : 0; // 2% auth failures if consumers configured
+    metrics.errorRate = Math.min(1, baseErrorRate + authErrorRate);
+
+    // Utilization based on throughput vs capacity
+    metrics.utilization = Math.min(1, metrics.throughput / requestsPerSecond);
+
+    metrics.customMetrics = {
+      'services': stats.services,
+      'routes': stats.routes,
+      'upstreams': stats.upstreams,
+      'consumers': stats.consumers,
+      'plugins': stats.plugins,
+      'requests_per_second': requestsPerSecond,
+      'gateway_latency': baseLatency + pluginOverhead,
+      'upstream_latency': upstreamLatency,
+    };
+  }
+
+  /**
+   * Initialize Kong routing engine for a node
+   */
+  private initializeKongRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new KongRoutingEngine();
+    
+    routingEngine.initialize({
+      services: config.services || [],
+      routes: config.routes || [],
+      upstreams: config.upstreams || [],
+      consumers: config.consumers || [],
+      plugins: config.plugins || [],
+    });
+    
+    this.kongRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -2985,6 +3088,13 @@ export class EmulationEngine {
 
   public getPubSubRoutingEngine(nodeId: string): PubSubRoutingEngine | undefined {
     return this.pubSubRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Kong routing engine for a node
+   */
+  public getKongRoutingEngine(nodeId: string): KongRoutingEngine | undefined {
+    return this.kongRoutingEngines.get(nodeId);
   }
 
   /**

@@ -2,6 +2,7 @@ import { ConnectionRule } from '../types';
 import { ServiceDiscovery } from '../ServiceDiscovery';
 import { createEnvoyRule } from './envoyRules';
 import { createAPIGatewayRule } from './apiGatewayRules';
+import { createKongRule } from './kongRules';
 import { createServiceMeshRule, createIstioRule } from './serviceMeshRules';
 import { createNginxRule, createHAProxyRule, createTraefikRule } from './loadBalancerRules';
 import { createDatabaseClientRule } from './databaseRules';
@@ -21,6 +22,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     
     // Edge & Gateway
     createAPIGatewayRule(discovery),
+    createKongRule(discovery),
     createServiceMeshRule(discovery),
     createIstioRule(discovery),
     

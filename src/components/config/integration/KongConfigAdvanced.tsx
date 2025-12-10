@@ -29,6 +29,10 @@ import {
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { showError } from '@/utils/toast';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { useComponentStateStore } from '@/store/useComponentStateStore';
+import { useDependencyStore } from '@/store/useDependencyStore';
+import { getComponentRuntimeStatus, getStatusBadgeVariant, getStatusDotColor } from '@/utils/componentStatus';
 
 interface KongConfigProps {
   componentId: string;
@@ -114,10 +118,24 @@ interface KongConfig {
 }
 
 export function KongConfigAdvanced({ componentId }: KongConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
+  const { isRunning, getComponentMetrics } = useEmulationStore();
+  const componentState = useComponentStateStore((state) => state.getComponentState(componentId));
+  const dependencyStatus = useDependencyStore((state) => state.getComponentStatus(componentId));
+  const metrics = isRunning ? getComponentMetrics(componentId) : undefined;
+  const hasConnections = connections.some(conn => conn.source === componentId || conn.target === componentId);
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
+
+  // Get component runtime status
+  const runtimeStatus = getComponentRuntimeStatus({
+    isSimulationRunning: isRunning,
+    componentState: componentState?.state,
+    metrics,
+    dependencyStatus,
+    hasConnections,
+  });
 
   const config = (node.data.config as any) || {} as KongConfig;
   const adminUrl = config.adminUrl || 'http://kong:8001';
@@ -161,6 +179,11 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
   const [editingUpstreamIndex, setEditingUpstreamIndex] = useState<number | null>(null);
   const [editingConsumerIndex, setEditingConsumerIndex] = useState<number | null>(null);
   const [editingPluginIndex, setEditingPluginIndex] = useState<number | null>(null);
+  const [editingServiceIndex, setEditingServiceIndex] = useState<number | null>(null);
+  
+  // Form state for creating new items
+  const [newUpstreamName, setNewUpstreamName] = useState('');
+  const [newConsumerUsername, setNewConsumerUsername] = useState('');
 
   const updateConfig = (updates: Partial<KongConfig>) => {
     updateNode(componentId, {
@@ -181,6 +204,12 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
     updateConfig({ services: services.filter((_, i) => i !== index) });
   };
 
+  const updateService = (index: number, field: keyof Service, value: string | boolean) => {
+    const newServices = [...services];
+    newServices[index] = { ...newServices[index], [field]: value };
+    updateConfig({ services: newServices });
+  };
+
   const addRoute = () => {
     updateConfig({
       routes: [...routes, { id: String(routes.length + 1), path: '/new-path', method: 'GET', service: services[0]?.name || '', stripPath: true }],
@@ -198,14 +227,16 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
   };
 
   const addUpstream = () => {
+    const name = newUpstreamName.trim() || 'new-upstream';
     const newUpstream: Upstream = {
       id: String(upstreams.length + 1),
-      name: 'new-upstream',
+      name: name,
       algorithm: 'round-robin',
       healthchecks: { active: true, passive: true },
       targets: [{ target: 'server:8080', weight: 100, health: 'healthy' }]
     };
     updateConfig({ upstreams: [...upstreams, newUpstream] });
+    setNewUpstreamName('');
     setShowCreateUpstream(false);
   };
 
@@ -238,12 +269,14 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
   };
 
   const addConsumer = () => {
+    const username = newConsumerUsername.trim() || 'new-consumer';
     const newConsumer: Consumer = {
       id: String(consumers.length + 1),
-      username: 'new-consumer',
+      username: username,
       credentials: []
     };
     updateConfig({ consumers: [...consumers, newConsumer] });
+    setNewConsumerUsername('');
     setShowCreateConsumer(false);
   };
 
@@ -315,14 +348,13 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+            <Badge variant={getStatusBadgeVariant(runtimeStatus)} className="gap-2">
+              <div className={`h-2 w-2 rounded-full ${getStatusDotColor(runtimeStatus)} ${runtimeStatus === 'running' ? 'animate-pulse' : ''}`} />
+              {runtimeStatus === 'running' ? 'Running' : 
+               runtimeStatus === 'stopped' ? 'Stopped' :
+               runtimeStatus === 'degraded' ? 'Degraded' :
+               runtimeStatus === 'error' ? 'Error' : 'Idle'}
             </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              Admin API
-            </Button>
           </div>
         </div>
 
@@ -383,11 +415,33 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
                             <div className="p-2 rounded bg-primary/10">
                               <Network className="h-4 w-4 text-primary" />
                             </div>
-                            <div>
-                              <CardTitle className="text-lg">{service.name}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
-                                {service.url} • {service.routes} routes
-                              </CardDescription>
+                            <div className="flex-1">
+                              {editingServiceIndex === index ? (
+                                <Input
+                                  value={service.name}
+                                  onChange={(e) => updateService(index, 'name', e.target.value)}
+                                  onBlur={() => setEditingServiceIndex(null)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      setEditingServiceIndex(null);
+                                    }
+                                  }}
+                                  className="font-semibold text-lg"
+                                  autoFocus
+                                />
+                              ) : (
+                                <>
+                                  <CardTitle 
+                                    className="text-lg cursor-pointer hover:text-primary transition-colors"
+                                    onClick={() => setEditingServiceIndex(index)}
+                                  >
+                                    {service.name}
+                                  </CardTitle>
+                                  <CardDescription className="text-xs mt-1">
+                                    {service.url} • {service.routes} routes
+                                  </CardDescription>
+                                </>
+                              )}
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -470,11 +524,25 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
                           </div>
                           <div className="space-y-2">
                             <Label>Method</Label>
-                            <Input
+                            <Select
                               value={route.method}
-                              onChange={(e) => updateRoute(index, 'method', e.target.value)}
-                              placeholder="GET"
-                            />
+                              onValueChange={(value) => updateRoute(index, 'method', value)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="Select method" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="GET">GET</SelectItem>
+                                <SelectItem value="POST">POST</SelectItem>
+                                <SelectItem value="PUT">PUT</SelectItem>
+                                <SelectItem value="PATCH">PATCH</SelectItem>
+                                <SelectItem value="DELETE">DELETE</SelectItem>
+                                <SelectItem value="HEAD">HEAD</SelectItem>
+                                <SelectItem value="OPTIONS">OPTIONS</SelectItem>
+                                <SelectItem value="TRACE">TRACE</SelectItem>
+                                <SelectItem value="CONNECT">CONNECT</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         </div>
                         <div className="flex items-center justify-between">
@@ -510,11 +578,18 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Upstream Name</Label>
-                      <Input placeholder="backend-upstream" />
+                      <Input 
+                        placeholder="backend-upstream" 
+                        value={newUpstreamName}
+                        onChange={(e) => setNewUpstreamName(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={addUpstream}>Create Upstream</Button>
-                      <Button variant="outline" onClick={() => setShowCreateUpstream(false)}>Cancel</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateUpstream(false);
+                        setNewUpstreamName('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
@@ -625,11 +700,18 @@ export function KongConfigAdvanced({ componentId }: KongConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Username</Label>
-                      <Input placeholder="new-consumer" />
+                      <Input 
+                        placeholder="new-consumer" 
+                        value={newConsumerUsername}
+                        onChange={(e) => setNewConsumerUsername(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={addConsumer}>Create Consumer</Button>
-                      <Button variant="outline" onClick={() => setShowCreateConsumer(false)}>Cancel</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateConsumer(false);
+                        setNewConsumerUsername('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
