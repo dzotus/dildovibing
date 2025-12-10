@@ -99,6 +99,7 @@ export class DataFlowEngine {
     
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
+    this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
   }
 
@@ -361,7 +362,7 @@ export class DataFlowEngine {
     // Check if there's an integration component in the path
     // For now, check direct connection
     const sourceNode = this.nodes.find(n => n.id === connection.source);
-    if (sourceNode && ['kong', 'mulesoft', 'apigee', 'bff-service'].includes(sourceNode.type)) {
+    if (sourceNode && ['kong', 'apigee', 'mulesoft', 'bff-service'].includes(sourceNode.type)) {
       return this.handlers.get(sourceNode.type) || null;
     }
     return null;
@@ -1202,6 +1203,75 @@ export class DataFlowEngine {
         
         transformData: (node, message, targetType, config) => {
           // Kong can transform requests/responses
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary'],
+      };
+    }
+
+    if (type === 'apigee') {
+      return {
+        processData: (node, message, config) => {
+          // Get Apigee routing engine from emulation engine
+          const routingEngine = emulationEngine.getApigeeRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const apiKey = headers['apikey'] || headers['X-API-Key'] || query['apikey'];
+          const authHeader = headers['Authorization'] || '';
+          const oauthToken = authHeader.startsWith('OAuth ') ? authHeader.replace('OAuth ', '') : undefined;
+          const jwtToken = authHeader.startsWith('Bearer ') ? authHeader.replace('Bearer ', '') : headers['X-JWT-Token'];
+
+          // Route request through Apigee Gateway
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            apiKey,
+            oauthToken,
+            jwtToken,
+          });
+
+          if (routeResult.response.status >= 200 && routeResult.response.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.response.latency;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              apigeeProxy: routeResult.match?.proxy.name,
+              apigeeTarget: routeResult.target,
+              apigeeResponseStatus: routeResult.response.status,
+              apigeeEnvironment: routeResult.match?.proxy.environment,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.response.error || `HTTP ${routeResult.response.status}`;
+            message.latency = routeResult.response.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Apigee can transform requests/responses (XML to JSON, etc.)
           const targetFormats = this.getTargetFormats(targetType);
           if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
             message.format = targetFormats[0];

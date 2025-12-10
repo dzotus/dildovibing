@@ -1,5 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,8 @@ interface Policy {
   name: string;
   type: 'quota' | 'spike-arrest' | 'oauth' | 'jwt' | 'verify-api-key' | 'cors' | 'xml-to-json';
   enabled: boolean;
+  executionFlow?: 'PreFlow' | 'RequestFlow' | 'PostFlow' | 'ErrorFlow';
+  condition?: string; // Optional condition for conditional execution
   config?: Record<string, any>;
 }
 
@@ -65,9 +68,12 @@ interface ApigeeConfig {
 
 export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { isRunning, getComponentMetrics } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
+  
+  const metrics = isRunning ? getComponentMetrics(componentId) : undefined;
 
   const config = (node.data.config as any) || {} as ApigeeConfig;
   const organization = config.organization || 'archiphoenix-org';
@@ -93,6 +99,7 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
 
   const [editingProxyIndex, setEditingProxyIndex] = useState<number | null>(null);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
+  const [newPolicyType, setNewPolicyType] = useState<'quota' | 'spike-arrest' | 'oauth' | 'jwt' | 'verify-api-key' | 'cors' | 'xml-to-json'>('quota');
 
   const updateConfig = (updates: Partial<ApigeeConfig>) => {
     updateNode(componentId, {
@@ -133,15 +140,39 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
   };
 
   const addPolicy = () => {
+    // Set default name based on type
+    const defaultNames: Record<string, string> = {
+      'quota': 'Quota Policy',
+      'spike-arrest': 'Spike Arrest Policy',
+      'oauth': 'OAuth Policy',
+      'jwt': 'JWT Policy',
+      'verify-api-key': 'Verify API Key Policy',
+      'cors': 'CORS Policy',
+      'xml-to-json': 'XML to JSON Policy',
+    };
+    
+    // Set default execution flow based on type
+    const defaultFlows: Record<string, 'PreFlow' | 'RequestFlow' | 'PostFlow'> = {
+      'quota': 'RequestFlow',
+      'spike-arrest': 'RequestFlow',
+      'oauth': 'PreFlow',
+      'jwt': 'PreFlow',
+      'verify-api-key': 'PreFlow',
+      'cors': 'PostFlow',
+      'xml-to-json': 'PostFlow',
+    };
+    
     const newPolicy: Policy = {
       id: `policy-${Date.now()}`,
-      name: 'New Policy',
-      type: 'quota',
+      name: defaultNames[newPolicyType] || 'New Policy',
+      type: newPolicyType,
       enabled: true,
+      executionFlow: defaultFlows[newPolicyType],
       config: {},
     };
     updateConfig({ policies: [...policies, newPolicy] });
     setShowCreatePolicy(false);
+    setNewPolicyType('quota'); // Reset to default
   };
 
   const removePolicy = (id: string) => {
@@ -155,11 +186,15 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
     updateConfig({ policies: newPolicies });
   };
 
-  const totalRequests = proxies.reduce((sum, p) => sum + (p.requestCount || 0), 0);
-  const totalErrors = proxies.reduce((sum, p) => sum + (p.errorCount || 0), 0);
-  const avgResponseTime = proxies.length > 0
-    ? proxies.reduce((sum, p) => sum + (p.avgResponseTime || 0), 0) / proxies.length
-    : 0;
+  // Calculate totals from proxies or use metrics
+  const totalRequests = metrics?.customMetrics?.total_requests || 
+    proxies.reduce((sum, p) => sum + (p.requestCount || 0), 0);
+  const totalErrors = metrics?.customMetrics?.total_errors || 
+    proxies.reduce((sum, p) => sum + (p.errorCount || 0), 0);
+  const avgResponseTime = metrics?.customMetrics?.avg_latency || 
+    (proxies.length > 0
+      ? proxies.reduce((sum, p) => sum + (p.avgResponseTime || 0), 0) / proxies.length
+      : 0);
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -171,16 +206,6 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
             <p className="text-sm text-muted-foreground mt-1">
               Configure API proxies, policies, quotas and security
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              Apigee Console
-            </Button>
           </div>
         </div>
 
@@ -232,9 +257,9 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
               <Shield className="h-4 w-4 mr-2" />
               Policies ({policies.length})
             </TabsTrigger>
-            <TabsTrigger value="monitoring">
+            <TabsTrigger value="monitoring" disabled={proxies.filter(p => p.status === 'deployed' || !p.status).length === 0}>
               <Activity className="h-4 w-4 mr-2" />
-              Monitoring
+              Monitoring ({proxies.filter(p => p.status === 'deployed' || !p.status).length})
             </TabsTrigger>
             <TabsTrigger value="settings">
               <Settings className="h-4 w-4 mr-2" />
@@ -265,7 +290,27 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
                           <div className="flex items-center gap-3">
                             <Network className="h-5 w-5 text-blue-500" />
                             <div>
-                              <CardTitle className="text-base">{proxy.name}</CardTitle>
+                              {editingProxyIndex === index ? (
+                                <Input
+                                  value={proxy.name}
+                                  onChange={(e) => updateProxy(index, 'name', e.target.value)}
+                                  onBlur={() => setEditingProxyIndex(null)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      setEditingProxyIndex(null);
+                                    }
+                                  }}
+                                  className="font-semibold text-base"
+                                  autoFocus
+                                />
+                              ) : (
+                                <CardTitle 
+                                  className="text-base cursor-pointer hover:text-primary transition-colors"
+                                  onClick={() => setEditingProxyIndex(index)}
+                                >
+                                  {proxy.name}
+                                </CardTitle>
+                              )}
                               <div className="flex items-center gap-2 mt-1">
                                 <Badge variant={proxy.status === 'deployed' ? 'default' : 'outline'}>
                                   {proxy.status || 'undeployed'}
@@ -399,14 +444,54 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
                     <CardTitle>Policies</CardTitle>
                     <CardDescription>Configure API proxy policies</CardDescription>
                   </div>
-                  <Button onClick={addPolicy} size="sm">
+                  <Button onClick={() => setShowCreatePolicy(true)} size="sm">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Policy
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                {policies.length === 0 ? (
+                {showCreatePolicy && (
+                  <Card className="mb-4 border-l-4 border-l-blue-500">
+                    <CardContent className="pt-4">
+                      <div className="space-y-3">
+                        <div>
+                          <Label className="text-sm font-semibold">Policy Type</Label>
+                          <p className="text-xs text-muted-foreground mb-2">
+                            Select the type of policy to add. The type determines the policy's functionality and cannot be changed after creation.
+                          </p>
+                          <Select
+                            value={newPolicyType}
+                            onValueChange={(value: any) => setNewPolicyType(value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="quota">Quota Policy - Limit total requests per time period</SelectItem>
+                              <SelectItem value="spike-arrest">Spike Arrest Policy - Smooth traffic spikes</SelectItem>
+                              <SelectItem value="verify-api-key">Verify API Key - Validate API keys</SelectItem>
+                              <SelectItem value="oauth">OAuth Policy - OAuth 2.0 authentication</SelectItem>
+                              <SelectItem value="jwt">JWT Policy - JWT token validation</SelectItem>
+                              <SelectItem value="cors">CORS Policy - Cross-origin resource sharing</SelectItem>
+                              <SelectItem value="xml-to-json">XML to JSON - Transform XML to JSON</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button onClick={addPolicy} size="sm">
+                            <Plus className="h-4 w-4 mr-2" />
+                            Create Policy
+                          </Button>
+                          <Button variant="outline" onClick={() => setShowCreatePolicy(false)} size="sm">
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+                {policies.length === 0 && !showCreatePolicy ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No policies configured</p>
                 ) : (
                   <div className="space-y-2">
@@ -415,14 +500,26 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
                         <CardContent className="pt-4">
                           <div className="flex items-center justify-between">
                             <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <Badge variant="outline">{policy.type}</Badge>
+                              <div className="flex items-center gap-2 mb-2">
+                                <Badge variant="outline" title="Policy type - determines functionality and cannot be changed">
+                                  {policy.type}
+                                </Badge>
                                 <span className="font-medium">{policy.name}</span>
                                 {policy.enabled ? (
                                   <Badge variant="default">Enabled</Badge>
                                 ) : (
                                   <Badge variant="outline">Disabled</Badge>
                                 )}
+                                {policy.executionFlow && (
+                                  <Badge variant="secondary" className="text-xs">
+                                    {policy.executionFlow}
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-xs text-muted-foreground mb-2">
+                                <span className="font-medium">Type:</span> {policy.type} 
+                                {policy.executionFlow && ` • Execution: ${policy.executionFlow}`}
+                                {policy.condition && ` • Condition: ${policy.condition}`}
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
@@ -437,6 +534,36 @@ export function ApigeeConfigAdvanced({ componentId }: ApigeeConfigProps) {
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
+                            </div>
+                          </div>
+                          <div className="mt-3 pt-3 border-t">
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <Label className="text-xs">Execution Flow</Label>
+                                <Select
+                                  value={policy.executionFlow || 'RequestFlow'}
+                                  onValueChange={(value) => updatePolicy(policy.id, 'executionFlow', value)}
+                                >
+                                  <SelectTrigger className="h-8 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="PreFlow">PreFlow (Auth)</SelectItem>
+                                    <SelectItem value="RequestFlow">RequestFlow (Quota/Rate Limit)</SelectItem>
+                                    <SelectItem value="PostFlow">PostFlow (Transform/CORS)</SelectItem>
+                                    <SelectItem value="ErrorFlow">ErrorFlow (Error Handling)</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label className="text-xs">Condition (optional)</Label>
+                                <Input
+                                  value={policy.condition || ''}
+                                  onChange={(e) => updatePolicy(policy.id, 'condition', e.target.value)}
+                                  placeholder="e.g., request.path = '/api'"
+                                  className="h-8 text-xs"
+                                />
+                              </div>
                             </div>
                           </div>
                         </CardContent>

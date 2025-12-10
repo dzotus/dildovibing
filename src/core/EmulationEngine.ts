@@ -7,6 +7,7 @@ import { SQSRoutingEngine } from './SQSRoutingEngine';
 import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
 import { PubSubRoutingEngine } from './PubSubRoutingEngine';
 import { KongRoutingEngine } from './KongRoutingEngine';
+import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -116,6 +117,9 @@ export class EmulationEngine {
   
   // Kong Gateway routing engines per node
   private kongRoutingEngines: Map<string, KongRoutingEngine> = new Map();
+  
+  // Apigee Gateway routing engines per node
+  private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -268,6 +272,11 @@ export class EmulationEngine {
       if (node.type === 'kong') {
         this.initializeKongRoutingEngine(node);
       }
+      
+      // Initialize Apigee routing engine for Apigee Gateway nodes
+      if (node.type === 'apigee') {
+        this.initializeApigeeRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -281,6 +290,7 @@ export class EmulationEngine {
         this.azureServiceBusRoutingEngines.delete(nodeId);
         this.pubSubRoutingEngines.delete(nodeId);
         this.kongRoutingEngines.delete(nodeId);
+        this.apigeeRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -487,6 +497,10 @@ export class EmulationEngine {
           break;
         case 'kong':
           this.simulateKong(node, config, metrics, hasIncomingConnections);
+          break;
+        
+        case 'apigee':
+          this.simulateApigee(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -2958,6 +2972,90 @@ export class EmulationEngine {
   }
 
   /**
+   * Apigee Gateway emulation
+   */
+  private simulateApigee(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+
+    // Get Apigee routing engine
+    const routingEngine = this.apigeeRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+
+    // Get Apigee config
+    const apigeeConfig = (config as any) || {};
+    const proxies = apigeeConfig.proxies || [];
+    const requestsPerSecond = apigeeConfig.requestsPerSecond || config.requestsPerSecond || 500;
+    const stats = routingEngine.getStats();
+
+    // Calculate throughput based on incoming connections and rate limits
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+
+    // Apply quota limits from proxies
+    const deployedProxies = proxies.filter((p: any) => p.status !== 'undeployed');
+    if (deployedProxies.length > 0) {
+      // Find minimum quota limit across all proxies
+      const quotaLimits = deployedProxies
+        .filter((p: any) => p.quota && p.quotaInterval)
+        .map((p: any) => (p.quota / p.quotaInterval) * loadVariation);
+      
+      if (quotaLimits.length > 0) {
+        const minQuotaRate = Math.min(...quotaLimits);
+        baseThroughput = Math.min(baseThroughput, minQuotaRate);
+      }
+
+      // Apply spike arrest limits
+      const spikeArrestLimits = deployedProxies
+        .filter((p: any) => p.spikeArrest && p.spikeArrest > 0)
+        .map((p: any) => p.spikeArrest);
+      
+      if (spikeArrestLimits.length > 0) {
+        const minSpikeArrest = Math.min(...spikeArrestLimits);
+        baseThroughput = Math.min(baseThroughput, minSpikeArrest * loadVariation);
+      }
+    }
+
+    metrics.throughput = baseThroughput;
+
+    // Latency: base gateway latency (2-5ms) + policy overhead + upstream latency
+    const baseLatency = 3 + Math.random() * 2;
+    const policyOverhead = stats.policies * 0.8; // Each policy adds ~0.8ms
+    const upstreamLatency = 15 + Math.random() * 35; // Simulated upstream latency
+    metrics.latency = baseLatency + policyOverhead + upstreamLatency;
+
+    // Error rate: base + auth failures + quota/spike arrest rejections
+    const baseErrorRate = 0.001; // 0.1% base error rate
+    const authErrorRate = stats.policies > 0 ? 0.015 : 0; // 1.5% auth failures if policies configured
+    const quotaErrorRate = stats.totalErrors > 0 ? (stats.totalErrors / Math.max(stats.totalRequests, 1)) * 0.1 : 0;
+    metrics.errorRate = Math.min(1, baseErrorRate + authErrorRate + quotaErrorRate);
+
+    // Utilization based on throughput vs capacity
+    metrics.utilization = Math.min(1, metrics.throughput / requestsPerSecond);
+
+    metrics.customMetrics = {
+      'proxies': stats.proxies,
+      'policies': stats.policies,
+      'total_requests': stats.totalRequests,
+      'total_errors': stats.totalErrors,
+      'avg_latency': Math.round(stats.avgLatency),
+      'requests_per_second': requestsPerSecond,
+      'gateway_latency': baseLatency + policyOverhead,
+      'upstream_latency': upstreamLatency,
+    };
+  }
+
+  /**
    * Initialize Kong routing engine for a node
    */
   private initializeKongRoutingEngine(node: CanvasNode): void {
@@ -2974,6 +3072,24 @@ export class EmulationEngine {
     });
     
     this.kongRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Initialize Apigee routing engine for a node
+   */
+  private initializeApigeeRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new ApigeeRoutingEngine();
+    
+    routingEngine.initialize({
+      organization: config.organization,
+      environment: config.environment,
+      proxies: config.proxies || [],
+      policies: config.policies || [],
+    });
+    
+    this.apigeeRoutingEngines.set(node.id, routingEngine);
   }
 
   /**
@@ -3095,6 +3211,13 @@ export class EmulationEngine {
    */
   public getKongRoutingEngine(nodeId: string): KongRoutingEngine | undefined {
     return this.kongRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Apigee routing engine for a node
+   */
+  public getApigeeRoutingEngine(nodeId: string): ApigeeRoutingEngine | undefined {
+    return this.apigeeRoutingEngines.get(nodeId);
   }
 
   /**
