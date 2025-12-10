@@ -58,14 +58,25 @@ export function createMessagingProducerRule(discovery: ServiceDiscovery): Connec
           };
           break;
         
-        case 'aws-sqs':
+        case 'aws-sqs': {
+          // Get first queue from SQS config if available, otherwise use default
+          const sqsQueues = queue.data.config?.queues || [];
+          const sqsQueueName = sqsQueues.length > 0 && typeof sqsQueues[0] === 'object' 
+            ? sqsQueues[0].name 
+            : (sqsQueues.length > 0 ? sqsQueues[0] : null);
+          const queueRegion = sqsQueues.length > 0 && typeof sqsQueues[0] === 'object'
+            ? sqsQueues[0].region
+            : (queue.data.config?.defaultRegion || 'us-east-1');
+          
           messagingConfig = {
             messaging: {
-              queueUrl: `https://sqs.region.amazonaws.com/account/${queue.data.config?.queueName || 'default-queue'}`,
-              region: config.messaging?.region || 'us-east-1',
+              queueUrl: `https://sqs.${queueRegion}.amazonaws.com/account/${sqsQueueName || 'default-queue'}`,
+              queueName: sqsQueueName || 'default-queue',
+              region: config.messaging?.region || queueRegion,
             },
           };
           break;
+        }
         
         case 'azure-service-bus':
           messagingConfig = {

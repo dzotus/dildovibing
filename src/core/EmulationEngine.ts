@@ -3,6 +3,7 @@ import { dataFlowEngine } from './DataFlowEngine';
 import { componentStateEngine } from './ComponentStateEngine';
 import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
 import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
+import { SQSRoutingEngine } from './SQSRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -97,6 +98,10 @@ export class EmulationEngine {
   // ActiveMQ routing engines per node
   private activeMQRoutingEngines: Map<string, ActiveMQRoutingEngine> = new Map();
   private lastActiveMQUpdate: Map<string, number> = new Map();
+  
+  // SQS routing engines per node
+  private sqsRoutingEngines: Map<string, SQSRoutingEngine> = new Map();
+  private lastSQSUpdate: Map<string, number> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -182,6 +187,19 @@ export class EmulationEngine {
     this.connections = connections;
     this.initializeMetrics();
     
+    // Initialize routing engines for messaging components
+    for (const node of nodes) {
+      if (node.type === 'rabbitmq') {
+        this.initializeRabbitMQRoutingEngine(node);
+      }
+      if (node.type === 'activemq') {
+        this.initializeActiveMQRoutingEngine(node);
+      }
+      if (node.type === 'aws-sqs') {
+        this.initializeSQSRoutingEngine(node);
+      }
+    }
+    
     // Initialize data flow engine
     dataFlowEngine.initialize(nodes, connections);
   }
@@ -209,6 +227,12 @@ export class EmulationEngine {
       if (node.type === 'activemq') {
         this.initializeActiveMQRoutingEngine(node);
       }
+      
+      // Initialize or reinitialize SQS routing engine for SQS nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'aws-sqs') {
+        this.initializeSQSRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -218,8 +242,10 @@ export class EmulationEngine {
         this.metrics.delete(nodeId);
         this.rabbitMQRoutingEngines.delete(nodeId);
         this.activeMQRoutingEngines.delete(nodeId);
+        this.sqsRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
+        this.lastSQSUpdate.delete(nodeId);
       }
     }
     
@@ -317,6 +343,16 @@ export class EmulationEngine {
       }
     }
     
+    // Process SQS consumption (before updating metrics)
+    for (const [nodeId, routingEngine] of this.sqsRoutingEngines.entries()) {
+      const lastUpdate = this.lastSQSUpdate.get(nodeId) || now;
+      const deltaTime = now - lastUpdate;
+      if (deltaTime > 0) {
+        routingEngine.processConsumption(deltaTime);
+        this.lastSQSUpdate.set(nodeId, now);
+      }
+    }
+    
     // Update component metrics based on their configuration
     for (const node of this.nodes) {
       this.updateComponentMetrics(node);
@@ -362,6 +398,9 @@ export class EmulationEngine {
           break;
         case 'activemq':
           this.simulateActiveMQ(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'aws-sqs':
+          this.simulateSQS(node, config, metrics, hasIncomingConnections);
           break;
         case 'postgres':
         case 'mongodb':
@@ -1925,6 +1964,156 @@ export class EmulationEngine {
   }
 
   /**
+   * SQS emulation
+   */
+  private simulateSQS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.sqsRoutingEngines.has(node.id)) {
+      this.initializeSQSRoutingEngine(node);
+    }
+    
+    const routingEngine = this.sqsRoutingEngines.get(node.id)!;
+    const sqsConfig = (node.data.config as any) || {};
+    
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics but keep queue state
+      metrics.throughput = 0;
+      metrics.latency = 5; // Base latency for SQS (AWS API latency)
+      metrics.errorRate = 0;
+      
+      // Calculate utilization from existing queue depth
+      const totalQueueDepth = routingEngine.getTotalQueueDepth();
+      metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+      
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const connections = routingEngine.getActiveConnections();
+      
+      metrics.customMetrics = {
+        'queue_depth': totalQueueDepth,
+        'connections': connections,
+        'queues': allQueueMetrics.size,
+      };
+      
+      // Update queue metrics in config
+      this.updateSQSQueueMetricsInConfig(node, allQueueMetrics);
+      return;
+    }
+    
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+    
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate messages per second from connection traffic
+        // Assume average message size of 1KB
+        const avgMessageSize = 1024;
+        const msgPerSec = connMetrics.traffic / avgMessageSize;
+        totalIncomingThroughput += msgPerSec;
+      }
+    }
+    
+    // Use configured throughput if available, otherwise use calculated
+    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
+    
+    // Throughput with random jitter
+    const jitter = (Math.random() - 0.5) * 0.1;
+    metrics.throughput = throughputMsgs * (1 + jitter);
+    
+    // Latency based on queue depth and AWS region
+    const totalQueueDepth = routingEngine.getTotalQueueDepth();
+    const baseLatency = 5; // Base AWS API latency
+    const queueLatency = Math.min(50, totalQueueDepth / 1000); // 1ms per 1000 messages, max 50ms
+    metrics.latency = baseLatency + queueLatency + Math.random() * 5;
+    
+    // Error rate for queue delivery failures (increases with queue depth)
+    const baseErrorRate = 0.0005;
+    const depthErrorRate = Math.min(0.01, totalQueueDepth / 1000000); // 0.01% per 100k messages
+    metrics.errorRate = baseErrorRate + depthErrorRate;
+    
+    // Utilization based on message queue backlog
+    metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+    
+    // Get queue metrics
+    const allQueueMetrics = routingEngine.getAllQueueMetrics();
+    const connections = routingEngine.getActiveConnections();
+    
+    metrics.customMetrics = {
+      'queue_depth': totalQueueDepth,
+      'connections': connections,
+      'queues': allQueueMetrics.size,
+    };
+    
+    // Update queue metrics in node config (for UI display)
+    this.updateSQSQueueMetricsInConfig(node, allQueueMetrics);
+  }
+  
+  /**
+   * Initialize SQS routing engine for a node
+   */
+  private initializeSQSRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new SQSRoutingEngine();
+    
+    // Convert UI queue format to SQS routing engine format
+    const queues = (config.queues || []).map((q: any) => ({
+      name: q.name,
+      type: q.type || 'standard',
+      region: q.region || config.defaultRegion || 'us-east-1',
+      visibilityTimeout: q.visibilityTimeout || 30,
+      messageRetention: q.messageRetention || 4,
+      delaySeconds: q.delaySeconds || 0,
+      maxReceiveCount: q.maxReceiveCount,
+      deadLetterQueue: q.deadLetterQueue,
+      contentBasedDedup: q.contentBasedDedup,
+      fifoThroughputLimit: q.fifoThroughputLimit || 'perQueue',
+    }));
+    
+    routingEngine.initialize({
+      queues: queues,
+    });
+    
+    this.sqsRoutingEngines.set(node.id, routingEngine);
+    this.lastSQSUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Update SQS queue metrics in node config (for UI display)
+   */
+  private updateSQSQueueMetricsInConfig(
+    node: CanvasNode,
+    queueMetrics: Map<string, {
+      approximateMessages: number;
+      approximateMessagesNotVisible: number;
+      approximateMessagesDelayed: number;
+      sentCount: number;
+      receivedCount: number;
+      deletedCount: number;
+      dlqCount: number;
+    }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    const queues = config.queues || [];
+    
+    for (let i = 0; i < queues.length; i++) {
+      const queue = queues[i];
+      const metrics = queueMetrics.get(queue.name);
+      if (metrics) {
+        queues[i] = {
+          ...queue,
+          approximateMessages: metrics.approximateMessages,
+          approximateMessagesNotVisible: metrics.approximateMessagesNotVisible,
+          approximateMessagesDelayed: metrics.approximateMessagesDelayed,
+        };
+      }
+    }
+    
+    // Update node config (this will be reflected in UI)
+    config.queues = queues;
+  }
+
+  /**
    * Database emulation (PostgreSQL, MongoDB, Redis)
    */
   private simulateDatabase(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -2252,6 +2441,89 @@ export class EmulationEngine {
    */
   public getActiveMQRoutingEngine(nodeId: string): ActiveMQRoutingEngine | undefined {
     return this.activeMQRoutingEngines.get(nodeId);
+  }
+
+  public getSQSRoutingEngine(nodeId: string): SQSRoutingEngine | undefined {
+    return this.sqsRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Check SQS IAM policy permission (public method for DataFlowEngine)
+   */
+  public checkSQSIAMPolicy(
+    policies: Array<{
+      id: string;
+      principal: string;
+      action: string;
+      resource: string;
+      effect: 'Allow' | 'Deny';
+    }>,
+    principal: string,
+    queueName: string,
+    action: string
+  ): boolean {
+    if (!policies || policies.length === 0) {
+      return true; // No policies configured, default allow
+    }
+    
+    // Find matching policies
+    const matchingPolicies = policies.filter((policy) => {
+      // Check principal match (supports wildcard *)
+      const policyPrincipal = policy.principal || '';
+      if (policyPrincipal !== principal && policyPrincipal !== '*' && !principal.includes(policyPrincipal)) {
+        return false;
+      }
+      
+      // Check resource match (supports wildcard * and ARN patterns)
+      const policyResource = policy.resource || '';
+      let resourceMatches = false;
+      
+      if (policyResource === '*' || policyResource === queueName) {
+        resourceMatches = true;
+      } else if (policyResource.endsWith('*')) {
+        // Pattern match: "arn:aws:sqs:*:*:orders-*" matches "orders-queue"
+        const prefix = policyResource.slice(0, -1);
+        resourceMatches = queueName.startsWith(prefix.replace(/.*:/, '')); // Extract queue name from ARN
+      } else if (policyResource.includes('sqs:') || policyResource.includes('arn:aws:sqs')) {
+        // ARN format: extract queue name
+        const arnQueueName = policyResource.split(':').pop() || policyResource.split('/').pop() || '';
+        resourceMatches = arnQueueName === queueName || arnQueueName === '*' || queueName.includes(arnQueueName);
+      } else {
+        // Simple name match
+        resourceMatches = queueName.includes(policyResource) || policyResource === '*';
+      }
+      
+      if (!resourceMatches) {
+        return false;
+      }
+      
+      // Check action match (supports wildcard *)
+      const policyAction = policy.action || '';
+      if (policyAction !== action && policyAction !== '*' && !policyAction.includes(action)) {
+        return false;
+      }
+      
+      return true;
+    });
+    
+    if (matchingPolicies.length === 0) {
+      // No matching policies - default allow (if policies are configured but none match, allow)
+      return true;
+    }
+    
+    // AWS IAM logic: Deny takes precedence over Allow
+    const denyPolicies = matchingPolicies.filter((policy) => policy.effect === 'Deny');
+    if (denyPolicies.length > 0) {
+      return false; // Denied
+    }
+    
+    const allowPolicies = matchingPolicies.filter((policy) => policy.effect === 'Allow');
+    if (allowPolicies.length > 0) {
+      return true; // Allowed
+    }
+    
+    // Default: allow if no explicit deny
+    return true;
   }
 
   /**

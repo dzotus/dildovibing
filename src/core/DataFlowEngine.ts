@@ -88,6 +88,7 @@ export class DataFlowEngine {
     this.registerHandler('kafka', this.createMessageBrokerHandler('kafka'));
     this.registerHandler('rabbitmq', this.createMessageBrokerHandler('rabbitmq'));
     this.registerHandler('activemq', this.createMessageBrokerHandler('activemq'));
+    this.registerHandler('aws-sqs', this.createMessageBrokerHandler('aws-sqs'));
     
     // APIs - transform and route data
     this.registerHandler('rest', this.createAPIHandler('rest'));
@@ -848,6 +849,90 @@ export class DataFlowEngine {
             // No queue or topic matched, message is lost
             message.status = 'failed';
             message.error = `No queue or topic found. Queue: '${queue || 'none'}', Topic: '${topic || 'none'}'`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
+    if (type === 'aws-sqs') {
+      return {
+        processData: (node, message, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getSQSRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract queue name from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const queueUrl = messagingConfig.queueUrl;
+          const queueName = messagingConfig.queueName || 
+            (queueUrl ? queueUrl.split('/').pop() : null) ||
+            message.metadata?.queueName || 
+            'default-queue';
+          
+          // Check IAM policies before sending message
+          const sqsConfig = (node.data.config as any) || {};
+          const iamPolicies = sqsConfig.iamPolicies || [];
+          
+          // Get principal from source component config or message metadata
+          const sourceNode = this.nodes.find(n => n.id === message.source);
+          const sourceConfig = sourceNode?.data.config as any;
+          const principal = message.metadata?.principal || 
+                           sourceConfig?.accessKeyId || 
+                           sourceConfig?.clientId ||
+                           sqsConfig.accessKeyId || // Fallback to SQS access key
+                           `arn:aws:iam::123456789012:user/${message.source.slice(0, 8)}`;
+          
+          // Check if principal has SendMessage permission
+          const hasPermission = emulationEngine.checkSQSIAMPolicy?.(
+            iamPolicies,
+            principal,
+            queueName,
+            'sqs:SendMessage'
+          ) ?? true; // Default allow if method doesn't exist
+          
+          if (!hasPermission) {
+            message.status = 'failed';
+            message.error = `Access denied: principal '${principal}' does not have sqs:SendMessage permission for queue '${queueName}'`;
+            return message;
+          }
+          
+          // Extract message attributes
+          const messageGroupId = message.metadata?.messageGroupId;
+          const messageDeduplicationId = message.metadata?.messageDeduplicationId;
+          const attributes = message.metadata?.attributes;
+          
+          // Send message to queue
+          const messageId = routingEngine.sendMessage(
+            queueName,
+            message.payload,
+            message.size,
+            attributes,
+            messageGroupId,
+            messageDeduplicationId
+          );
+          
+          if (messageId) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              queueName,
+              messageId,
+              queueUrl: queueUrl || `https://sqs.${sqsConfig.defaultRegion || 'us-east-1'}.amazonaws.com/.../${queueName}`,
+            };
+          } else {
+            // Queue not found
+            message.status = 'failed';
+            message.error = `Queue '${queueName}' not found`;
           }
           
           return message;

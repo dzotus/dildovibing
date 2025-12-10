@@ -1,5 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -10,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   MessageSquare, 
   Database, 
@@ -83,7 +84,64 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
   const [showCreateQueue, setShowCreateQueue] = useState(false);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [testMessage, setTestMessage] = useState('');
+
+  // Initialize routing engine when component mounts or queues change
+  useEffect(() => {
+    if (!node || queues.length === 0) return;
+    
+    // Ensure routing engine is initialized
+    const { nodes, connections } = useCanvasStore.getState();
+    emulationEngine.updateNodesAndConnections(nodes, connections);
+  }, [componentId, queues.length, node?.id]);
+
+  // Update queue metrics from routing engine periodically
+  useEffect(() => {
+    if (!node || queues.length === 0) return;
+    
+    const interval = setInterval(() => {
+      const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+      if (!routingEngine) return;
+
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const currentQueues = (node.data.config as any)?.queues || [];
+      
+      const updatedQueues = currentQueues.map((queue: any) => {
+        const metrics = allQueueMetrics.get(queue.name);
+        if (metrics) {
+          return {
+            ...queue,
+            approximateMessages: metrics.approximateMessages,
+            approximateMessagesNotVisible: metrics.approximateMessagesNotVisible,
+            approximateMessagesDelayed: metrics.approximateMessagesDelayed,
+          };
+        }
+        return queue;
+      });
+
+      // Check if metrics changed
+      const metricsChanged = updatedQueues.some((q: any, i: number) => 
+        q.approximateMessages !== currentQueues[i]?.approximateMessages ||
+        q.approximateMessagesNotVisible !== currentQueues[i]?.approximateMessagesNotVisible ||
+        q.approximateMessagesDelayed !== currentQueues[i]?.approximateMessagesDelayed
+      );
+
+      if (metricsChanged) {
+        updateNode(componentId, {
+          data: {
+            ...node.data,
+            config: {
+              ...(node.data.config as any),
+              queues: updatedQueues,
+            },
+          },
+        });
+      }
+    }, 500); // Update every 500ms
+
+    return () => clearInterval(interval);
+  }, [componentId, queues.length, node?.id, updateNode]);
 
   const updateConfig = (updates: Partial<AWSSQSConfig>) => {
     updateNode(componentId, {
@@ -139,9 +197,43 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   const sendTestMessage = (queueIndex: number) => {
     const queue = queues[queueIndex];
     if (queue && testMessage) {
-      updateQueue(queueIndex, 'approximateMessages', (queue.approximateMessages || 0) + 1);
+      // Ensure routing engine is initialized
+      const { nodes, connections } = useCanvasStore.getState();
+      emulationEngine.updateNodesAndConnections(nodes, connections);
+      
+      // Get routing engine and send message through it
+      const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+      
+      if (routingEngine) {
+        // Send message through routing engine
+        const messageId = routingEngine.sendMessage(
+          queue.name,
+          testMessage,
+          new Blob([testMessage]).size,
+          undefined, // attributes
+          queue.type === 'fifo' ? 'test-group' : undefined, // messageGroupId for FIFO
+          queue.type === 'fifo' && queue.contentBasedDedup ? undefined : `test-${Date.now()}` // deduplicationId
+        );
+        
+        if (messageId) {
+          // Get updated metrics immediately
+          const queueMetrics = routingEngine.getQueueMetrics(queue.name);
+          if (queueMetrics) {
+            // Update queue metrics in UI immediately
+            updateQueue(queueIndex, 'approximateMessages', queueMetrics.approximateMessages);
+            updateQueue(queueIndex, 'approximateMessagesNotVisible', queueMetrics.approximateMessagesNotVisible);
+            updateQueue(queueIndex, 'approximateMessagesDelayed', queueMetrics.approximateMessagesDelayed);
+          }
+          
+          // Force update emulation engine to sync
+          emulationEngine.updateNodesAndConnections(nodes, connections);
+        }
+      } else {
+        // Fallback: just update counter if routing engine not initialized
+        updateQueue(queueIndex, 'approximateMessages', (queue.approximateMessages || 0) + 1);
+      }
+      
       setTestMessage('');
-      // В реальной системе здесь был бы вызов API
     }
   };
 
@@ -192,6 +284,16 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
             <CardContent>
               <span className="text-2xl font-bold">{totalMessages.toLocaleString()}</span>
               <p className="text-xs text-muted-foreground mt-1">Approximate count</p>
+              <Progress
+                value={Math.min((totalMessages / 100000) * 100, 100)}
+                className={`h-2 mt-2 ${
+                  totalMessages > 50000 
+                    ? 'bg-red-500' 
+                    : totalMessages > 10000 
+                      ? 'bg-yellow-500' 
+                      : 'bg-green-500'
+                }`}
+              />
             </CardContent>
           </Card>
           <Card>
@@ -201,6 +303,10 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
             <CardContent>
               <span className="text-2xl font-bold">{totalInFlight.toLocaleString()}</span>
               <p className="text-xs text-muted-foreground mt-1">Being processed</p>
+              <Progress
+                value={Math.min((totalInFlight / 5000) * 100, 100)}
+                className="h-2 mt-2"
+              />
             </CardContent>
           </Card>
           <Card>
@@ -298,25 +404,83 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        {/* Queue Stats */}
+                        {/* Queue Stats with Visual Indicators */}
                         <div className="grid grid-cols-4 gap-4">
-                          <div>
-                            <p className="text-xs text-muted-foreground">Messages Available</p>
-                            <p className="text-lg font-semibold">{queue.approximateMessages || 0}</p>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">Messages Available</p>
+                              {(queue.approximateMessages || 0) > 10000 && (
+                                <Badge variant="destructive" className="text-xs">High</Badge>
+                              )}
+                            </div>
+                            <p className="text-2xl font-bold">{queue.approximateMessages?.toLocaleString() || 0}</p>
+                            <Progress
+                              value={Math.min(((queue.approximateMessages || 0) / 50000) * 100, 100)}
+                              className={`h-2 ${
+                                (queue.approximateMessages || 0) > 10000 
+                                  ? 'bg-red-500' 
+                                  : (queue.approximateMessages || 0) > 5000 
+                                    ? 'bg-yellow-500' 
+                                    : 'bg-green-500'
+                              }`}
+                            />
+                            <p className="text-xs text-muted-foreground">Ready to consume</p>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">In Flight</p>
-                            <p className="text-lg font-semibold">{queue.approximateMessagesNotVisible || 0}</p>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">In Flight</p>
+                              {(queue.approximateMessagesNotVisible || 0) > 1000 && (
+                                <Badge variant="outline" className="text-xs">Processing</Badge>
+                              )}
+                            </div>
+                            <p className="text-2xl font-bold">{queue.approximateMessagesNotVisible?.toLocaleString() || 0}</p>
+                            <Progress
+                              value={Math.min(((queue.approximateMessagesNotVisible || 0) / 2000) * 100, 100)}
+                              className="h-2"
+                            />
+                            <p className="text-xs text-muted-foreground">Being processed</p>
                           </div>
-                          <div>
+                          <div className="space-y-2">
                             <p className="text-xs text-muted-foreground">Delayed</p>
-                            <p className="text-lg font-semibold">{queue.approximateMessagesDelayed || 0}</p>
+                            <p className="text-2xl font-bold">{queue.approximateMessagesDelayed?.toLocaleString() || 0}</p>
+                            <Progress
+                              value={Math.min(((queue.approximateMessagesDelayed || 0) / 500) * 100, 100)}
+                              className="h-2 bg-orange-500"
+                            />
+                            <p className="text-xs text-muted-foreground">Waiting for delay</p>
                           </div>
-                          <div>
+                          <div className="space-y-2">
                             <p className="text-xs text-muted-foreground">Queue URL</p>
-                            <p className="text-xs font-mono text-muted-foreground truncate">
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className="font-mono text-xs">
+                                {queue.region}
+                              </Badge>
+                            </div>
+                            <p className="text-xs font-mono text-muted-foreground truncate" title={`https://sqs.${queue.region}.amazonaws.com/.../${queue.name}`}>
                               https://sqs.{queue.region}.amazonaws.com/.../{queue.name}
                             </p>
+                            <div className="flex items-center gap-1 mt-1">
+                              <div className={`h-1.5 w-1.5 rounded-full ${
+                                (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                  ? 'bg-gray-400'
+                                  : (queue.approximateMessages || 0) < 1000
+                                    ? 'bg-green-500'
+                                    : (queue.approximateMessages || 0) < 10000
+                                      ? 'bg-yellow-500'
+                                      : 'bg-red-500'
+                              }`}></div>
+                              <p className="text-xs text-muted-foreground">
+                                {
+                                  (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                    ? 'Idle'
+                                    : (queue.approximateMessages || 0) < 1000
+                                      ? 'Healthy'
+                                      : (queue.approximateMessages || 0) < 10000
+                                        ? 'Warning'
+                                        : 'Critical'
+                                }
+                              </p>
+                            </div>
                           </div>
                         </div>
 
@@ -542,35 +706,135 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                     {iamPolicies.map((policy) => (
                       <Card key={policy.id} className="border-l-4 border-l-blue-500">
                         <CardContent className="pt-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1 grid grid-cols-4 gap-4">
-                              <div>
-                                <p className="text-xs text-muted-foreground">Principal</p>
-                                <p className="text-sm font-medium">{policy.principal}</p>
+                          {editingPolicyId === policy.id ? (
+                            <div className="space-y-4">
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                  <Label>Principal</Label>
+                                  <Input
+                                    value={policy.principal}
+                                    onChange={(e) => {
+                                      const newPolicies = iamPolicies.map(p => 
+                                        p.id === policy.id ? { ...p, principal: e.target.value } : p
+                                      );
+                                      updateConfig({ iamPolicies: newPolicies });
+                                    }}
+                                    placeholder="* or arn:aws:iam::..."
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Action</Label>
+                                  <Select
+                                    value={policy.action}
+                                    onValueChange={(value) => {
+                                      const newPolicies = iamPolicies.map(p => 
+                                        p.id === policy.id ? { ...p, action: value } : p
+                                      );
+                                      updateConfig({ iamPolicies: newPolicies });
+                                    }}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="sqs:SendMessage">SendMessage</SelectItem>
+                                      <SelectItem value="sqs:ReceiveMessage">ReceiveMessage</SelectItem>
+                                      <SelectItem value="sqs:DeleteMessage">DeleteMessage</SelectItem>
+                                      <SelectItem value="sqs:GetQueueAttributes">GetQueueAttributes</SelectItem>
+                                      <SelectItem value="sqs:*">All Actions (*)</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Resource</Label>
+                                  <Input
+                                    value={policy.resource}
+                                    onChange={(e) => {
+                                      const newPolicies = iamPolicies.map(p => 
+                                        p.id === policy.id ? { ...p, resource: e.target.value } : p
+                                      );
+                                      updateConfig({ iamPolicies: newPolicies });
+                                    }}
+                                    placeholder="* or queue name"
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Effect</Label>
+                                  <Select
+                                    value={policy.effect}
+                                    onValueChange={(value: 'Allow' | 'Deny') => {
+                                      const newPolicies = iamPolicies.map(p => 
+                                        p.id === policy.id ? { ...p, effect: value } : p
+                                      );
+                                      updateConfig({ iamPolicies: newPolicies });
+                                    }}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="Allow">Allow</SelectItem>
+                                      <SelectItem value="Deny">Deny</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
                               </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Action</p>
-                                <Badge variant="outline">{policy.action}</Badge>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Resource</p>
-                                <p className="text-sm font-medium truncate">{policy.resource}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Effect</p>
-                                <Badge variant={policy.effect === 'Allow' ? 'default' : 'destructive'}>
-                                  {policy.effect}
-                                </Badge>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  onClick={() => setEditingPolicyId(null)}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setEditingPolicyId(null)}
+                                >
+                                  Cancel
+                                </Button>
                               </div>
                             </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removePolicy(policy.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
+                          ) : (
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1 grid grid-cols-4 gap-4">
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Principal</p>
+                                  <p className="text-sm font-medium">{policy.principal}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Action</p>
+                                  <Badge variant="outline">{policy.action}</Badge>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Resource</p>
+                                  <p className="text-sm font-medium truncate" title={policy.resource}>{policy.resource}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Effect</p>
+                                  <Badge variant={policy.effect === 'Allow' ? 'default' : 'destructive'}>
+                                    {policy.effect}
+                                  </Badge>
+                                </div>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => setEditingPolicyId(policy.id)}
+                                >
+                                  <Settings className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => removePolicy(policy.id)}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     ))}
@@ -596,30 +860,97 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                       </CardHeader>
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Messages Available</p>
-                            <p className="text-2xl font-bold">{queue.approximateMessages || 0}</p>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">Messages Available</p>
+                              {(queue.approximateMessages || 0) > 10000 && (
+                                <Badge variant="destructive" className="text-xs">High</Badge>
+                              )}
+                            </div>
+                            <p className="text-2xl font-bold">{queue.approximateMessages?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min((queue.approximateMessages || 0) / 1000 * 100, 100)}
-                              className="h-2 mt-2"
+                              value={Math.min(((queue.approximateMessages || 0) / 50000) * 100, 100)}
+                              className={`h-2 ${
+                                (queue.approximateMessages || 0) > 10000 
+                                  ? 'bg-red-500' 
+                                  : (queue.approximateMessages || 0) > 5000 
+                                    ? 'bg-yellow-500' 
+                                    : 'bg-green-500'
+                              }`}
                             />
+                            <p className="text-xs text-muted-foreground">Ready to consume</p>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">In Flight</p>
-                            <p className="text-2xl font-bold">{queue.approximateMessagesNotVisible || 0}</p>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs text-muted-foreground">In Flight</p>
+                              {(queue.approximateMessagesNotVisible || 0) > 1000 && (
+                                <Badge variant="outline" className="text-xs">Processing</Badge>
+                              )}
+                            </div>
+                            <p className="text-2xl font-bold">{queue.approximateMessagesNotVisible?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min((queue.approximateMessagesNotVisible || 0) / 100 * 100, 100)}
-                              className="h-2 mt-2"
+                              value={Math.min(((queue.approximateMessagesNotVisible || 0) / 2000) * 100, 100)}
+                              className="h-2"
                             />
+                            <p className="text-xs text-muted-foreground">Being processed</p>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground mb-1">Delayed</p>
-                            <p className="text-2xl font-bold">{queue.approximateMessagesDelayed || 0}</p>
+                          <div className="space-y-2">
+                            <p className="text-xs text-muted-foreground">Delayed</p>
+                            <p className="text-2xl font-bold">{queue.approximateMessagesDelayed?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min((queue.approximateMessagesDelayed || 0) / 100 * 100, 100)}
-                              className="h-2 mt-2"
+                              value={Math.min(((queue.approximateMessagesDelayed || 0) / 500) * 100, 100)}
+                              className="h-2 bg-orange-500"
                             />
+                            <p className="text-xs text-muted-foreground">Waiting for delay</p>
                           </div>
+                        </div>
+                        
+                        {/* Queue Health Status */}
+                        <div className="mt-4 p-3 rounded-md border bg-muted/50">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className={`h-2 w-2 rounded-full ${
+                                (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                  ? 'bg-gray-400'
+                                  : (queue.approximateMessages || 0) < 1000
+                                    ? 'bg-green-500 animate-pulse'
+                                    : (queue.approximateMessages || 0) < 10000
+                                      ? 'bg-yellow-500'
+                                      : 'bg-red-500 animate-pulse'
+                              }`}></div>
+                              <span className="text-sm font-medium">Queue Health</span>
+                            </div>
+                            <Badge variant={
+                              (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                ? 'secondary'
+                                : (queue.approximateMessages || 0) < 1000
+                                  ? 'default'
+                                  : (queue.approximateMessages || 0) < 10000
+                                    ? 'outline'
+                                    : 'destructive'
+                            }>
+                              {
+                                (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                  ? 'Idle'
+                                  : (queue.approximateMessages || 0) < 1000
+                                    ? 'Healthy'
+                                    : (queue.approximateMessages || 0) < 10000
+                                      ? 'Warning'
+                                      : 'Critical'
+                              }
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-2">
+                            {
+                              (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                ? 'Queue is idle with no messages'
+                                : (queue.approximateMessages || 0) < 1000
+                                  ? 'Queue is operating normally'
+                                  : (queue.approximateMessages || 0) < 10000
+                                    ? 'Queue has high message count, consider scaling consumers'
+                                    : 'Queue is critically overloaded, immediate action required'
+                            }
+                          </p>
                         </div>
                       </CardContent>
                     </Card>
