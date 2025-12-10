@@ -8,6 +8,7 @@ import { createNginxRule, createHAProxyRule, createTraefikRule } from './loadBal
 import { createDatabaseClientRule } from './databaseRules';
 import { createMessagingProducerRule } from './messagingRules';
 import { createPrometheusRule } from './prometheusRules';
+import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 
 /**
  * Инициализировать все правила подключения
@@ -32,5 +33,9 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     
     // Observability
     createPrometheusRule(discovery),
+    
+    // Integration - MuleSoft
+    createMuleSoftTargetRule(discovery),
+    createMuleSoftSourceRule(discovery),
   ];
 }

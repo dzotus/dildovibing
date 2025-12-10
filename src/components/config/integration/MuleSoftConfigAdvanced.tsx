@@ -16,8 +16,6 @@ import {
   Activity,
   Plus,
   Trash2,
-  RefreshCcw,
-  Cloud,
   Database,
   Network,
   AlertTriangle,
@@ -72,6 +70,7 @@ export function MuleSoftConfigAdvanced({ componentId }: MuleSoftConfigProps) {
   const apiKey = config.apiKey || '';
 
   const [editingAppIndex, setEditingAppIndex] = useState<number | null>(null);
+  const [editingConnectorIndex, setEditingConnectorIndex] = useState<number | null>(null);
   const [showCreateConnector, setShowCreateConnector] = useState(false);
 
   const updateConfig = (updates: Partial<MuleSoftConfig>) => {
@@ -146,16 +145,6 @@ export function MuleSoftConfigAdvanced({ componentId }: MuleSoftConfigProps) {
             <p className="text-sm text-muted-foreground mt-1">
               Configure Mule applications, connectors and runtime settings
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              Anypoint Platform
-            </Button>
           </div>
         </div>
 
@@ -237,10 +226,30 @@ export function MuleSoftConfigAdvanced({ componentId }: MuleSoftConfigProps) {
                     <Card key={index} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
                             <Database className="h-5 w-5 text-blue-500" />
-                            <div>
-                              <CardTitle className="text-base">{app.name}</CardTitle>
+                            <div className="flex-1">
+                              {editingAppIndex === index ? (
+                                <Input
+                                  value={app.name}
+                                  onChange={(e) => updateApplication(index, 'name', e.target.value)}
+                                  onBlur={() => setEditingAppIndex(null)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      setEditingAppIndex(null);
+                                    }
+                                  }}
+                                  className="text-base font-semibold"
+                                  autoFocus
+                                />
+                              ) : (
+                                <CardTitle 
+                                  className="text-base cursor-pointer hover:text-primary transition-colors"
+                                  onClick={() => setEditingAppIndex(index)}
+                                >
+                                  {app.name}
+                                </CardTitle>
+                              )}
                               <div className="flex items-center gap-2 mt-1">
                                 {app.status === 'running' ? (
                                   <Badge variant="default" className="gap-1">
@@ -287,13 +296,6 @@ export function MuleSoftConfigAdvanced({ componentId }: MuleSoftConfigProps) {
                         </div>
                         <Separator />
                         <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>Application Name</Label>
-                            <Input
-                              value={app.name}
-                              onChange={(e) => updateApplication(index, 'name', e.target.value)}
-                            />
-                          </div>
                           <div className="space-y-2">
                             <Label>Runtime Version</Label>
                             <Input
@@ -406,33 +408,55 @@ export function MuleSoftConfigAdvanced({ componentId }: MuleSoftConfigProps) {
                   {connectors.map((connector, index) => (
                     <Card key={index} className="border-l-4 border-l-green-500">
                       <CardContent className="pt-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <Network className="h-5 w-5 text-green-500" />
-                            <div>
-                              <p className="font-medium">{connector.name}</p>
-                              <div className="flex items-center gap-2 mt-1">
-                                <Badge variant="outline">{connector.type}</Badge>
-                                {connector.enabled ? (
-                                  <Badge variant="default">Enabled</Badge>
+                        <div className="space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3 flex-1">
+                              <Network className="h-5 w-5 text-green-500" />
+                              <div className="flex-1">
+                                {editingConnectorIndex === index ? (
+                                  <Input
+                                    value={connector.name}
+                                    onChange={(e) => updateConnector(index, 'name', e.target.value)}
+                                    onBlur={() => setEditingConnectorIndex(null)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        setEditingConnectorIndex(null);
+                                      }
+                                    }}
+                                    className="font-medium"
+                                    autoFocus
+                                  />
                                 ) : (
-                                  <Badge variant="outline">Disabled</Badge>
+                                  <p 
+                                    className="font-medium cursor-pointer hover:text-primary transition-colors"
+                                    onClick={() => setEditingConnectorIndex(index)}
+                                  >
+                                    {connector.name}
+                                  </p>
                                 )}
+                                <div className="flex items-center gap-2 mt-1">
+                                  <Badge variant="outline">{connector.type}</Badge>
+                                  {connector.enabled ? (
+                                    <Badge variant="default">Enabled</Badge>
+                                  ) : (
+                                    <Badge variant="outline">Disabled</Badge>
+                                  )}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Switch
-                              checked={connector.enabled}
-                              onCheckedChange={(checked) => updateConnector(index, 'enabled', checked)}
-                            />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeConnector(index)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={connector.enabled}
+                                onCheckedChange={(checked) => updateConnector(index, 'enabled', checked)}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeConnector(index)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </CardContent>

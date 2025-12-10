@@ -8,6 +8,7 @@ import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
 import { PubSubRoutingEngine } from './PubSubRoutingEngine';
 import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
+import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -120,6 +121,9 @@ export class EmulationEngine {
   
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
+  
+  // MuleSoft routing engines per node
+  private mulesoftRoutingEngines: Map<string, MuleSoftRoutingEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -222,6 +226,15 @@ export class EmulationEngine {
         if (node.type === 'gcp-pubsub') {
           this.initializePubSubRoutingEngine(node);
         }
+        if (node.type === 'kong') {
+          this.initializeKongRoutingEngine(node);
+        }
+        if (node.type === 'apigee') {
+          this.initializeApigeeRoutingEngine(node);
+        }
+        if (node.type === 'mulesoft') {
+          this.initializeMuleSoftRoutingEngine(node);
+        }
       }
     
     // Initialize data flow engine
@@ -277,6 +290,11 @@ export class EmulationEngine {
       if (node.type === 'apigee') {
         this.initializeApigeeRoutingEngine(node);
       }
+      
+      // Initialize MuleSoft routing engine for MuleSoft nodes
+      if (node.type === 'mulesoft') {
+        this.initializeMuleSoftRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -291,6 +309,7 @@ export class EmulationEngine {
         this.pubSubRoutingEngines.delete(nodeId);
         this.kongRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
+        this.mulesoftRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -501,6 +520,9 @@ export class EmulationEngine {
         
         case 'apigee':
           this.simulateApigee(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'mulesoft':
+          this.simulateMuleSoft(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3056,6 +3078,101 @@ export class EmulationEngine {
   }
 
   /**
+   * MuleSoft Integration Platform emulation
+   */
+  private simulateMuleSoft(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+
+    // Get MuleSoft routing engine
+    const routingEngine = this.mulesoftRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+
+    // Get MuleSoft config
+    const mulesoftConfig = (config as any) || {};
+    const applications = mulesoftConfig.applications || [];
+    const stats = routingEngine.getStats();
+
+    // Calculate throughput based on running applications and workers
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    
+    // Base throughput: sum of all running applications' capacity
+    // Each worker can handle ~50-100 requests/sec (depending on complexity)
+    let totalCapacity = 0;
+    let totalWorkers = 0;
+    
+    for (const app of applications) {
+      if (app.status === 'running') {
+        const workerCount = app.workerCount || 2;
+        totalWorkers += workerCount;
+        // Each worker handles ~50-100 req/sec, but depends on connector types
+        const workerCapacity = 75; // Average capacity per worker
+        totalCapacity += workerCount * workerCapacity;
+      }
+    }
+    
+    // If no running applications, use default
+    if (totalCapacity === 0) {
+      totalCapacity = 100; // Default capacity
+    }
+    
+    let baseThroughput = totalCapacity * loadVariation;
+
+    // Apply limits from applications (if configured)
+    // MuleSoft doesn't have built-in rate limiting like API Gateways,
+    // but applications can have their own limits
+    
+    metrics.throughput = baseThroughput;
+
+    // Latency: base runtime latency + connector latency + transformation overhead
+    const baseLatency = 5 + Math.random() * 10; // Mule Runtime base: 5-15ms
+    const connectorOverhead = stats.enabledConnectors * 2; // Each connector adds ~2ms overhead
+    const transformationOverhead = 3 + Math.random() * 5; // DataWeave transformation: 3-8ms
+    const connectorLatency = 15 + Math.random() * 25; // Connector-specific latency: 15-40ms
+    
+    metrics.latency = baseLatency + connectorOverhead + transformationOverhead + connectorLatency;
+
+    // Error rate: base + connector errors + application errors
+    const baseErrorRate = 0.002; // 0.2% base error rate
+    const connectorErrorRate = stats.totalErrors > 0 
+      ? (stats.totalErrors / Math.max(stats.totalRequests, 1)) * 0.15 
+      : 0;
+    const applicationErrorRate = stats.runningApplications > 0 ? 0.005 : 0.01; // 0.5% if apps running, 1% if not
+    
+    metrics.errorRate = Math.min(1, baseErrorRate + connectorErrorRate + applicationErrorRate);
+
+    // Utilization based on throughput vs capacity and worker utilization
+    const workerUtilization = totalWorkers > 0 
+      ? Math.min(1, metrics.throughput / (totalWorkers * 75))
+      : 0.5;
+    metrics.utilization = Math.min(1, workerUtilization);
+
+    metrics.customMetrics = {
+      'applications': stats.applications,
+      'running_applications': stats.runningApplications,
+      'connectors': stats.connectors,
+      'enabled_connectors': stats.enabledConnectors,
+      'total_requests': stats.totalRequests,
+      'total_errors': stats.totalErrors,
+      'avg_latency': Math.round(stats.avgLatency),
+      'total_workers': totalWorkers,
+      'runtime_latency': baseLatency,
+      'connector_latency': connectorLatency,
+      'transformation_latency': transformationOverhead,
+    };
+  }
+
+  /**
    * Initialize Kong routing engine for a node
    */
   private initializeKongRoutingEngine(node: CanvasNode): void {
@@ -3090,6 +3207,47 @@ export class EmulationEngine {
     });
     
     this.apigeeRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Initialize MuleSoft routing engine for a node
+   */
+  private initializeMuleSoftRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new MuleSoftRoutingEngine();
+    
+    // Convert applications from config format to routing engine format
+    const applications = (config.applications || []).map((app: any) => ({
+      name: app.name,
+      runtimeVersion: app.runtimeVersion || '4.6.0',
+      workerCount: app.workerCount || 2,
+      status: app.status || 'stopped',
+      connectors: app.connectors || [],
+      errorStrategy: app.errorStrategy || 'continue',
+      reconnectionStrategy: app.reconnectionStrategy || 'exponential',
+      auditLogging: app.auditLogging || false,
+      flows: app.flows || [],
+    }));
+    
+    // Convert connectors from config format to routing engine format
+    const connectors = (config.connectors || []).map((conn: any) => ({
+      name: conn.name,
+      type: conn.type || 'api',
+      enabled: conn.enabled !== false,
+      config: conn.config || {},
+      targetComponentType: conn.targetComponentType,
+      targetComponentId: conn.targetComponentId,
+    }));
+    
+    routingEngine.initialize({
+      organization: config.organization,
+      environment: config.environment,
+      applications,
+      connectors,
+    });
+    
+    this.mulesoftRoutingEngines.set(node.id, routingEngine);
   }
 
   /**
@@ -3218,6 +3376,13 @@ export class EmulationEngine {
    */
   public getApigeeRoutingEngine(nodeId: string): ApigeeRoutingEngine | undefined {
     return this.apigeeRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get MuleSoft routing engine for a node
+   */
+  public getMuleSoftRoutingEngine(nodeId: string): MuleSoftRoutingEngine | undefined {
+    return this.mulesoftRoutingEngines.get(nodeId);
   }
 
   /**

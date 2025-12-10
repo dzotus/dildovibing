@@ -1284,6 +1284,74 @@ export class DataFlowEngine {
       };
     }
 
+    if (type === 'mulesoft') {
+      return {
+        processData: (node, message, config) => {
+          // Get MuleSoft routing engine from emulation engine
+          const routingEngine = emulationEngine.getMuleSoftRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const sourceNode = this.nodes.find(n => n.id === message.source);
+          const targetNode = this.nodes.find(n => n.id === message.target);
+
+          // Process data through MuleSoft
+          const processResult = routingEngine.processData({
+            path: payload?.path || message.metadata?.path,
+            method: payload?.method || message.metadata?.method || 'POST',
+            headers: payload?.headers || message.metadata?.headers || {},
+            query: payload?.query || message.metadata?.query || {},
+            body: payload?.body || payload || message.payload,
+            format: message.format,
+            sourceComponentType: sourceNode?.type,
+            sourceComponentId: sourceNode?.id,
+            targetComponentType: targetNode?.type,
+            targetComponentId: targetNode?.id,
+          });
+
+          if (processResult.response.status === 'success') {
+            message.status = 'delivered';
+            message.latency = processResult.response.latency;
+            message.payload = processResult.response.data;
+            if (processResult.response.format) {
+              message.format = processResult.response.format;
+            }
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              mulesoftApplication: processResult.response.application,
+              mulesoftFlow: processResult.response.flow,
+              mulesoftConnector: processResult.response.connector,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = processResult.response.error || 'MuleSoft processing failed';
+            message.latency = processResult.response.latency || 0;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // MuleSoft can transform data formats (DataWeave)
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
     return {
       transformData: (node, message, targetType, config) => {
         // Integration components transform data formats
