@@ -4,6 +4,7 @@ import { componentStateEngine } from './ComponentStateEngine';
 import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
 import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 import { SQSRoutingEngine } from './SQSRoutingEngine';
+import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -102,6 +103,10 @@ export class EmulationEngine {
   // SQS routing engines per node
   private sqsRoutingEngines: Map<string, SQSRoutingEngine> = new Map();
   private lastSQSUpdate: Map<string, number> = new Map();
+  
+  // Azure Service Bus routing engines per node
+  private azureServiceBusRoutingEngines: Map<string, AzureServiceBusRoutingEngine> = new Map();
+  private lastAzureServiceBusUpdate: Map<string, number> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -187,18 +192,21 @@ export class EmulationEngine {
     this.connections = connections;
     this.initializeMetrics();
     
-    // Initialize routing engines for messaging components
-    for (const node of nodes) {
-      if (node.type === 'rabbitmq') {
-        this.initializeRabbitMQRoutingEngine(node);
+      // Initialize routing engines for messaging components
+      for (const node of nodes) {
+        if (node.type === 'rabbitmq') {
+          this.initializeRabbitMQRoutingEngine(node);
+        }
+        if (node.type === 'activemq') {
+          this.initializeActiveMQRoutingEngine(node);
+        }
+        if (node.type === 'aws-sqs') {
+          this.initializeSQSRoutingEngine(node);
+        }
+        if (node.type === 'azure-service-bus') {
+          this.initializeAzureServiceBusRoutingEngine(node);
+        }
       }
-      if (node.type === 'activemq') {
-        this.initializeActiveMQRoutingEngine(node);
-      }
-      if (node.type === 'aws-sqs') {
-        this.initializeSQSRoutingEngine(node);
-      }
-    }
     
     // Initialize data flow engine
     dataFlowEngine.initialize(nodes, connections);
@@ -233,6 +241,11 @@ export class EmulationEngine {
       if (node.type === 'aws-sqs') {
         this.initializeSQSRoutingEngine(node);
       }
+      
+      // Initialize Azure Service Bus routing engine for Azure Service Bus nodes
+      if (node.type === 'azure-service-bus') {
+        this.initializeAzureServiceBusRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -243,9 +256,11 @@ export class EmulationEngine {
         this.rabbitMQRoutingEngines.delete(nodeId);
         this.activeMQRoutingEngines.delete(nodeId);
         this.sqsRoutingEngines.delete(nodeId);
+        this.azureServiceBusRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
+        this.lastAzureServiceBusUpdate.delete(nodeId);
       }
     }
     
@@ -353,6 +368,16 @@ export class EmulationEngine {
       }
     }
     
+    // Process Azure Service Bus consumption (before updating metrics)
+    for (const [nodeId, routingEngine] of this.azureServiceBusRoutingEngines.entries()) {
+      const lastUpdate = this.lastAzureServiceBusUpdate.get(nodeId) || now;
+      const deltaTime = now - lastUpdate;
+      if (deltaTime > 0) {
+        routingEngine.processConsumption(deltaTime);
+        this.lastAzureServiceBusUpdate.set(nodeId, now);
+      }
+    }
+    
     // Update component metrics based on their configuration
     for (const node of this.nodes) {
       this.updateComponentMetrics(node);
@@ -401,6 +426,9 @@ export class EmulationEngine {
           break;
         case 'aws-sqs':
           this.simulateSQS(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'azure-service-bus':
+          this.simulateAzureServiceBus(node, config, metrics, hasIncomingConnections);
           break;
         case 'postgres':
         case 'mongodb':
@@ -1964,6 +1992,241 @@ export class EmulationEngine {
   }
 
   /**
+   * Azure Service Bus emulation
+   */
+  private simulateAzureServiceBus(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.azureServiceBusRoutingEngines.has(node.id)) {
+      this.initializeAzureServiceBusRoutingEngine(node);
+    }
+    
+    const routingEngine = this.azureServiceBusRoutingEngines.get(node.id)!;
+    const serviceBusConfig = (node.data.config as any) || {};
+    
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics but keep queue/topic state
+      metrics.throughput = 0;
+      metrics.latency = 5; // Base latency for Azure Service Bus (cloud service)
+      metrics.errorRate = 0;
+      
+      // Calculate utilization from existing queue/topic depth
+      const totalQueueDepth = routingEngine.getTotalQueueDepth();
+      const totalSubscriptionMessages = routingEngine.getTotalSubscriptionMessages();
+      const totalMessages = totalQueueDepth + totalSubscriptionMessages;
+      metrics.utilization = Math.min(1, totalMessages / 100000);
+      
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const allSubscriptionMetrics = routingEngine.getAllSubscriptionMetrics();
+      const connections = routingEngine.getActiveConnections();
+      
+      metrics.customMetrics = {
+        'queue_depth': totalQueueDepth,
+        'subscription_messages': totalSubscriptionMessages,
+        'connections': connections,
+        'queues': serviceBusConfig.queues?.length || 0,
+        'topics': serviceBusConfig.topics?.length || 0,
+      };
+      
+      // Update queue and subscription metrics in config
+      this.updateAzureServiceBusMetricsInConfig(node, allQueueMetrics, allSubscriptionMetrics);
+      return;
+    }
+    
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+    
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate messages per second from connection traffic
+        // Assume average message size of 1KB
+        const avgMessageSize = 1024;
+        const msgPerSec = connMetrics.traffic / avgMessageSize;
+        totalIncomingThroughput += msgPerSec;
+      }
+    }
+    
+    // Use configured throughput if available, otherwise use calculated
+    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
+    
+    // Throughput with random jitter
+    const jitter = (Math.random() - 0.5) * 0.1;
+    metrics.throughput = throughputMsgs * (1 + jitter);
+    
+    // Latency based on queue depth and Azure Service Bus characteristics
+    const totalQueueDepth = routingEngine.getTotalQueueDepth();
+    const totalSubscriptionMessages = routingEngine.getTotalSubscriptionMessages();
+    const totalMessages = totalQueueDepth + totalSubscriptionMessages;
+    
+    const baseLatency = 5; // Base Azure Service Bus latency (cloud service)
+    const queueLatency = Math.min(50, totalMessages / 1000); // 1ms per 1000 messages, max 50ms
+    const lockLatency = 2; // Peek-lock overhead
+    metrics.latency = baseLatency + queueLatency + lockLatency + Math.random() * 5;
+    
+    // Get queue and subscription metrics
+    const allQueueMetrics = routingEngine.getAllQueueMetrics();
+    const allSubscriptionMetrics = routingEngine.getAllSubscriptionMetrics();
+    const connections = routingEngine.getActiveConnections();
+    
+    // Error rate for delivery failures (increases with queue depth and delivery count)
+    const baseErrorRate = 0.0005;
+    const depthErrorRate = Math.min(0.01, totalMessages / 1000000); // 0.01% per 100k messages
+    
+    // Check for dead letter messages (failed deliveries)
+    let totalDeadLetterMessages = 0;
+    for (const queueMetrics of allQueueMetrics.values()) {
+      totalDeadLetterMessages += queueMetrics.deadLetterMessageCount || 0;
+    }
+    for (const subMetrics of allSubscriptionMetrics.values()) {
+      totalDeadLetterMessages += subMetrics.deadLetterMessageCount || 0;
+    }
+    const dlqErrorRate = totalDeadLetterMessages > 0 ? Math.min(0.05, totalDeadLetterMessages / 10000) : 0;
+    
+    metrics.errorRate = Math.min(1, baseErrorRate + depthErrorRate + dlqErrorRate);
+    
+    // Utilization based on message queue backlog
+    metrics.utilization = Math.min(1, totalMessages / 100000);
+    
+    // Calculate total subscriptions
+    let totalSubscriptions = 0;
+    const topics = serviceBusConfig.topics || [];
+    for (const topic of topics) {
+      totalSubscriptions += (topic.subscriptions || []).length;
+    }
+    
+    metrics.customMetrics = {
+      'queue_depth': totalQueueDepth,
+      'subscription_messages': totalSubscriptionMessages,
+      'dead_letter_messages': totalDeadLetterMessages,
+      'connections': connections,
+      'queues': serviceBusConfig.queues?.length || 0,
+      'topics': serviceBusConfig.topics?.length || 0,
+      'subscriptions': totalSubscriptions,
+    };
+    
+    // Update queue and subscription metrics in node config (for UI display)
+    this.updateAzureServiceBusMetricsInConfig(node, allQueueMetrics, allSubscriptionMetrics);
+  }
+  
+  /**
+   * Initialize Azure Service Bus routing engine for a node
+   */
+  private initializeAzureServiceBusRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new AzureServiceBusRoutingEngine();
+    
+    // Convert UI queue format to routing engine format
+    const queues = (config.queues || []).map((q: any) => ({
+      name: q.name,
+      namespace: q.namespace || config.namespace || 'archiphoenix.servicebus.windows.net',
+      maxSizeInMegabytes: q.maxSizeInMegabytes || 1024,
+      defaultMessageTimeToLive: q.defaultMessageTimeToLive || 2592000,
+      lockDuration: q.lockDuration || 30,
+      maxDeliveryCount: q.maxDeliveryCount || 10,
+      enablePartitioning: q.enablePartitioning || false,
+      enableDeadLetteringOnMessageExpiration: q.enableDeadLetteringOnMessageExpiration !== undefined 
+        ? q.enableDeadLetteringOnMessageExpiration 
+        : true,
+      enableSessions: q.enableSessions || false,
+      activeMessageCount: q.activeMessageCount || 0,
+      deadLetterMessageCount: q.deadLetterMessageCount || 0,
+      scheduledMessageCount: q.scheduledMessageCount || 0,
+    }));
+    
+    // Convert UI topic format to routing engine format
+    const topics = (config.topics || []).map((t: any) => ({
+      name: t.name,
+      namespace: t.namespace || config.namespace || 'archiphoenix.servicebus.windows.net',
+      maxSizeInMegabytes: t.maxSizeInMegabytes || 1024,
+      defaultMessageTimeToLive: t.defaultMessageTimeToLive || 2592000,
+      enablePartitioning: t.enablePartitioning || false,
+      subscriptions: (t.subscriptions || []).map((sub: any) => ({
+        name: sub.name,
+        maxDeliveryCount: sub.maxDeliveryCount || 10,
+        lockDuration: sub.lockDuration || 30,
+        enableDeadLetteringOnMessageExpiration: sub.enableDeadLetteringOnMessageExpiration !== undefined
+          ? sub.enableDeadLetteringOnMessageExpiration
+          : true,
+        activeMessageCount: sub.activeMessageCount || 0,
+      })),
+    }));
+    
+    routingEngine.initialize({
+      queues: queues,
+      topics: topics,
+    });
+    
+    this.azureServiceBusRoutingEngines.set(node.id, routingEngine);
+    this.lastAzureServiceBusUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Update Azure Service Bus metrics in node config (for UI display)
+   */
+  private updateAzureServiceBusMetricsInConfig(
+    node: CanvasNode,
+    queueMetrics: Map<string, {
+      activeMessageCount: number;
+      deadLetterMessageCount: number;
+      scheduledMessageCount: number;
+      sentCount: number;
+      receivedCount: number;
+      completedCount: number;
+      abandonedCount: number;
+    }>,
+    subscriptionMetrics: Map<string, {
+      activeMessageCount: number;
+      deadLetterMessageCount: number;
+      sentCount: number;
+      receivedCount: number;
+      completedCount: number;
+      abandonedCount: number;
+    }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    
+    // Update queue metrics
+    const queues = config.queues || [];
+    for (let i = 0; i < queues.length; i++) {
+      const queue = queues[i];
+      const metrics = queueMetrics.get(queue.name);
+      if (metrics) {
+        queues[i] = {
+          ...queue,
+          activeMessageCount: metrics.activeMessageCount,
+          deadLetterMessageCount: metrics.deadLetterMessageCount,
+          scheduledMessageCount: metrics.scheduledMessageCount,
+        };
+      }
+    }
+    config.queues = queues;
+    
+    // Update topic subscription metrics
+    const topics = config.topics || [];
+    for (let i = 0; i < topics.length; i++) {
+      const topic = topics[i];
+      const subscriptions = topic.subscriptions || [];
+      for (let j = 0; j < subscriptions.length; j++) {
+        const subscription = subscriptions[j];
+        const subscriptionId = `${topic.name}/subscriptions/${subscription.name}`;
+        const metrics = subscriptionMetrics.get(subscriptionId);
+        if (metrics) {
+          subscriptions[j] = {
+            ...subscription,
+            activeMessageCount: metrics.activeMessageCount,
+          };
+        }
+      }
+      topics[i] = {
+        ...topic,
+        subscriptions: subscriptions,
+      };
+    }
+    config.topics = topics;
+  }
+
+  /**
    * SQS emulation
    */
   private simulateSQS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -2445,6 +2708,10 @@ export class EmulationEngine {
 
   public getSQSRoutingEngine(nodeId: string): SQSRoutingEngine | undefined {
     return this.sqsRoutingEngines.get(nodeId);
+  }
+
+  public getAzureServiceBusRoutingEngine(nodeId: string): AzureServiceBusRoutingEngine | undefined {
+    return this.azureServiceBusRoutingEngines.get(nodeId);
   }
 
   /**

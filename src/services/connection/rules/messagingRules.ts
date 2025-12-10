@@ -78,14 +78,43 @@ export function createMessagingProducerRule(discovery: ServiceDiscovery): Connec
           break;
         }
         
-        case 'azure-service-bus':
+        case 'azure-service-bus': {
+          // Get Azure Service Bus configuration
+          const serviceBusConfig = queue.data.config || {};
+          const namespace = serviceBusConfig.namespace || 'archiphoenix.servicebus.windows.net';
+          const connectionString = serviceBusConfig.connectionString || 
+            `Endpoint=sb://${namespace}/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...`;
+          
+          // Determine entity type (queue or topic)
+          const entityType = config.messaging?.entityType || 
+                           serviceBusConfig.entityType || 
+                           'queue';
+          
+          const entityName = config.messaging?.entityName || 
+                            config.messaging?.queue || 
+                            config.messaging?.topic ||
+                            serviceBusConfig.entityName || 
+                            (entityType === 'queue' ? 'events' : 'events-topic');
+          
+          const subscriptionName = config.messaging?.subscriptionName || 
+                                  serviceBusConfig.subscriptionName;
+          
+          // Build connection string from namespace if not provided
+          const finalConnectionString = serviceBusConfig.connectionString || 
+            `Endpoint=sb://${namespace}/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...`;
+          
           messagingConfig = {
             messaging: {
-              connectionString: `Endpoint=sb://${metadata.targetHost}/;SharedAccessKeyName=...`,
-              topic: config.messaging?.topic || queue.data.config?.defaultTopic || 'default-topic',
+              connectionString: finalConnectionString,
+              namespace: namespace,
+              entityType: entityType,
+              queue: entityType === 'queue' ? entityName : undefined,
+              topic: entityType === 'topic' ? entityName : undefined,
+              subscriptionName: entityType === 'topic' && subscriptionName ? subscriptionName : undefined,
             },
           };
           break;
+        }
         
         case 'gcp-pubsub':
           messagingConfig = {

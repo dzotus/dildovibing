@@ -19,8 +19,6 @@ import {
   Trash2,
   Shield,
   Key,
-  Cloud,
-  RefreshCcw,
   Users
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
@@ -163,6 +161,15 @@ export function AzureServiceBusConfigAdvanced({ componentId }: AzureServiceBusCo
     }
   };
 
+  const updateSubscription = (topicIndex: number, subIndex: number, field: string, value: any) => {
+    const topic = topics[topicIndex];
+    if (topic && topic.subscriptions) {
+      const updatedSubs = [...topic.subscriptions];
+      updatedSubs[subIndex] = { ...updatedSubs[subIndex], [field]: value };
+      updateTopic(topicIndex, 'subscriptions', updatedSubs);
+    }
+  };
+
   const totalMessages = queues.reduce((sum, q) => sum + (q.activeMessageCount || 0), 0) +
     topics.reduce((sum, t) => sum + (t.subscriptions?.reduce((s, sub) => s + (sub.activeMessageCount || 0), 0) || 0), 0);
 
@@ -176,16 +183,6 @@ export function AzureServiceBusConfigAdvanced({ componentId }: AzureServiceBusCo
             <p className="text-sm text-muted-foreground mt-1">
               Configure queues, topics and subscriptions with sessions and dead-lettering
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              Azure Portal
-            </Button>
           </div>
         </div>
 
@@ -262,12 +259,20 @@ export function AzureServiceBusConfigAdvanced({ componentId }: AzureServiceBusCo
                     <Card key={index} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">{queue.name}</CardTitle>
+                          <div className="flex-1 space-y-2">
+                            <Label>Queue Name</Label>
+                            <Input
+                              value={queue.name}
+                              onChange={(e) => updateQueue(index, 'name', e.target.value)}
+                              placeholder="queue-name"
+                            />
+                          </div>
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => removeQueue(index)}
                             disabled={queues.length === 1}
+                            className="ml-4"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -374,12 +379,20 @@ export function AzureServiceBusConfigAdvanced({ componentId }: AzureServiceBusCo
                     <Card key={index} className="border-l-4 border-l-green-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">{topic.name}</CardTitle>
+                          <div className="flex-1 space-y-2">
+                            <Label>Topic Name</Label>
+                            <Input
+                              value={topic.name}
+                              onChange={(e) => updateTopic(index, 'name', e.target.value)}
+                              placeholder="topic-name"
+                            />
+                          </div>
                           <Button
                             variant="ghost"
                             size="icon"
                             onClick={() => removeTopic(index)}
                             disabled={topics.length === 1}
+                            className="ml-4"
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -421,23 +434,60 @@ export function AzureServiceBusConfigAdvanced({ componentId }: AzureServiceBusCo
                             </Button>
                           </div>
                           {topic.subscriptions && topic.subscriptions.length > 0 ? (
-                            <div className="space-y-2">
+                            <div className="space-y-4">
                               {topic.subscriptions.map((sub, subIndex) => (
-                                <Card key={subIndex} className="p-3">
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex-1">
-                                      <p className="font-medium">{sub.name}</p>
-                                      <p className="text-xs text-muted-foreground">
-                                        Messages: {sub.activeMessageCount || 0} • Max Delivery: {sub.maxDeliveryCount}
-                                      </p>
+                                <Card key={subIndex} className="p-4 border-l-4 border-l-purple-500">
+                                  <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex-1 space-y-2">
+                                        <Label>Subscription Name</Label>
+                                        <Input
+                                          value={sub.name}
+                                          onChange={(e) => updateSubscription(index, subIndex, 'name', e.target.value)}
+                                          placeholder="subscription-name"
+                                        />
+                                      </div>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => removeSubscription(index, subIndex)}
+                                        className="ml-4"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </Button>
                                     </div>
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => removeSubscription(index, subIndex)}
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
+                                    <div className="grid grid-cols-3 gap-4">
+                                      <div>
+                                        <p className="text-xs text-muted-foreground mb-1">Active Messages</p>
+                                        <p className="text-lg font-semibold">{sub.activeMessageCount || 0}</p>
+                                      </div>
+                                    </div>
+                                    <Separator />
+                                    <div className="grid grid-cols-2 gap-4">
+                                      <div className="space-y-2">
+                                        <Label>Lock Duration (seconds)</Label>
+                                        <Input
+                                          type="number"
+                                          value={sub.lockDuration}
+                                          onChange={(e) => updateSubscription(index, subIndex, 'lockDuration', Number(e.target.value))}
+                                        />
+                                      </div>
+                                      <div className="space-y-2">
+                                        <Label>Max Delivery Count</Label>
+                                        <Input
+                                          type="number"
+                                          value={sub.maxDeliveryCount}
+                                          onChange={(e) => updateSubscription(index, subIndex, 'maxDeliveryCount', Number(e.target.value))}
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center justify-between">
+                                      <Label>Dead Letter on Expiration</Label>
+                                      <Switch
+                                        checked={sub.enableDeadLetteringOnMessageExpiration}
+                                        onCheckedChange={(checked) => updateSubscription(index, subIndex, 'enableDeadLetteringOnMessageExpiration', checked)}
+                                      />
+                                    </div>
                                   </div>
                                 </Card>
                               ))}

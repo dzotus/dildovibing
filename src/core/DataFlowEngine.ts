@@ -942,6 +942,89 @@ export class DataFlowEngine {
       };
     }
     
+    if (type === 'azure-service-bus') {
+      return {
+        processData: (node, message, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getAzureServiceBusRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract queue or topic from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const queue = messagingConfig.queue;
+          const topic = messagingConfig.topic;
+          const properties = message.metadata?.properties || message.metadata?.headers;
+          const sessionId = message.metadata?.sessionId;
+          const scheduledEnqueueTime = message.metadata?.scheduledEnqueueTime;
+          
+          let routed = false;
+          let destination = '';
+          let messageIds: string[] = [];
+          
+          // Route to queue (point-to-point)
+          if (queue) {
+            const messageId = routingEngine.sendToQueue(
+              queue,
+              message.payload,
+              message.size,
+              properties,
+              sessionId,
+              scheduledEnqueueTime
+            );
+            
+            if (messageId) {
+              routed = true;
+              destination = queue;
+              messageIds.push(messageId);
+            }
+          }
+          
+          // Publish to topic (publish-subscribe)
+          if (topic) {
+            const ids = routingEngine.publishToTopic(
+              topic,
+              message.payload,
+              message.size,
+              properties,
+              scheduledEnqueueTime
+            );
+            
+            if (ids.length > 0) {
+              routed = true;
+              destination = topic;
+              messageIds = ids;
+            }
+          }
+          
+          if (routed) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              destination,
+              queue: queue || undefined,
+              topic: topic || undefined,
+              messageIds,
+              sessionId: sessionId || undefined,
+            };
+          } else {
+            // No queue or topic matched, message is lost
+            message.status = 'failed';
+            message.error = `No queue or topic found. Queue: '${queue || 'none'}', Topic: '${topic || 'none'}'`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
     // Default handler for other message brokers (Kafka, etc.)
     return {
       processData: (node, message, config) => {
