@@ -5,6 +5,7 @@ import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
 import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 import { SQSRoutingEngine } from './SQSRoutingEngine';
 import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
+import { PubSubRoutingEngine } from './PubSubRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -107,6 +108,10 @@ export class EmulationEngine {
   // Azure Service Bus routing engines per node
   private azureServiceBusRoutingEngines: Map<string, AzureServiceBusRoutingEngine> = new Map();
   private lastAzureServiceBusUpdate: Map<string, number> = new Map();
+  
+  // Pub/Sub routing engines per node
+  private pubSubRoutingEngines: Map<string, PubSubRoutingEngine> = new Map();
+  private lastPubSubUpdate: Map<string, number> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -206,6 +211,9 @@ export class EmulationEngine {
         if (node.type === 'azure-service-bus') {
           this.initializeAzureServiceBusRoutingEngine(node);
         }
+        if (node.type === 'gcp-pubsub') {
+          this.initializePubSubRoutingEngine(node);
+        }
       }
     
     // Initialize data flow engine
@@ -246,6 +254,11 @@ export class EmulationEngine {
       if (node.type === 'azure-service-bus') {
         this.initializeAzureServiceBusRoutingEngine(node);
       }
+      
+      // Initialize Pub/Sub routing engine for Pub/Sub nodes
+      if (node.type === 'gcp-pubsub') {
+        this.initializePubSubRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -257,10 +270,12 @@ export class EmulationEngine {
         this.activeMQRoutingEngines.delete(nodeId);
         this.sqsRoutingEngines.delete(nodeId);
         this.azureServiceBusRoutingEngines.delete(nodeId);
+        this.pubSubRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
         this.lastAzureServiceBusUpdate.delete(nodeId);
+        this.lastPubSubUpdate.delete(nodeId);
       }
     }
     
@@ -378,6 +393,16 @@ export class EmulationEngine {
       }
     }
     
+    // Process Pub/Sub consumption (before updating metrics)
+    for (const [nodeId, routingEngine] of this.pubSubRoutingEngines.entries()) {
+      const lastUpdate = this.lastPubSubUpdate.get(nodeId) || now;
+      const deltaTime = now - lastUpdate;
+      if (deltaTime > 0) {
+        routingEngine.processConsumption(deltaTime);
+        this.lastPubSubUpdate.set(nodeId, now);
+      }
+    }
+    
     // Update component metrics based on their configuration
     for (const node of this.nodes) {
       this.updateComponentMetrics(node);
@@ -429,6 +454,9 @@ export class EmulationEngine {
           break;
         case 'azure-service-bus':
           this.simulateAzureServiceBus(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'gcp-pubsub':
+          this.simulatePubSub(node, config, metrics, hasIncomingConnections);
           break;
         case 'postgres':
         case 'mongodb':
@@ -2227,6 +2255,247 @@ export class EmulationEngine {
   }
 
   /**
+   * Google Pub/Sub broker emulation
+   * 
+   * Key differences from Kafka/RabbitMQ:
+   * - Managed service: automatic scaling, no partitions/replication to configure
+   * - No partition overhead: simpler model (topics → subscriptions)
+   * - Push/Pull subscriptions: unique delivery model
+   * - Ack deadlines: messages auto-returned after deadline expires
+   * - Lower latency: managed infrastructure, optimized for cloud
+   * - Automatic scaling: utilization less sensitive to message backlog
+   * - Message ordering keys: simpler than Kafka partitions (per-key ordering)
+   */
+  private simulatePubSub(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.pubSubRoutingEngines.has(node.id)) {
+      this.initializePubSubRoutingEngine(node);
+    }
+    
+    const routingEngine = this.pubSubRoutingEngines.get(node.id)!;
+    const pubSubConfig = (node.data.config as any) || {};
+    const topics = pubSubConfig.topics || [];
+    const subscriptions = pubSubConfig.subscriptions || [];
+    
+    if (!hasIncomingConnections) {
+      // No incoming data, reset metrics but keep topic/subscription state
+      metrics.throughput = 0;
+      metrics.latency = 3; // Base latency for Google Pub/Sub (cloud service)
+      metrics.errorRate = 0;
+      
+      // Calculate utilization from existing message depth
+      const totalTopicMessages = routingEngine.getTotalTopicMessages();
+      const totalUnackedMessages = routingEngine.getTotalUnackedMessages();
+      const totalMessages = totalTopicMessages + totalUnackedMessages;
+      metrics.utilization = Math.min(1, totalMessages / 100000);
+      
+      const allTopicMetrics = routingEngine.getAllTopicMetrics();
+      const allSubscriptionMetrics = routingEngine.getAllSubscriptionMetrics();
+      const connections = routingEngine.getActiveConnections();
+      
+      metrics.customMetrics = {
+        'topic_messages': totalTopicMessages,
+        'unacked_messages': totalUnackedMessages,
+        'connections': connections,
+        'topics': topics.length,
+        'subscriptions': subscriptions.length,
+      };
+      
+      // Update metrics in config
+      this.updatePubSubMetricsInConfig(node, allTopicMetrics, allSubscriptionMetrics);
+      return;
+    }
+    
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+    
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate messages per second from connection traffic
+        // Assume average message size of 1KB
+        const avgMessageSize = 1024;
+        const msgPerSec = connMetrics.traffic / avgMessageSize;
+        totalIncomingThroughput += msgPerSec;
+      }
+    }
+    
+    // Use configured throughput if available, otherwise use calculated
+    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
+    
+    // Throughput with random jitter
+    const jitter = (Math.random() - 0.5) * 0.1;
+    metrics.throughput = throughputMsgs * (1 + jitter);
+    
+    // Latency based on Pub/Sub characteristics (managed service - no partitions/replication overhead)
+    const totalTopicMessages = routingEngine.getTotalTopicMessages();
+    const totalUnackedMessages = routingEngine.getTotalUnackedMessages();
+    const totalMessages = totalTopicMessages + totalUnackedMessages;
+    
+    // Google Pub/Sub is a fully managed service - very low and stable latency
+    // No partition/replication overhead like Kafka
+    // Automatic scaling reduces queue depth impact
+    const baseLatency = 3; // Base Google Pub/Sub latency (cloud managed service)
+    
+    // Message depth has less impact due to automatic scaling (Pub/Sub scales automatically)
+    // Much less sensitive than self-managed brokers (Kafka/RabbitMQ)
+    const messageLatency = Math.min(15, totalMessages / 10000); // 1ms per 10k messages, max 15ms (less than Kafka)
+    
+    // Push subscriptions have higher latency (HTTP POST overhead)
+    const pushSubscriptions = subscriptions.filter((sub: any) => sub.pushEndpoint).length;
+    const pushLatencyOverhead = pushSubscriptions > 0 ? 2 : 0; // ~2ms overhead for push delivery
+    
+    // Ack tracking overhead (minimal for managed service)
+    const ackLatency = totalUnackedMessages > 0 ? 0.5 : 0;
+    
+    // Managed service has very stable latency (less jitter)
+    metrics.latency = baseLatency + messageLatency + pushLatencyOverhead + ackLatency + Math.random() * 2;
+    
+    // Get topic and subscription metrics
+    const allTopicMetrics = routingEngine.getAllTopicMetrics();
+    const allSubscriptionMetrics = routingEngine.getAllSubscriptionMetrics();
+    const connections = routingEngine.getActiveConnections();
+    
+    // Error rate for delivery failures (Pub/Sub has very low error rate as managed service)
+    const baseErrorRate = 0.0001; // Very low base error rate for managed service (better than self-managed)
+    
+    // Message depth has minimal impact due to automatic scaling
+    // Pub/Sub scales automatically, so errors don't increase much with load
+    const depthErrorRate = Math.min(0.001, totalMessages / 5000000); // Much lower than Kafka/RabbitMQ
+    
+    // Push subscription failures (HTTP endpoint errors)
+    const pushFailureRate = pushSubscriptions > 0 && totalUnackedMessages > 0
+      ? Math.min(0.002, totalUnackedMessages / 100000) // Push endpoints can fail
+      : 0;
+    
+    // Check for expired ack deadlines (unacked messages that exceeded deadline)
+    // This is specific to Pub/Sub model (not present in Kafka)
+    const avgAckDeadlineSeconds = subscriptions.length > 0
+      ? subscriptions.reduce((sum: number, sub: any) => sum + (sub.ackDeadlineSeconds || 10), 0) / subscriptions.length
+      : 10;
+    const expiredAckRate = totalUnackedMessages > 0 && avgAckDeadlineSeconds < 60 
+      ? Math.min(0.005, totalUnackedMessages / 100000) // Expired acks increase error rate
+      : 0;
+    
+    metrics.errorRate = Math.min(1, baseErrorRate + depthErrorRate + pushFailureRate + expiredAckRate);
+    
+    // Utilization: Pub/Sub auto-scales, so utilization is more stable
+    // Less sensitive to message backlog than self-managed brokers
+    // Utilization reflects actual service usage, not queue depth
+    const throughputUtilization = Math.min(1, metrics.throughput / 100000); // Throughput-based (Pub/Sub scales)
+    const backlogUtilization = Math.min(0.3, totalMessages / 500000); // Backlog has less impact (capped at 30%)
+    metrics.utilization = Math.min(1, throughputUtilization * 0.7 + backlogUtilization * 0.3);
+    
+    // Calculate pull subscriptions (pushSubscriptions already calculated above for latency)
+    const pullSubscriptions = subscriptions.length - pushSubscriptions;
+    
+    metrics.customMetrics = {
+      'topic_messages': totalTopicMessages,
+      'unacked_messages': totalUnackedMessages,
+      'connections': connections,
+      'topics': topics.length,
+      'subscriptions': subscriptions.length,
+      'push_subscriptions': pushSubscriptions,
+      'pull_subscriptions': pullSubscriptions,
+      'total_bytes': Array.from(allTopicMetrics.values()).reduce((sum, m) => sum + m.byteCount, 0),
+    };
+    
+    // Update metrics in node config (for UI display)
+    this.updatePubSubMetricsInConfig(node, allTopicMetrics, allSubscriptionMetrics);
+  }
+  
+  /**
+   * Initialize Pub/Sub routing engine for a node
+   */
+  private initializePubSubRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new PubSubRoutingEngine();
+    
+    // Convert UI format to routing engine format
+    const topics = (config.topics || []).map((t: any) => ({
+      name: t.name,
+      projectId: t.projectId || config.projectId || 'archiphoenix-lab',
+      messageRetentionDuration: t.messageRetentionDuration || 604800, // Default 7 days
+      labels: t.labels || {},
+      messageCount: t.messageCount || 0,
+      byteCount: t.byteCount || 0,
+    }));
+    
+    const subscriptions = (config.subscriptions || []).map((sub: any) => ({
+      name: sub.name,
+      topic: sub.topic,
+      projectId: sub.projectId || config.projectId || 'archiphoenix-lab',
+      ackDeadlineSeconds: sub.ackDeadlineSeconds || 10,
+      messageRetentionDuration: sub.messageRetentionDuration,
+      enableMessageOrdering: sub.enableMessageOrdering || false,
+      pushEndpoint: sub.pushEndpoint,
+      pushAttributes: sub.pushAttributes || {},
+      messageCount: sub.messageCount || 0,
+      unackedMessageCount: sub.unackedMessageCount || 0,
+    }));
+    
+    routingEngine.initialize({
+      topics: topics,
+      subscriptions: subscriptions,
+    });
+    
+    this.pubSubRoutingEngines.set(node.id, routingEngine);
+    this.lastPubSubUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Update Pub/Sub metrics in node config (for UI display)
+   */
+  private updatePubSubMetricsInConfig(
+    node: CanvasNode,
+    topicMetrics: Map<string, {
+      messageCount: number;
+      byteCount: number;
+      publishedCount: number;
+    }>,
+    subscriptionMetrics: Map<string, {
+      messageCount: number;
+      unackedMessageCount: number;
+      deliveredCount: number;
+      acknowledgedCount: number;
+      nackedCount: number;
+    }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    
+    // Update topic metrics
+    const topics = config.topics || [];
+    for (let i = 0; i < topics.length; i++) {
+      const topic = topics[i];
+      const metrics = topicMetrics.get(topic.name);
+      if (metrics) {
+        topics[i] = {
+          ...topic,
+          messageCount: metrics.messageCount,
+          byteCount: metrics.byteCount,
+        };
+      }
+    }
+    config.topics = topics;
+    
+    // Update subscription metrics
+    const subscriptions = config.subscriptions || [];
+    for (let i = 0; i < subscriptions.length; i++) {
+      const subscription = subscriptions[i];
+      const metrics = subscriptionMetrics.get(subscription.name);
+      if (metrics) {
+        subscriptions[i] = {
+          ...subscription,
+          messageCount: metrics.messageCount,
+          unackedMessageCount: metrics.unackedMessageCount,
+        };
+      }
+    }
+    config.subscriptions = subscriptions;
+  }
+
+  /**
    * SQS emulation
    */
   private simulateSQS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -2712,6 +2981,10 @@ export class EmulationEngine {
 
   public getAzureServiceBusRoutingEngine(nodeId: string): AzureServiceBusRoutingEngine | undefined {
     return this.azureServiceBusRoutingEngines.get(nodeId);
+  }
+
+  public getPubSubRoutingEngine(nodeId: string): PubSubRoutingEngine | undefined {
+    return this.pubSubRoutingEngines.get(nodeId);
   }
 
   /**

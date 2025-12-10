@@ -18,8 +18,6 @@ import {
   Plus, 
   Trash2,
   Key,
-  Cloud,
-  RefreshCcw,
   Users,
   Send
 } from 'lucide-react';
@@ -140,16 +138,6 @@ export function GCPPubSubConfigAdvanced({ componentId }: GCPPubSubConfigProps) {
               Configure topics and subscriptions with push/pull delivery
             </p>
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              GCP Console
-            </Button>
-          </div>
         </div>
 
         <Separator />
@@ -225,7 +213,27 @@ export function GCPPubSubConfigAdvanced({ componentId }: GCPPubSubConfigProps) {
                     <Card key={index} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">{topic.name}</CardTitle>
+                          <CardTitle className="text-base">
+                            {editingTopicIndex === index ? (
+                              <Input
+                                value={topic.name}
+                                onChange={(e) => updateTopic(index, 'name', e.target.value)}
+                                onBlur={() => setEditingTopicIndex(null)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') setEditingTopicIndex(null);
+                                }}
+                                className="h-7"
+                                autoFocus
+                              />
+                            ) : (
+                              <span
+                                className="cursor-pointer hover:text-primary"
+                                onClick={() => setEditingTopicIndex(index)}
+                              >
+                                {topic.name}
+                              </span>
+                            )}
+                          </CardTitle>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -293,7 +301,27 @@ export function GCPPubSubConfigAdvanced({ componentId }: GCPPubSubConfigProps) {
                     <Card key={index} className="border-l-4 border-l-green-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">{sub.name}</CardTitle>
+                          <CardTitle className="text-base">
+                            {editingSubIndex === index ? (
+                              <Input
+                                value={sub.name}
+                                onChange={(e) => updateSubscription(index, 'name', e.target.value)}
+                                onBlur={() => setEditingSubIndex(null)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') setEditingSubIndex(null);
+                                }}
+                                className="h-7"
+                                autoFocus
+                              />
+                            ) : (
+                              <span
+                                className="cursor-pointer hover:text-primary"
+                                onClick={() => setEditingSubIndex(index)}
+                              >
+                                {sub.name}
+                              </span>
+                            )}
+                          </CardTitle>
                           <Button
                             variant="ghost"
                             size="icon"

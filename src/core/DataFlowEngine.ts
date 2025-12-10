@@ -89,6 +89,7 @@ export class DataFlowEngine {
     this.registerHandler('rabbitmq', this.createMessageBrokerHandler('rabbitmq'));
     this.registerHandler('activemq', this.createMessageBrokerHandler('activemq'));
     this.registerHandler('aws-sqs', this.createMessageBrokerHandler('aws-sqs'));
+    this.registerHandler('gcp-pubsub', this.createMessageBrokerHandler('gcp-pubsub'));
     
     // APIs - transform and route data
     this.registerHandler('rest', this.createAPIHandler('rest'));
@@ -1016,6 +1017,65 @@ export class DataFlowEngine {
             // No queue or topic matched, message is lost
             message.status = 'failed';
             message.error = `No queue or topic found. Queue: '${queue || 'none'}', Topic: '${topic || 'none'}'`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
+    if (type === 'gcp-pubsub') {
+      return {
+        processData: (node, message, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getPubSubRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract topic from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const topicName = messagingConfig.topic || message.metadata?.topic;
+          const orderingKey = messagingConfig.orderingKey || message.metadata?.orderingKey;
+          const attributes = message.metadata?.attributes || message.metadata?.headers;
+          
+          // If no topic specified, try to use first topic from config
+          const pubSubConfig = (node.data.config as any) || {};
+          const finalTopicName = topicName || (pubSubConfig.topics && pubSubConfig.topics[0]?.name) || null;
+          
+          if (!finalTopicName) {
+            message.status = 'failed';
+            message.error = 'No topic specified for Pub/Sub message';
+            return message;
+          }
+          
+          // Publish to topic
+          const messageId = routingEngine.publishToTopic(
+            finalTopicName,
+            message.payload,
+            message.size,
+            attributes,
+            orderingKey
+          );
+          
+          if (messageId) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              topic: finalTopicName,
+              messageId,
+              orderingKey: orderingKey || undefined,
+            };
+          } else {
+            // Topic not found
+            message.status = 'failed';
+            message.error = `Topic '${finalTopicName}' not found`;
           }
           
           return message;
