@@ -10,6 +10,7 @@ import { createMessagingProducerRule } from './messagingRules';
 import { createPrometheusRule } from './prometheusRules';
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
+import { createBFFRule } from './bffRules';
 
 /**
  * Инициализировать все правила подключения
@@ -26,6 +27,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     createAPIGatewayRule(discovery),
     createKongRule(discovery),
     createGraphQLGatewayRule(discovery),
+    createBFFRule(discovery),
     createServiceMeshRule(discovery),
     createIstioRule(discovery),
     

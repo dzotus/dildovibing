@@ -1412,6 +1412,69 @@ export class DataFlowEngine {
       };
     }
 
+    if (type === 'bff-service') {
+      return {
+        processData: (node, message, config) => {
+          // Get BFF routing engine from emulation engine
+          const routingEngine = emulationEngine.getBFFRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = (payload?.method || message.metadata?.method || 'GET') as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const body = payload?.body || payload || message.payload;
+
+          // Route request through BFF
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body,
+          });
+
+          if (routeResult.status >= 200 && routeResult.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.latency;
+            message.payload = routeResult.data;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              bffCacheHit: routeResult.cacheHit,
+              bffBackendResponses: routeResult.backendResponses.length,
+              bffStatus: routeResult.status,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.error || `HTTP ${routeResult.status}`;
+            message.latency = routeResult.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // BFF can transform data formats
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json'],
+      };
+    }
+
     return {
       transformData: (node, message, targetType, config) => {
         // Integration components transform data formats

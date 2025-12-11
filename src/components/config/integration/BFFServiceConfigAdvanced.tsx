@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useState } from 'react';
 import { 
   Settings, 
@@ -20,8 +22,12 @@ import {
   Network,
   CheckCircle,
   Zap,
-  Code
+  Code,
+  Edit2,
+  X,
+  AlertTriangle
 } from 'lucide-react';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface BFFServiceConfigProps {
   componentId: string;
@@ -33,6 +39,15 @@ interface Backend {
   endpoint: string;
   protocol: 'http' | 'grpc' | 'graphql';
   status: 'connected' | 'disconnected' | 'error';
+  timeout?: number;
+  retries?: number;
+  retryBackoff?: 'exponential' | 'linear' | 'constant';
+  circuitBreaker?: {
+    enabled: boolean;
+    failureThreshold: number;
+    successThreshold: number;
+    timeout: number;
+  };
   requests?: number;
   avgLatency?: number;
 }
@@ -40,9 +55,11 @@ interface Backend {
 interface Endpoint {
   id: string;
   path: string;
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   backends: string[];
   aggregator?: 'merge' | 'sequential' | 'parallel';
+  cacheTtl?: number;
+  timeout?: number;
   requests?: number;
 }
 
@@ -68,31 +85,20 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
 
   const config = (node.data.config as any) || {} as BFFServiceConfig;
   const backends = config.backends || [];
-  const endpoints = config.endpoints || [
-    {
-      id: 'endpoint-1',
-      path: '/api/user-profile',
-      method: 'GET',
-      backends: ['user-service', 'order-service'],
-      aggregator: 'merge',
-      requests: 1250,
-    },
-    {
-      id: 'endpoint-2',
-      path: '/api/dashboard',
-      method: 'GET',
-      backends: ['user-service', 'order-service', 'product-service'],
-      aggregator: 'parallel',
-      requests: 980,
-    },
-  ];
-  const totalBackends = config.totalBackends || backends.length;
-  const totalEndpoints = config.totalEndpoints || endpoints.length;
-  const totalRequests = config.totalRequests || endpoints.reduce((sum, e) => sum + (e.requests || 0), 0);
-  const averageLatency = config.averageLatency || backends.reduce((sum, b) => sum + (b.avgLatency || 0), 0) / backends.length;
+  const endpoints = config.endpoints || [];
+  
+  // Calculate metrics dynamically
+  const totalBackends = backends.length;
+  const totalEndpoints = endpoints.length;
+  const totalRequests = endpoints.reduce((sum, e) => sum + (e.requests || 0), 0);
+  const averageLatency = backends.length > 0
+    ? backends.reduce((sum, b) => sum + (b.avgLatency || 0), 0) / backends.length
+    : 0;
 
-  const [showCreateBackend, setShowCreateBackend] = useState(false);
-  const [showCreateEndpoint, setShowCreateEndpoint] = useState(false);
+  const [editingEndpointId, setEditingEndpointId] = useState<string | null>(null);
+  const [editingBackendId, setEditingBackendId] = useState<string | null>(null);
+  const [expandedEndpointId, setExpandedEndpointId] = useState<string | null>(null);
+  const [expandedBackendId, setExpandedBackendId] = useState<string | null>(null);
 
   const updateConfig = (updates: Partial<BFFServiceConfig>) => {
     updateNode(componentId, {
@@ -110,13 +116,37 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
       endpoint: 'http://localhost:8080',
       protocol: 'http',
       status: 'disconnected',
+      timeout: 5000,
+      retries: 3,
+      retryBackoff: 'exponential',
+      circuitBreaker: {
+        enabled: true,
+        failureThreshold: 5,
+        successThreshold: 2,
+        timeout: 60000,
+      },
     };
     updateConfig({ backends: [...backends, newBackend] });
-    setShowCreateBackend(false);
+    setExpandedBackendId(newBackend.id);
   };
 
   const removeBackend = (id: string) => {
-    updateConfig({ backends: backends.filter((b) => b.id !== id) });
+    // Remove backend from all endpoints
+    const updatedEndpoints = endpoints.map(e => ({
+      ...e,
+      backends: e.backends.filter(bId => bId !== id),
+    }));
+    updateConfig({ 
+      backends: backends.filter((b) => b.id !== id),
+      endpoints: updatedEndpoints,
+    });
+  };
+
+  const updateBackend = (id: string, updates: Partial<Backend>) => {
+    const updatedBackends = backends.map(b => 
+      b.id === id ? { ...b, ...updates } : b
+    );
+    updateConfig({ backends: updatedBackends });
   };
 
   const addEndpoint = () => {
@@ -126,13 +156,73 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
       method: 'GET',
       backends: [],
       aggregator: 'merge',
+      cacheTtl: 5,
+      timeout: 5000,
     };
     updateConfig({ endpoints: [...endpoints, newEndpoint] });
-    setShowCreateEndpoint(false);
+    setExpandedEndpointId(newEndpoint.id);
   };
 
   const removeEndpoint = (id: string) => {
     updateConfig({ endpoints: endpoints.filter((e) => e.id !== id) });
+  };
+
+  const updateEndpoint = (id: string, updates: Partial<Endpoint>) => {
+    const updatedEndpoints = endpoints.map(e => 
+      e.id === id ? { ...e, ...updates } : e
+    );
+    updateConfig({ endpoints: updatedEndpoints });
+  };
+
+  const toggleBackendInEndpoint = (endpointId: string, backendId: string) => {
+    const endpoint = endpoints.find(e => e.id === endpointId);
+    if (!endpoint) return;
+    
+    const hasBackend = endpoint.backends.includes(backendId);
+    const updatedBackends = hasBackend
+      ? endpoint.backends.filter(id => id !== backendId)
+      : [...endpoint.backends, backendId];
+    
+    updateEndpoint(endpointId, { backends: updatedBackends });
+  };
+
+  const handleRefresh = () => {
+    // Get routing engine stats and update backend metrics
+    const routingEngine = emulationEngine.getBFFRoutingEngine(componentId);
+    if (routingEngine) {
+      const stats = routingEngine.getStats();
+      const backendStats = stats.backendStats;
+      
+      // Update backend metrics
+      const updatedBackends = backends.map(backend => {
+        const metrics = backendStats[backend.id];
+        if (metrics) {
+          return {
+            ...backend,
+            requests: metrics.requestCount,
+            avgLatency: Math.round(metrics.averageLatency),
+          };
+        }
+        return backend;
+      });
+      
+      // Update endpoint requests from stats
+      const updatedEndpoints = endpoints.map(endpoint => {
+        const endpointRequests = endpoint.backends.reduce((sum, backendId) => {
+          const metrics = backendStats[backendId];
+          return sum + (metrics?.requestCount || 0);
+        }, 0);
+        return {
+          ...endpoint,
+          requests: endpointRequests,
+        };
+      });
+      
+      updateConfig({ 
+        backends: updatedBackends,
+        endpoints: updatedEndpoints,
+      });
+    }
   };
 
   const getStatusBgColor = (status: string) => {
@@ -173,9 +263,9 @@ export function BFFServiceConfigAdvanced({ componentId }: BFFServiceConfigProps)
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
               <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
+              Refresh Metrics
             </Button>
           </div>
         </div>

@@ -10,6 +10,7 @@ import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
+import { BFFRoutingEngine } from './BFFRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -130,6 +131,9 @@ export class EmulationEngine {
   private graphQLGatewayRoutingEngines: Map<string, GraphQLGatewayRoutingEngine> = new Map();
   private lastGraphQLGatewayUpdate: Map<string, number> = new Map();
 
+  // BFF Service routing engines per node
+  private bffRoutingEngines: Map<string, BFFRoutingEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -243,6 +247,9 @@ export class EmulationEngine {
         if (node.type === 'graphql-gateway') {
           this.initializeGraphQLGatewayRoutingEngine(node);
         }
+        if (node.type === 'bff-service') {
+          this.initializeBFFRoutingEngine(node);
+        }
       }
     
     // Initialize data flow engine
@@ -308,6 +315,11 @@ export class EmulationEngine {
       if (node.type === 'graphql-gateway') {
         this.initializeGraphQLGatewayRoutingEngine(node);
       }
+
+      // Initialize BFF routing engine for BFF Service nodes
+      if (node.type === 'bff-service') {
+        this.initializeBFFRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -323,6 +335,8 @@ export class EmulationEngine {
         this.kongRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
+        this.graphQLGatewayRoutingEngines.delete(nodeId);
+        this.bffRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -538,6 +552,9 @@ export class EmulationEngine {
           break;
         case 'mulesoft':
           this.simulateMuleSoft(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'bff-service':
+          this.simulateBFF(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3188,6 +3205,107 @@ export class EmulationEngine {
   }
 
   /**
+   * BFF Service emulation
+   */
+  private simulateBFF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+
+    // Get BFF routing engine
+    const routingEngine = this.bffRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+
+    // Get BFF config
+    const bffConfig = (config as any) || {};
+    const endpoints = bffConfig.endpoints || [];
+    const backends = bffConfig.backends || [];
+
+    // Calculate incoming throughput from connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    let totalIncomingThroughput = 0;
+
+    for (const conn of incomingConnections) {
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (connMetrics) {
+        // Estimate requests per second from connection traffic
+        // Assume average request size of 2KB
+        const avgRequestSize = 2048;
+        const reqPerSec = connMetrics.traffic / avgRequestSize;
+        totalIncomingThroughput += reqPerSec;
+      }
+    }
+
+    // Use configured throughput if available, otherwise use calculated
+    const baseThroughput = config.requestsPerSecond || totalIncomingThroughput || 100;
+
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+
+    // Throughput with variation
+    const loadVariation = 0.3 * Math.sin(this.simulationTime / 2000) + 0.7;
+    metrics.throughput = baseThroughput * loadVariation;
+
+    // Latency calculation based on aggregation strategy
+    // For BFF, latency depends on:
+    // - Parallel: max latency of all backends
+    // - Sequential: sum of all backend latencies
+    // - Merge: max latency of all backends (parallel execution)
+    let baseLatency = stats.averageLatency || 100;
+    
+    // Add overhead for aggregation (5-15ms)
+    const aggregationOverhead = 5 + Math.random() * 10;
+    
+    // Cache hit reduces latency significantly
+    const cacheHitRate = stats.cacheHitRate || 0;
+    const cacheLatencyReduction = cacheHitRate * 0.8; // 80% reduction on cache hit
+    
+    // Calculate effective latency
+    const effectiveLatency = baseLatency * (1 - cacheLatencyReduction) + aggregationOverhead;
+    metrics.latency = effectiveLatency + Math.random() * 20;
+
+    // Error rate from backend failures
+    const baseErrorRate = stats.totalRequests > 0 
+      ? stats.totalErrors / stats.totalRequests 
+      : 0.005;
+    
+    // Add error rate from circuit breakers and timeouts
+    const circuitBreakerErrorRate = 0.001; // Small chance of circuit breaker open
+    metrics.errorRate = Math.min(1, baseErrorRate + circuitBreakerErrorRate);
+
+    // Utilization based on concurrent requests
+    const maxConcurrent = bffConfig.maxConcurrentRequests || 100;
+    const estimatedConcurrent = metrics.throughput * (metrics.latency / 1000);
+    metrics.utilization = Math.min(1, estimatedConcurrent / maxConcurrent);
+
+    // Calculate endpoint-specific metrics
+    const totalEndpointRequests = endpoints.reduce((sum: number, e: any) => sum + (e.requests || 0), 0);
+    const connectedBackends = backends.filter((b: any) => b.status === 'connected').length;
+
+    metrics.customMetrics = {
+      'endpoints': endpoints.length,
+      'backends': backends.length,
+      'connected_backends': connectedBackends,
+      'total_requests': stats.totalRequests,
+      'total_errors': stats.totalErrors,
+      'avg_latency': Math.round(stats.averageLatency),
+      'cache_hit_rate': Math.round(cacheHitRate * 100) / 100,
+      'endpoint_requests': totalEndpointRequests,
+      'aggregation_overhead': Math.round(aggregationOverhead),
+      'concurrent_requests': Math.round(estimatedConcurrent),
+    };
+  }
+
+  /**
    * Initialize Kong routing engine for a node
    */
   private initializeKongRoutingEngine(node: CanvasNode): void {
@@ -3288,6 +3406,30 @@ export class EmulationEngine {
 
     this.graphQLGatewayRoutingEngines.set(node.id, routingEngine);
     this.lastGraphQLGatewayUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Initialize BFF routing engine for a node
+   */
+  private initializeBFFRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new BFFRoutingEngine();
+
+    routingEngine.initialize({
+      backends: config.backends || [],
+      endpoints: config.endpoints || [],
+      enableCaching: config.enableCaching ?? true,
+      enableRequestBatching: config.enableRequestBatching ?? false,
+      enableResponseCompression: config.enableResponseCompression ?? true,
+      defaultTimeout: config.defaultTimeout || 5000,
+      maxConcurrentRequests: config.maxConcurrentRequests || 100,
+      cacheMode: config.cacheMode || 'memory',
+      cacheTtl: config.cacheTtl || 5,
+      fallbackEnabled: config.fallbackEnabled ?? true,
+      fallbackComponent: config.fallbackComponent,
+    });
+
+    this.bffRoutingEngines.set(node.id, routingEngine);
   }
 
   /**
@@ -3430,6 +3572,13 @@ export class EmulationEngine {
    */
   public getGraphQLGatewayRoutingEngine(nodeId: string): GraphQLGatewayRoutingEngine | undefined {
     return this.graphQLGatewayRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get BFF routing engine for a node
+   */
+  public getBFFRoutingEngine(nodeId: string): BFFRoutingEngine | undefined {
+    return this.bffRoutingEngines.get(nodeId);
   }
 
   /**
