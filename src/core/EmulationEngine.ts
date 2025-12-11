@@ -9,6 +9,7 @@ import { PubSubRoutingEngine } from './PubSubRoutingEngine';
 import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
+import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -125,6 +126,10 @@ export class EmulationEngine {
   // MuleSoft routing engines per node
   private mulesoftRoutingEngines: Map<string, MuleSoftRoutingEngine> = new Map();
 
+  // GraphQL Gateway routing engines per node
+  private graphQLGatewayRoutingEngines: Map<string, GraphQLGatewayRoutingEngine> = new Map();
+  private lastGraphQLGatewayUpdate: Map<string, number> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -235,6 +240,9 @@ export class EmulationEngine {
         if (node.type === 'mulesoft') {
           this.initializeMuleSoftRoutingEngine(node);
         }
+        if (node.type === 'graphql-gateway') {
+          this.initializeGraphQLGatewayRoutingEngine(node);
+        }
       }
     
     // Initialize data flow engine
@@ -295,6 +303,11 @@ export class EmulationEngine {
       if (node.type === 'mulesoft') {
         this.initializeMuleSoftRoutingEngine(node);
       }
+
+      // Initialize GraphQL Gateway routing engine for GraphQL Gateway nodes
+      if (node.type === 'graphql-gateway') {
+        this.initializeGraphQLGatewayRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -310,11 +323,13 @@ export class EmulationEngine {
         this.kongRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
+        this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
         this.lastAzureServiceBusUpdate.delete(nodeId);
         this.lastPubSubUpdate.delete(nodeId);
+        this.lastGraphQLGatewayUpdate.delete(nodeId);
       }
     }
     
@@ -3251,6 +3266,31 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize GraphQL Gateway routing engine for a node
+   */
+  private initializeGraphQLGatewayRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new GraphQLGatewayRoutingEngine();
+
+    routingEngine.initialize({
+      services: config.services || [],
+      federation: config.federation,
+      cacheTtl: config.cacheTtl,
+      persistQueries: config.persistQueries,
+      subscriptions: config.subscriptions,
+      enableIntrospection: config.enableIntrospection,
+      enableQueryComplexityAnalysis: config.enableQueryComplexityAnalysis,
+      enableRateLimiting: config.enableRateLimiting,
+      maxQueryDepth: config.maxQueryDepth,
+      maxQueryComplexity: config.maxQueryComplexity,
+      endpoint: config.endpoint,
+    });
+
+    this.graphQLGatewayRoutingEngines.set(node.id, routingEngine);
+    this.lastGraphQLGatewayUpdate.set(node.id, Date.now());
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -3383,6 +3423,13 @@ export class EmulationEngine {
    */
   public getMuleSoftRoutingEngine(nodeId: string): MuleSoftRoutingEngine | undefined {
     return this.mulesoftRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get GraphQL Gateway routing engine for a node
+   */
+  public getGraphQLGatewayRoutingEngine(nodeId: string): GraphQLGatewayRoutingEngine | undefined {
+    return this.graphQLGatewayRoutingEngines.get(nodeId);
   }
 
   /**

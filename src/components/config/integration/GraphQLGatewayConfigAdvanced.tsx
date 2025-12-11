@@ -15,13 +15,9 @@ import {
   Activity,
   Plus,
   Trash2,
-  RefreshCcw,
   Network,
-  Code,
   CheckCircle,
-  Zap,
-  Globe,
-  Shield
+  Globe
 } from 'lucide-react';
 
 interface GraphQLGatewayConfigProps {
@@ -59,7 +55,7 @@ interface GraphQLGatewayConfig {
 }
 
 export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -75,7 +71,8 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
   const totalRequests = config.totalRequests || services.reduce((sum, s) => sum + (s.requests || 0), 0);
   const totalErrors = config.totalErrors || services.reduce((sum, s) => sum + (s.errors || 0), 0);
 
-  const [showCreateService, setShowCreateService] = useState(false);
+  const [editingServiceId, setEditingServiceId] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<'name' | 'endpoint' | null>(null);
 
   const updateConfig = (updates: Partial<GraphQLGatewayConfig>) => {
     updateNode(componentId, {
@@ -99,6 +96,48 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
 
   const removeService = (id: string) => {
     updateConfig({ services: services.filter((s) => s.id !== id) });
+  };
+
+  const updateService = (id: string, field: 'name' | 'endpoint', value: string) => {
+    const updatedServices = services.map((s) =>
+      s.id === id ? { ...s, [field]: value } : s
+    );
+    updateConfig({ services: updatedServices });
+  };
+
+  // Determine service status based on connections
+  const getServiceStatus = (service: Service): 'connected' | 'disconnected' | 'error' => {
+    // If service explicitly has error status, keep it
+    if (service.status === 'error') {
+      return 'error';
+    }
+
+    // Check if there's a connection to a graphql service
+    const hasConnection = connections.some((conn) => {
+      if (conn.source !== componentId) return false;
+      const targetNode = nodes.find((n) => n.id === conn.target);
+      if (!targetNode || targetNode.type !== 'graphql') return false;
+      
+      // Match by name (most reliable) or by endpoint pattern
+      const targetLabel = targetNode.data.label || targetNode.type;
+      const nameMatches = service.name === targetLabel || service.name === targetNode.id;
+      
+      // Try to match endpoint - extract host:port from endpoint
+      const endpointMatch = service.endpoint && targetNode.id 
+        ? service.endpoint.includes(targetNode.id) || service.name === targetLabel
+        : false;
+      
+      return nameMatches || endpointMatch;
+    });
+
+    // If connection exists, service is connected (unless explicitly error)
+    if (hasConnection) {
+      return 'connected';
+    }
+
+    // No connection - check if service was manually added (might be disconnected)
+    // If service has explicit disconnected status, use it
+    return service.status === 'disconnected' ? 'disconnected' : 'disconnected';
   };
 
   const getStatusBgColor = (status: string) => {
@@ -137,12 +176,6 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
             <p className="text-sm text-muted-foreground mt-1">
               Unified GraphQL API gateway with federation support
             </p>
-          </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <RefreshCcw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
           </div>
         </div>
 
@@ -238,52 +271,113 @@ export function GraphQLGatewayConfigAdvanced({ componentId }: GraphQLGatewayConf
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {services.map((service) => (
-                    <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
-                      <CardHeader className="pb-3">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-start gap-3">
-                            <div className={`p-2 rounded-lg ${getStatusBgColor(service.status)}/20`}>
-                              <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                            </div>
-                            <div>
-                              <CardTitle className="text-lg font-semibold">{service.name}</CardTitle>
-                              <div className="flex items-center gap-2 mt-2">
-                                <Badge variant="outline" className={`${getStatusBadgeColor(service.status)} border-0`}>
-                                  {service.status}
-                                </Badge>
-                                <Badge variant="outline" className="font-mono text-xs">{service.endpoint}</Badge>
+                  {services.map((service) => {
+                    const serviceStatus = getServiceStatus(service);
+                    const isEditingName = editingServiceId === service.id && editingField === 'name';
+                    const isEditingEndpoint = editingServiceId === service.id && editingField === 'endpoint';
+                    
+                    return (
+                      <Card key={service.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-start gap-3 flex-1">
+                              <div className={`p-2 rounded-lg ${getStatusBgColor(serviceStatus)}/20`}>
+                                <Network className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                              </div>
+                              <div className="flex-1 space-y-2">
+                                {isEditingName ? (
+                                  <Input
+                                    value={service.name}
+                                    onChange={(e) => updateService(service.id, 'name', e.target.value)}
+                                    onBlur={() => {
+                                      setEditingServiceId(null);
+                                      setEditingField(null);
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        setEditingServiceId(null);
+                                        setEditingField(null);
+                                      }
+                                    }}
+                                    className="font-semibold text-lg"
+                                    autoFocus
+                                  />
+                                ) : (
+                                  <CardTitle 
+                                    className="text-lg font-semibold cursor-pointer hover:text-primary transition-colors"
+                                    onClick={() => {
+                                      setEditingServiceId(service.id);
+                                      setEditingField('name');
+                                    }}
+                                  >
+                                    {service.name}
+                                  </CardTitle>
+                                )}
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <Badge variant="outline" className={`${getStatusBadgeColor(serviceStatus)} border-0`}>
+                                    {serviceStatus}
+                                  </Badge>
+                                  {isEditingEndpoint ? (
+                                    <Input
+                                      value={service.endpoint}
+                                      onChange={(e) => updateService(service.id, 'endpoint', e.target.value)}
+                                      onBlur={() => {
+                                        setEditingServiceId(null);
+                                        setEditingField(null);
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          setEditingServiceId(null);
+                                          setEditingField(null);
+                                        }
+                                      }}
+                                      className="font-mono text-xs h-6"
+                                      autoFocus
+                                    />
+                                  ) : (
+                                    <Badge 
+                                      variant="outline" 
+                                      className="font-mono text-xs cursor-pointer hover:bg-accent transition-colors"
+                                      onClick={() => {
+                                        setEditingServiceId(service.id);
+                                        setEditingField('endpoint');
+                                      }}
+                                    >
+                                      {service.endpoint}
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
                             </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeService(service.id)}
+                              className="hover:bg-destructive/10 hover:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeService(service.id)}
-                            className="hover:bg-destructive/10 hover:text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardContent>
-                        <div className="grid grid-cols-2 gap-4 text-sm">
-                          {service.requests && (
-                            <div>
-                              <span className="text-muted-foreground">Requests:</span>
-                              <span className="ml-2 font-semibold">{service.requests.toLocaleString()}</span>
-                            </div>
-                          )}
-                          {service.errors && service.errors > 0 && (
-                            <div>
-                              <span className="text-muted-foreground">Errors:</span>
-                              <span className="ml-2 font-semibold text-red-500">{service.errors}</span>
-                            </div>
-                          )}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        </CardHeader>
+                        <CardContent>
+                          <div className="grid grid-cols-2 gap-4 text-sm">
+                            {service.requests !== undefined && (
+                              <div>
+                                <span className="text-muted-foreground">Requests:</span>
+                                <span className="ml-2 font-semibold">{service.requests.toLocaleString()}</span>
+                              </div>
+                            )}
+                            {service.errors !== undefined && service.errors > 0 && (
+                              <div>
+                                <span className="text-muted-foreground">Errors:</span>
+                                <span className="ml-2 font-semibold text-red-500">{service.errors}</span>
+                              </div>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>

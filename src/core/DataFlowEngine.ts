@@ -101,6 +101,7 @@ export class DataFlowEngine {
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
+    this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
   }
 
   /**
@@ -1281,6 +1282,65 @@ export class DataFlowEngine {
         },
         
         getSupportedFormats: () => ['json', 'xml', 'binary'],
+      };
+    }
+
+    if (type === 'graphql-gateway') {
+      return {
+        processData: (node, message, config) => {
+          const routingEngine = emulationEngine.getGraphQLGatewayRoutingEngine(node.id);
+
+          if (!routingEngine) {
+            message.status = 'delivered';
+            return message;
+          }
+
+          const payload = message.payload as any;
+          const query = payload?.query || payload?.body || message.metadata?.query;
+          const variables = payload?.variables || message.metadata?.variables;
+          const operationName = payload?.operationName || message.metadata?.operationName;
+          const headers = payload?.headers || message.metadata?.headers || {};
+
+          const result = routingEngine.routeRequest({
+            query: query || '',
+            variables,
+            headers,
+            operationName,
+          });
+
+          message.latency = result.latency;
+
+          if (result.status >= 200 && result.status < 300) {
+            message.status = 'delivered';
+            // Get executed endpoints from routing engine if available
+            const serviceRegistry = routingEngine.getServiceRegistry();
+            const connectedServices = serviceRegistry.getConnectedServices();
+            const endpoints = connectedServices.map(s => s.endpoint);
+            
+            message.metadata = {
+              ...message.metadata,
+              graphqlGatewayStatus: result.status,
+              graphqlGatewayEndpoints: endpoints,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.error || `HTTP ${result.status}`;
+          }
+
+          return message;
+        },
+
+        transformData: (node, message, targetType, config) => {
+          // Gateway outputs JSON; transform if needed for target
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+
+        getSupportedFormats: () => ['json'],
       };
     }
 

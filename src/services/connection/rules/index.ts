@@ -9,6 +9,7 @@ import { createDatabaseClientRule } from './databaseRules';
 import { createMessagingProducerRule } from './messagingRules';
 import { createPrometheusRule } from './prometheusRules';
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
+import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 
 /**
  * Инициализировать все правила подключения
@@ -24,6 +25,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     // Edge & Gateway
     createAPIGatewayRule(discovery),
     createKongRule(discovery),
+    createGraphQLGatewayRule(discovery),
     createServiceMeshRule(discovery),
     createIstioRule(discovery),
     
