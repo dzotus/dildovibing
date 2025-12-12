@@ -11,6 +11,7 @@ import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
+import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -134,6 +135,9 @@ export class EmulationEngine {
   // BFF Service routing engines per node
   private bffRoutingEngines: Map<string, BFFRoutingEngine> = new Map();
 
+  // Webhook Relay routing engines per node
+  private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -250,6 +254,9 @@ export class EmulationEngine {
         if (node.type === 'bff-service') {
           this.initializeBFFRoutingEngine(node);
         }
+        if (node.type === 'webhook-relay') {
+          this.initializeWebhookRelayRoutingEngine(node);
+        }
       }
     
     // Initialize data flow engine
@@ -320,6 +327,11 @@ export class EmulationEngine {
       if (node.type === 'bff-service') {
         this.initializeBFFRoutingEngine(node);
       }
+
+      // Initialize Webhook Relay routing engine for Webhook Relay nodes
+      if (node.type === 'webhook-relay') {
+        this.initializeWebhookRelayRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -337,6 +349,7 @@ export class EmulationEngine {
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.bffRoutingEngines.delete(nodeId);
+        this.webhookRelayRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -3433,6 +3446,26 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Webhook Relay routing engine for a node
+   */
+  private initializeWebhookRelayRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new WebhookRelayRoutingEngine();
+
+    routingEngine.initialize({
+      relays: config.relays || [],
+      enableRetryOnFailure: config.enableRetryOnFailure ?? true,
+      enableSignatureVerification: config.enableSignatureVerification ?? true,
+      enableRequestLogging: config.enableRequestLogging ?? true,
+      maxRetryAttempts: config.maxRetryAttempts || 3,
+      retryDelay: config.retryDelay || 5,
+      timeout: config.timeout || 30,
+    });
+
+    this.webhookRelayRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -3579,6 +3612,13 @@ export class EmulationEngine {
    */
   public getBFFRoutingEngine(nodeId: string): BFFRoutingEngine | undefined {
     return this.bffRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Webhook Relay routing engine for a node
+   */
+  public getWebhookRelayRoutingEngine(nodeId: string): WebhookRelayRoutingEngine | undefined {
+    return this.webhookRelayRoutingEngines.get(nodeId);
   }
 
   /**

@@ -102,6 +102,8 @@ export class DataFlowEngine {
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
+    this.registerHandler('bff-service', this.createIntegrationHandler('bff-service'));
+    this.registerHandler('webhook-relay', this.createIntegrationHandler('webhook-relay'));
   }
 
   /**
@@ -1472,6 +1474,78 @@ export class DataFlowEngine {
         },
         
         getSupportedFormats: () => ['json'],
+      };
+    }
+
+    if (type === 'webhook-relay') {
+      return {
+        processData: (node, message, config) => {
+          // Get Webhook Relay routing engine from emulation engine
+          const routingEngine = emulationEngine.getWebhookRelayRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract webhook request information from message
+          const payload = message.payload as any;
+          const url = payload?.url || message.metadata?.url || payload?.path || '/';
+          const method = (payload?.method || message.metadata?.method || 'POST') as string;
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const body = payload?.body || payload || message.payload;
+          const ip = payload?.ip || message.metadata?.ip || headers['x-forwarded-for']?.split(',')[0]?.trim();
+          const event = payload?.event || message.metadata?.event || headers['x-event'] || headers['x-github-event'] || '';
+
+          // Route webhook through relay
+          const relayResult = routingEngine.relayWebhook({
+            url,
+            method,
+            headers,
+            body,
+            ip,
+            event,
+          });
+
+          if (relayResult.success) {
+            message.status = 'delivered';
+            message.latency = relayResult.latency;
+            // Update metadata with relay info
+            message.metadata = {
+              ...message.metadata,
+              webhookRelayId: relayResult.relayId,
+              webhookDeliveryId: relayResult.deliveryId,
+              webhookAttempts: relayResult.attempts,
+              webhookStatus: relayResult.status,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = relayResult.error || `Webhook relay failed (HTTP ${relayResult.status})`;
+            message.latency = relayResult.latency;
+            message.metadata = {
+              ...message.metadata,
+              webhookRelayId: relayResult.relayId,
+              webhookDeliveryId: relayResult.deliveryId,
+              webhookAttempts: relayResult.attempts,
+              webhookStatus: relayResult.status,
+            };
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Webhook Relay can transform payloads
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'text', 'binary'],
       };
     }
 
