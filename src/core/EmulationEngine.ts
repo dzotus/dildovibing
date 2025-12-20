@@ -12,6 +12,7 @@ import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
+import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -139,6 +140,9 @@ export class EmulationEngine {
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
   
+  // Redis routing engines per node
+  private redisRoutingEngines: Map<string, RedisRoutingEngine> = new Map();
+  
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
@@ -264,6 +268,9 @@ export class EmulationEngine {
         if (node.type === 'postgres') {
           this.initializePostgreSQLConnectionPool(node);
         }
+        if (node.type === 'redis') {
+          this.initializeRedisRoutingEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -374,6 +381,7 @@ export class EmulationEngine {
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.bffRoutingEngines.delete(nodeId);
         this.webhookRelayRoutingEngines.delete(nodeId);
+        this.redisRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -2849,6 +2857,67 @@ export class EmulationEngine {
       }
     }
     
+    // Для Redis используем RedisRoutingEngine
+    if (node.type === 'redis') {
+      if (!this.redisRoutingEngines.has(node.id)) {
+        this.initializeRedisRoutingEngine(node);
+      }
+      
+      const routingEngine = this.redisRoutingEngines.get(node.id)!;
+      const redisConfig = node.data.config as any;
+      
+      // Sync keys from UI configuration with runtime state
+      if (redisConfig?.keys) {
+        routingEngine.syncKeysFromConfig(redisConfig.keys);
+      }
+      
+      const redisMetrics = routingEngine.getMetrics();
+      
+      // Throughput based on incoming connections
+      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+        const sourceMetrics = this.metrics.get(conn.source);
+        return sum + (sourceMetrics?.throughput || 0);
+      }, 0);
+      
+      // Redis is very fast - operations per second
+      metrics.throughput = Math.max(redisMetrics.operationsPerSecond, totalIncomingThroughput);
+      
+      // Redis latency is very low (sub-millisecond for in-memory operations)
+      // But increases with memory pressure and number of keys
+      const baseLatency = 0.5; // 0.5ms base latency
+      const memoryPressure = redisMetrics.memoryUsagePercent / 100;
+      const keyCountFactor = Math.min(1, redisMetrics.totalKeys / 100000); // Factor based on key count
+      metrics.latency = baseLatency + (memoryPressure * 2) + (keyCountFactor * 1);
+      
+      // Error rate is very low for Redis
+      metrics.errorRate = memoryPressure > 0.95 ? 0.01 : 0.001;
+      
+      // Utilization based on memory usage
+      metrics.utilization = redisMetrics.memoryUsagePercent / 100;
+      
+      metrics.customMetrics = {
+        'total_keys': redisMetrics.totalKeys,
+        'keys_string': redisMetrics.keysByType.string,
+        'keys_hash': redisMetrics.keysByType.hash,
+        'keys_list': redisMetrics.keysByType.list,
+        'keys_set': redisMetrics.keysByType.set,
+        'keys_zset': redisMetrics.keysByType.zset,
+        'keys_stream': redisMetrics.keysByType.stream,
+        'memory_usage': redisMetrics.memoryUsage,
+        'memory_usage_percent': redisMetrics.memoryUsagePercent,
+        'operations_per_second': redisMetrics.operationsPerSecond,
+        'hit_count': redisMetrics.hitCount,
+        'miss_count': redisMetrics.missCount,
+        'hit_rate': redisMetrics.hitRate,
+        'expired_keys': redisMetrics.expiredKeys,
+        'evicted_keys': redisMetrics.evictedKeys,
+        'connected_clients': redisMetrics.connectedClients,
+      };
+      
+      return; // Early return for Redis
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -3521,6 +3590,32 @@ export class EmulationEngine {
     const config = (node.data.config || {}) as any;
     const routingEngine = new BFFRoutingEngine();
 
+    // Find Redis component if cacheMode is 'redis'
+    let redisEngine = null;
+    let redisNodeId = '';
+    if (config.cacheMode === 'redis') {
+      // Find Redis component connected to this BFF
+      const redisConnection = this.connections.find(
+        conn => (conn.source === node.id || conn.target === node.id) && 
+        (this.nodes.find(n => n.id === (conn.source === node.id ? conn.target : conn.source))?.type === 'redis')
+      );
+      
+      if (redisConnection) {
+        const redisNode = this.nodes.find(
+          n => n.id === (redisConnection.source === node.id ? redisConnection.target : redisConnection.source)
+        );
+        
+        if (redisNode && redisNode.type === 'redis') {
+          // Initialize Redis engine if not already initialized
+          if (!this.redisRoutingEngines.has(redisNode.id)) {
+            this.initializeRedisRoutingEngine(redisNode);
+          }
+          redisEngine = this.redisRoutingEngines.get(redisNode.id);
+          redisNodeId = redisNode.id;
+        }
+      }
+    }
+
     routingEngine.initialize({
       backends: config.backends || [],
       endpoints: config.endpoints || [],
@@ -3533,6 +3628,8 @@ export class EmulationEngine {
       cacheTtl: config.cacheTtl || 5,
       fallbackEnabled: config.fallbackEnabled ?? true,
       fallbackComponent: config.fallbackComponent,
+      redisEngine: redisEngine || undefined,
+      redisNodeId: redisNodeId || undefined,
     });
 
     this.bffRoutingEngines.set(node.id, routingEngine);
@@ -3556,6 +3653,30 @@ export class EmulationEngine {
     });
 
     this.webhookRelayRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Initialize Redis routing engine for a node
+   */
+  private initializeRedisRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new RedisRoutingEngine();
+
+    routingEngine.initialize({
+      host: config.host || 'localhost',
+      port: config.port || 6379,
+      password: config.password || '',
+      database: config.database || 0,
+      maxMemory: config.maxMemory || '256mb',
+      maxMemoryPolicy: config.maxMemoryPolicy || 'noeviction',
+      enablePersistence: config.enablePersistence ?? true,
+      persistenceType: config.persistenceType || 'rdb',
+      enableCluster: config.enableCluster ?? false,
+      clusterNodes: config.clusterNodes || [],
+      keys: config.keys || [],
+    });
+
+    this.redisRoutingEngines.set(node.id, routingEngine);
   }
 
   /**
@@ -3670,6 +3791,13 @@ export class EmulationEngine {
 
   public getPubSubRoutingEngine(nodeId: string): PubSubRoutingEngine | undefined {
     return this.pubSubRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Redis routing engine for a node
+   */
+  public getRedisRoutingEngine(nodeId: string): RedisRoutingEngine | undefined {
+    return this.redisRoutingEngines.get(nodeId);
   }
 
   /**

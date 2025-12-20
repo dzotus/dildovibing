@@ -530,6 +530,11 @@ export class DataFlowEngine {
           return this.processPostgreSQLQuery(node, message, config);
         }
 
+        // Redis specific: if payload contains Redis command, use RedisRoutingEngine
+        if (type === 'redis') {
+          return this.processRedisCommand(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -745,6 +750,98 @@ export class DataFlowEngine {
       message.status = 'failed';
       message.error = result.error || 'Query execution failed';
       message.latency = result.executionTime || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Process Redis command using RedisRoutingEngine
+   */
+  private processRedisCommand(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get RedisRoutingEngine from emulationEngine
+    const redisEngine = emulationEngine.getRedisRoutingEngine(node.id);
+    if (!redisEngine) {
+      message.status = 'failed';
+      message.error = 'Redis Routing Engine not initialized';
+      return message;
+    }
+
+    // Check if payload contains Redis command
+    let command: string;
+    let args: string[];
+
+    if (payload?.command) {
+      // Explicit Redis command format: { command: "GET", args: ["key"] }
+      command = payload.command;
+      args = payload.args || [];
+    } else if (payload?.redisCommand) {
+      // Alternative format: { redisCommand: "GET key" }
+      const parts = String(payload.redisCommand).trim().split(/\s+/);
+      command = parts[0];
+      args = parts.slice(1);
+    } else if (typeof payload === 'string') {
+      // String format: "GET key"
+      const parts = payload.trim().split(/\s+/);
+      command = parts[0];
+      args = parts.slice(1);
+    } else {
+      // Try to infer from operation
+      const operation = payload?.operation || 'get';
+      switch (operation.toLowerCase()) {
+        case 'get':
+          command = 'GET';
+          args = [payload?.key || 'default:key'];
+          break;
+        case 'set':
+          command = 'SET';
+          args = [
+            payload?.key || 'default:key',
+            typeof payload?.value === 'string' ? payload.value : JSON.stringify(payload?.value || '')
+          ];
+          if (payload?.ttl) {
+            args.push('EX', String(payload.ttl));
+          }
+          break;
+        case 'delete':
+        case 'del':
+          command = 'DEL';
+          args = Array.isArray(payload?.keys) ? payload.keys : [payload?.key || 'default:key'];
+          break;
+        case 'exists':
+          command = 'EXISTS';
+          args = Array.isArray(payload?.keys) ? payload.keys : [payload?.key || 'default:key'];
+          break;
+        default:
+          message.status = 'failed';
+          message.error = `Unknown Redis operation: ${operation}`;
+          return message;
+      }
+    }
+
+    // Execute command
+    const result = redisEngine.executeCommand(command, args);
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || 1; // Redis is very fast
+      message.payload = {
+        ...(message.payload as any),
+        command,
+        args,
+        result: result.value,
+        redisResult: result.value,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'Redis command execution failed';
+      message.latency = result.latency || 0;
     }
 
     return message;

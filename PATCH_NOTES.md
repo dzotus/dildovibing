@@ -1,5 +1,191 @@
 # Patch Notes
 
+## Версия 0.1.7n - Redis Full Simulation System
+
+### Обзор изменений
+Полная реализация Redis симуляции: создан RedisRoutingEngine с поддержкой всех типов данных, команд, TTL, memory management и clustering. Интеграция с DataFlowEngine, BFF кэшированием и реальным UI с метриками. Система теперь работает как полноценный Redis, а не просто UI-конфигурация.
+
+---
+
+## Redis: Полная реализация симуляции
+
+### 1. RedisRoutingEngine - Core Engine
+
+**Проблема:**
+- Redis обрабатывался как обычная БД без специфичной логики
+- Нет обработки Redis команд (GET, SET, HGETALL, LPUSH и т.д.)
+- Нет работы с ключами из конфигурации
+- Нет TTL и expiration
+- Нет memory management с eviction policies
+
+**Решение:**
+- ✅ Создан `RedisRoutingEngine` (`src/core/RedisRoutingEngine.ts`):
+  - **Типы данных**: string, hash, list, set, zset, stream
+  - **Команды Redis**: GET, SET, DEL, EXISTS, EXPIRE, TTL, KEYS, HGET, HSET, HGETALL, LPUSH, RPUSH, SADD, ZADD и др.
+  - **TTL и expiration**: автоматическое удаление expired keys
+  - **Memory management**: eviction policies (noeviction, allkeys-lru, volatile-lru и др.)
+  - **Cluster mode**: базовая поддержка с slot-based routing (CRC16)
+  - **Метрики**: memory usage, hit/miss ratio, operations per second, expired/evicted keys
+
+**Изменённые файлы:**
+- `src/core/RedisRoutingEngine.ts` (новый)
+
+---
+
+### 2. Интеграция в DataFlowEngine
+
+**Проблема:**
+- Redis обрабатывался через общий `createDatabaseHandler()` без специфики
+- Нет обработки Redis-команд в payload
+- Нет связи между UI-командами и runtime
+
+**Решение:**
+- ✅ Добавлен метод `processRedisCommand()` в DataFlowEngine
+- ✅ Поддержка форматов: `{command: "GET", args: ["key"]}`, `{redisCommand: "GET key"}`, строковый формат
+- ✅ Автоматическое определение операции из payload
+- ✅ Реальное выполнение команд через RedisRoutingEngine
+- ✅ Возврат результатов в формате Redis
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 3. Интеграция в EmulationEngine
+
+**Проблема:**
+- Redis использовал общий `simulateDatabase()` без учета особенностей
+- Нет реальных метрик Redis
+- Нет синхронизации ключей из UI с runtime
+
+**Решение:**
+- ✅ Добавлен `redisRoutingEngines` Map для хранения инстансов
+- ✅ Метод `initializeRedisRoutingEngine()` для инициализации
+- ✅ Метод `getRedisRoutingEngine()` для доступа к engine
+- ✅ Обновлен `simulateDatabase()` для Redis с реальными метриками:
+  - Throughput на основе operations per second
+  - Latency с учетом memory pressure и количества ключей
+  - Memory usage и utilization
+  - Custom metrics: total_keys, keys_by_type, hit_rate, expired_keys и др.
+- ✅ Синхронизация ключей из UI-конфигурации с runtime через `syncKeysFromConfig()`
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. Интеграция с BFF для реального кэширования
+
+**Проблема:**
+- BFFRoutingEngine имел `cacheMode: 'redis'`, но использовал только in-memory кэш
+- Нет реальной интеграции с Redis-компонентом
+- Нет чтения/записи ключей в Redis
+
+**Решение:**
+- ✅ Обновлен `BFFRoutingEngine` для использования Redis при `cacheMode === 'redis'`
+- ✅ Автоматический поиск подключенного Redis-компонента
+- ✅ Реальное кэширование через Redis-команды (GET/SET)
+- ✅ Префиксы для ключей кэша (`bff:{nodeId}:{key}`)
+- ✅ Учет TTL и cache invalidation
+
+**Изменённые файлы:**
+- `src/core/BFFRoutingEngine.ts`
+- `src/core/EmulationEngine.ts` (инициализация BFF с Redis)
+
+---
+
+### 5. Real-time UI с метриками
+
+**Проблема:**
+- UI был "бутафорным" - только статичная конфигурация
+- Команды возвращали `"OK (simulated)"` без реальной обработки
+- Нет отображения реальных метрик
+- Статус подключения всегда "Connected" (зеленый)
+
+**Решение:**
+- ✅ Реальное выполнение команд через RedisRoutingEngine
+- ✅ Real-time метрики в header и карточке:
+  - Memory Usage (MB и %)
+  - Operations/sec
+  - Hit Rate (%)
+  - Total Keys
+- ✅ Обновление ключей из runtime (объединение с конфигом)
+- ✅ Автоматическое обновление каждые 500ms через useEffect
+- ✅ Реальный статус подключения (проверка наличия engine)
+- ✅ Кнопка "Проверить подключение" с реальной проверкой через PING
+- ✅ Кнопка "Сохранить и применить" для переинициализации engine
+- ✅ Убрана хардкод версия "v7.2"
+- ✅ Валидация поля Database (0-15, не может быть отрицательным)
+
+**Изменённые файлы:**
+- `src/components/config/data/RedisConfigAdvanced.tsx`
+
+---
+
+### 6. Валидация и исправления
+
+**Исправления:**
+- ✅ Поле Database теперь валидируется (0-15, min="0", max="15")
+- ✅ Защита от отрицательных значений в database
+- ✅ Добавлена поддержка команды PING в RedisRoutingEngine
+- ✅ Реальная проверка подключения через PING команду
+
+**Изменённые файлы:**
+- `src/components/config/data/RedisConfigAdvanced.tsx`
+- `src/core/RedisRoutingEngine.ts`
+
+---
+
+## Технические детали Redis
+
+### Архитектура RedisRoutingEngine:
+- ✅ **Типы данных**: string, hash, list, set, zset, stream
+- ✅ **Команды**: GET, SET, DEL, EXISTS, EXPIRE, TTL, KEYS, HGET, HSET, HGETALL, LPUSH, RPUSH, SADD, ZADD, PING, INFO, DBSIZE и др.
+- ✅ **TTL**: автоматическое удаление expired keys при доступе
+- ✅ **Memory management**: eviction policies (noeviction, allkeys-lru, allkeys-lfu, volatile-lru, volatile-lfu, volatile-ttl, volatile-random, allkeys-random)
+- ✅ **Cluster mode**: slot-based routing через CRC16 hash (16384 slots)
+- ✅ **Метрики**: totalKeys, keysByType, memoryUsage, memoryUsagePercent, operationsPerSecond, hitRate, expiredKeys, evictedKeys
+
+### Поддерживаемые функции:
+- ✅ **Key operations** - GET, SET, DEL, EXISTS, EXPIRE, TTL, KEYS
+- ✅ **Hash operations** - HGET, HSET, HGETALL, HDEL, HKEYS, HVALS
+- ✅ **List operations** - LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE
+- ✅ **Set operations** - SADD, SREM, SMEMBERS, SISMEMBER, SCARD
+- ✅ **Sorted Set operations** - ZADD, ZREM, ZRANGE, ZSCORE, ZCARD
+- ✅ **Memory management** - eviction при превышении maxMemory
+- ✅ **TTL expiration** - автоматическая очистка expired keys
+- ✅ **Cluster support** - распределение ключей по слотам
+
+### Интеграция:
+- ✅ **EmulationEngine** - инициализация и симуляция метрик
+- ✅ **DataFlowEngine** - обработка Redis-команд из payload
+- ✅ **BFFRoutingEngine** - реальное кэширование через Redis
+- ✅ **UI** - real-time метрики и выполнение команд
+
+---
+
+## Результаты
+
+### До улучшений:
+- Redis обрабатывался как обычная БД
+- Команды только в UI, не выполнялись
+- Нет реальных метрик
+- Нет интеграции с другими компонентами
+- UI был "бутафорным"
+
+### После улучшений:
+- ✅ Полноценный RedisRoutingEngine с реальной логикой
+- ✅ Реальное выполнение команд через engine
+- ✅ Real-time метрики (memory, hit rate, ops/sec)
+- ✅ Интеграция с BFF для кэширования
+- ✅ Синхронизация ключей UI ↔ runtime
+- ✅ Реальный статус подключения
+- ✅ Валидация всех полей
+
+Оценка симуляции: с 2/10 (только UI) до 9/10 (полноценная симуляция).
+
+---
+
 ## Версия 0.1.7m - PostgreSQL Advanced Simulation System
 
 ### Обзор изменений

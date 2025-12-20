@@ -69,6 +69,8 @@ export interface BFFConfig {
   cacheTtl?: number;
   fallbackEnabled?: boolean;
   fallbackComponent?: string;
+  redisEngine?: any; // RedisRoutingEngine - optional, used when cacheMode === 'redis'
+  redisNodeId?: string; // Redis node ID for cache key prefix
 }
 
 /**
@@ -121,6 +123,8 @@ export class BFFRoutingEngine {
   private cache: Map<string, CacheEntry> = new Map();
   private cacheMode: 'memory' | 'redis' | 'off' = 'memory';
   private defaultCacheTtl: number = 5; // seconds
+  private redisEngine: any = null; // RedisRoutingEngine - optional
+  private redisNodeId: string = ''; // Redis node ID for cache key prefix
   
   // Metrics per backend
   private backendMetrics: Map<string, BackendMetrics> = new Map();
@@ -149,6 +153,8 @@ export class BFFRoutingEngine {
     // Set cache mode
     this.cacheMode = config.cacheMode || 'memory';
     this.defaultCacheTtl = config.cacheTtl || 5;
+    this.redisEngine = config.redisEngine || null;
+    this.redisNodeId = config.redisNodeId || '';
     
     // Initialize backends
     if (config.backends) {
@@ -632,6 +638,34 @@ export class BFFRoutingEngine {
       return null;
     }
     
+    // Use Redis if configured
+    if (this.cacheMode === 'redis' && this.redisEngine) {
+      const redisKey = this.getRedisCacheKey(key);
+      const result = this.redisEngine.executeCommand('GET', [redisKey]);
+      
+      if (result.success && result.value !== null) {
+        try {
+          const data = typeof result.value === 'string' 
+            ? JSON.parse(result.value) 
+            : result.value;
+          
+          // Create cache entry for compatibility
+          return {
+            key,
+            data,
+            expiresAt: Date.now() + (this.defaultCacheTtl * 1000), // Approximate
+            hitCount: 1,
+          };
+        } catch (e) {
+          // Invalid JSON, return null
+          return null;
+        }
+      }
+      
+      return null;
+    }
+    
+    // Use in-memory cache
     const entry = this.cache.get(key);
     if (!entry) {
       return null;
@@ -655,6 +689,21 @@ export class BFFRoutingEngine {
       return;
     }
     
+    // Use Redis if configured
+    if (this.cacheMode === 'redis' && this.redisEngine) {
+      const redisKey = this.getRedisCacheKey(key);
+      const value = typeof data === 'string' ? data : JSON.stringify(data);
+      const args = [redisKey, value];
+      
+      if (ttl > 0) {
+        args.push('EX', String(ttl));
+      }
+      
+      this.redisEngine.executeCommand('SET', args);
+      return;
+    }
+    
+    // Use in-memory cache
     this.cache.set(key, {
       key,
       data,
@@ -666,6 +715,14 @@ export class BFFRoutingEngine {
     if (this.cache.size > 1000) {
       this.cleanupCache();
     }
+  }
+  
+  /**
+   * Get Redis cache key with prefix
+   */
+  private getRedisCacheKey(key: string): string {
+    const prefix = this.redisNodeId ? `bff:${this.redisNodeId}:` : 'bff:';
+    return `${prefix}${key}`;
   }
   
   /**

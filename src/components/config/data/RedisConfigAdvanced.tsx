@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -103,6 +104,84 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
   const [searchPattern, setSearchPattern] = useState('*');
   const [commandInput, setCommandInput] = useState('');
   const [editingKeyIndex, setEditingKeyIndex] = useState<number | null>(null);
+  
+  // Real-time metrics from RedisRoutingEngine
+  const [realMetrics, setRealMetrics] = useState<{
+    totalKeys: number;
+    memoryUsage: number;
+    memoryUsagePercent: number;
+    operationsPerSecond: number;
+    hitRate: number;
+    hitCount: number;
+    missCount: number;
+  } | null>(null);
+  
+  // Runtime keys from RedisRoutingEngine (merged with config keys)
+  const [runtimeKeys, setRuntimeKeys] = useState<RedisKey[]>([]);
+  
+  // Connection status - real status from engine
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('disconnected');
+  
+  // Update metrics, keys, and connection status from runtime
+  useEffect(() => {
+    if (!node) {
+      setConnectionStatus('disconnected');
+      return;
+    }
+    
+    const interval = setInterval(() => {
+      const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+      if (redisEngine) {
+        // Engine exists - connected
+        setConnectionStatus('connected');
+        
+        const metrics = redisEngine.getMetrics();
+        const allKeys = redisEngine.getAllKeys();
+        
+        setRealMetrics({
+          totalKeys: metrics.totalKeys,
+          memoryUsage: metrics.memoryUsage,
+          memoryUsagePercent: metrics.memoryUsagePercent,
+          operationsPerSecond: metrics.operationsPerSecond,
+          hitRate: metrics.hitRate,
+          hitCount: metrics.hitCount,
+          missCount: metrics.missCount,
+        });
+        
+        // Merge runtime keys with config keys (runtime takes precedence for values)
+        const configKeyMap = new Map(keys.map(k => [k.key, k]));
+        const mergedKeys = allKeys.map(runtimeKey => {
+          const configKey = configKeyMap.get(runtimeKey.key);
+          return {
+            ...runtimeKey,
+            // Keep config metadata if exists
+            ...(configKey && { 
+              // Prefer runtime value but keep config structure
+            }),
+          };
+        });
+        
+        // Add config keys that don't exist in runtime yet
+        for (const configKey of keys) {
+          if (!allKeys.find(k => k.key === configKey.key)) {
+            mergedKeys.push(configKey);
+          }
+        }
+        
+        setRuntimeKeys(mergedKeys);
+      } else {
+        // No engine - disconnected
+        setConnectionStatus('disconnected');
+        setRealMetrics(null);
+        setRuntimeKeys([]);
+      }
+    }, 500); // Update every 500ms
+    
+    return () => clearInterval(interval);
+  }, [componentId, node, keys]);
+  
+  // Note: Connection settings are applied when user clicks "Сохранить и применить"
+  // This prevents unnecessary reinitializations on every keystroke
 
   const updateConfig = (updates: Partial<RedisConfig>) => {
     updateNode(componentId, {
@@ -174,7 +253,18 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
   };
 
   const removeKey = (index: number) => {
-    updateConfig({ keys: keys.filter((_, i) => i !== index) });
+    const keyToRemove = displayKeys[index];
+    if (keyToRemove) {
+      // Delete from runtime
+      const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+      if (redisEngine) {
+        redisEngine.executeCommand('DEL', [keyToRemove.key]);
+      }
+      
+      // Remove from config
+      updateConfig({ keys: keys.filter(k => k.key !== keyToRemove.key) });
+      showSuccess(`Key "${keyToRemove.key}" deleted`);
+    }
   };
 
   const updateKey = (index: number, field: keyof RedisKey, value: any) => {
@@ -190,14 +280,41 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
     const command = parts[0].toUpperCase();
     const args = parts.slice(1);
 
+    // Execute command through RedisRoutingEngine
+    const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+    let result = `OK (simulated)`;
+    let error: string | undefined;
+
+    if (redisEngine) {
+      const commandResult = redisEngine.executeCommand(command, args);
+      if (commandResult.success) {
+        if (commandResult.value !== undefined && commandResult.value !== null) {
+          result = typeof commandResult.value === 'string' 
+            ? commandResult.value 
+            : JSON.stringify(commandResult.value, null, 2);
+        } else {
+          result = 'OK';
+        }
+      } else {
+        error = commandResult.error || 'Command failed';
+        result = `ERROR: ${error}`;
+      }
+    }
+
     const newCommand: RedisCommand = {
       command,
       args,
-      result: `OK (simulated)`
+      result: error ? `ERROR: ${error}` : result
     };
 
     updateConfig({ commands: [newCommand, ...commands.slice(0, 49)] }); // Keep last 50 commands
     setCommandInput('');
+    
+    if (error) {
+      showError(`Redis command failed: ${error}`);
+    } else {
+      showSuccess('Command executed successfully');
+    }
   };
 
   const addClusterNode = () => {
@@ -232,7 +349,10 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
     }
   };
 
-  const filteredKeys = keys.filter(key => {
+  // Use runtime keys if available, otherwise fall back to config keys
+  const displayKeys = runtimeKeys.length > 0 ? runtimeKeys : keys;
+  
+  const filteredKeys = displayKeys.filter(key => {
     if (searchPattern === '*') return true;
     try {
       const pattern = new RegExp(searchPattern.replace(/\*/g, '.*'));
@@ -256,12 +376,39 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
               <p className="text-sm text-muted-foreground mt-1">In-memory data structure store</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline">v7.2</Badge>
-            <Badge variant="secondary" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Connected
-            </Badge>
+           <div className="flex items-center gap-2">
+             {host && port && (
+               <Badge variant="outline" className="text-xs">
+                 {host}:{port}
+               </Badge>
+             )}
+             <Badge 
+               variant={connectionStatus === 'connected' ? 'secondary' : 'outline'} 
+               className="gap-2"
+             >
+               <div className={`h-2 w-2 rounded-full ${
+                 connectionStatus === 'connected' 
+                   ? 'bg-green-500 animate-pulse' 
+                   : 'bg-gray-400'
+               }`} />
+               {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
+             </Badge>
+            {realMetrics && (
+              <>
+                <Badge variant="outline" className="gap-1">
+                  <Zap className="h-3 w-3" />
+                  {realMetrics.operationsPerSecond.toFixed(0)} ops/s
+                </Badge>
+                <Badge variant="outline" className="gap-1">
+                  <Database className="h-3 w-3" />
+                  {realMetrics.totalKeys} keys
+                </Badge>
+                <Badge variant="outline" className="gap-1">
+                  <Key className="h-3 w-3" />
+                  {(realMetrics.hitRate * 100).toFixed(1)}% hit
+                </Badge>
+              </>
+            )}
           </div>
         </div>
 
@@ -331,29 +478,81 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
               <Label>Database</Label>
               <Input
                 type="number"
+                min="0"
+                max="15"
                 value={database}
-                onChange={(e) => updateConfig({ database: parseInt(e.target.value) || 0 })}
+                onChange={(e) => {
+                  const value = parseInt(e.target.value);
+                  // Redis supports databases 0-15 by default
+                  if (!isNaN(value) && value >= 0 && value <= 15) {
+                    updateConfig({ database: value });
+                  } else if (e.target.value === '') {
+                    // Allow empty to clear
+                    updateConfig({ database: 0 });
+                  }
+                }}
+                onBlur={(e) => {
+                  // Ensure value is valid on blur
+                  const value = parseInt(e.target.value);
+                  if (isNaN(value) || value < 0) {
+                    updateConfig({ database: 0 });
+                  } else if (value > 15) {
+                    updateConfig({ database: 15 });
+                  }
+                }}
               />
+              <p className="text-xs text-muted-foreground">
+                Redis database number (0-15, default: 0)
+              </p>
             </div>
             <div className="flex gap-2 pt-4 border-t col-span-4">
               <Button
                 onClick={() => {
-                  if (validateConnectionFields()) {
-                    showSuccess('Параметры подключения сохранены');
-                  } else {
-                    showError('Пожалуйста, заполните все обязательные поля');
+                  if (!validateConnectionFields()) {
+                    showError('Пожалуйста, исправьте ошибки в полях подключения');
+                    return;
                   }
+                  
+                  // Reinitialize Redis engine with new connection settings
+                  const { nodes: allNodes, connections } = useCanvasStore.getState();
+                  emulationEngine.initialize(allNodes, connections);
+                  showSuccess('Параметры подключения сохранены и применены');
                 }}
               >
-                Сохранить настройки
+                Сохранить и применить
               </Button>
               <Button
                 variant="outline"
                 onClick={() => {
-                  if (validateConnectionFields()) {
-                    showSuccess('Параметры подключения валидны');
+                  if (!validateConnectionFields()) {
+                    showError('Пожалуйста, исправьте ошибки в полях подключения');
+                    return;
+                  }
+                  
+                  // Check if engine exists and can execute commands
+                  const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+                  if (redisEngine) {
+                    // Try to execute PING command
+                    const result = redisEngine.executeCommand('PING', []);
+                    if (result.success) {
+                      showSuccess(`Подключение активно: ${host}:${port}`);
+                    } else {
+                      showError(`Ошибка подключения: ${result.error || 'Unknown error'}`);
+                    }
                   } else {
-                    showError('Пожалуйста, заполните все обязательные поля');
+                    // Try to initialize
+                    const { nodes: allNodes, connections } = useCanvasStore.getState();
+                    emulationEngine.initialize(allNodes, connections);
+                    
+                    // Check again after initialization
+                    setTimeout(() => {
+                      const newEngine = emulationEngine.getRedisRoutingEngine(componentId);
+                      if (newEngine) {
+                        showSuccess(`Подключение установлено: ${host}:${port}`);
+                      } else {
+                        showError('Не удалось инициализировать подключение');
+                      }
+                    }, 100);
                   }
                 }}
               >
@@ -386,11 +585,51 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
 
           {/* Keys Tab */}
           <TabsContent value="keys" className="mt-4 space-y-4">
+            {/* Real-time Metrics */}
+            {realMetrics && (
+              <Card className="border-l-4 border-l-blue-500">
+                <CardHeader>
+                  <CardTitle className="text-base">Real-time Metrics</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-4 gap-4">
+                    <div>
+                      <div className="text-sm text-muted-foreground">Memory Usage</div>
+                      <div className="text-2xl font-bold">{((realMetrics.memoryUsage / 1024 / 1024)).toFixed(2)} MB</div>
+                      <div className="text-xs text-muted-foreground">{realMetrics.memoryUsagePercent.toFixed(1)}% of max</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Operations/sec</div>
+                      <div className="text-2xl font-bold">{realMetrics.operationsPerSecond.toFixed(0)}</div>
+                      <div className="text-xs text-muted-foreground">Current rate</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Hit Rate</div>
+                      <div className="text-2xl font-bold">{(realMetrics.hitRate * 100).toFixed(1)}%</div>
+                      <div className="text-xs text-muted-foreground">{realMetrics.hitCount} hits / {realMetrics.missCount} misses</div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-muted-foreground">Total Keys</div>
+                      <div className="text-2xl font-bold">{realMetrics.totalKeys}</div>
+                      <div className="text-xs text-muted-foreground">In memory</div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
             <Card>
               <CardHeader className="flex items-center justify-between">
                 <div>
                   <CardTitle>Keys</CardTitle>
-                  <CardDescription>Manage Redis keys and their values</CardDescription>
+                  <CardDescription>
+                    Manage Redis keys and their values
+                    {runtimeKeys.length > 0 && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        ({runtimeKeys.length} keys from runtime)
+                      </span>
+                    )}
+                  </CardDescription>
                 </div>
                 <div className="flex gap-2">
                   <Input
