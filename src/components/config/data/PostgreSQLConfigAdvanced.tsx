@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
+import { PostgreSQLQueryEngine } from '@/core/postgresql/QueryEngine';
+import { PostgreSQLTable, PostgreSQLIndex } from '@/core/postgresql/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -121,6 +123,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
   ];
   const sqlQuery = config.sqlQuery || '';
   const queryResults = config.queryResults || [];
+  const [queryEngine] = useState(() => new PostgreSQLQueryEngine());
 
   const updateConfig = (updates: Partial<PostgreSQLConfig>) => {
     updateNode(componentId, {
@@ -316,7 +319,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="schemas" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="schemas" className="gap-2">
               <FolderTree className="h-4 w-4" />
               Schemas
@@ -969,42 +972,106 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                   <Button
                     size="sm"
                     onClick={() => {
-                      // Simulate query execution
-                      if (sqlQuery.toLowerCase().includes('select')) {
-                        const tableName = sqlQuery.match(/from\s+(\w+)/i)?.[1];
-                        const table = tables.find(t => t.name === tableName);
-                        if (table && table.data) {
-                          updateConfig({ queryResults: table.data });
-                        } else {
-                          updateConfig({ queryResults: [] });
-                        }
-                      } else if (sqlQuery.toLowerCase().includes('insert')) {
-                        // Simulate INSERT
-                        const match = sqlQuery.match(/insert\s+into\s+(\w+)\s*\(([^)]+)\)\s*values\s*\(([^)]+)\)/i);
-                        if (match) {
-                          const tableName = match[1];
-                          const columns = match[2].split(',').map(c => c.trim());
-                          const values = match[3].split(',').map(v => v.trim().replace(/['"]/g, ''));
-                          const newTables = [...tables];
-                          const tableIndex = newTables.findIndex(t => t.name === tableName);
-                          if (tableIndex >= 0) {
-                            const newRow: TableRow = {};
-                            columns.forEach((col, idx) => {
-                              newRow[col] = values[idx];
-                            });
-                            if (!newTables[tableIndex].data) {
-                              newTables[tableIndex].data = [];
+                      if (!sqlQuery || !sqlQuery.trim()) {
+                        showError('Please enter a SQL query');
+                        return;
+                      }
+
+                      try {
+                        // Extract indexes from tables
+                        const indexes: PostgreSQLIndex[] = [];
+                        for (const table of tables) {
+                          for (const indexName of table.indexes || []) {
+                            const match = indexName.match(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)\s+ON\s+\w+\s*\(([^)]+)\)/i);
+                            if (match) {
+                              indexes.push({
+                                name: match[1],
+                                table: table.name,
+                                schema: table.schema,
+                                columns: match[2].split(',').map((c) => c.trim()),
+                                unique: indexName.toUpperCase().includes('UNIQUE'),
+                              });
                             }
-                            newTables[tableIndex].data!.push(newRow);
-                            updateConfig({ tables: newTables, queryResults: [{ message: `INSERT executed: 1 row affected` }] });
                           }
                         }
-                      } else if (sqlQuery.toLowerCase().includes('update')) {
-                        updateConfig({ queryResults: [{ message: 'UPDATE executed successfully' }] });
-                      } else if (sqlQuery.toLowerCase().includes('delete')) {
-                        updateConfig({ queryResults: [{ message: 'DELETE executed successfully' }] });
-                      } else {
-                        updateConfig({ queryResults: [{ message: 'Query executed' }] });
+
+                        // Convert tables to PostgreSQLTable format
+                        const pgTables: PostgreSQLTable[] = tables.map(t => ({
+                          name: t.name,
+                          schema: t.schema,
+                          columns: t.columns.map(col => ({
+                            name: col.name,
+                            type: col.type,
+                            nullable: col.nullable,
+                            default: col.default,
+                            primaryKey: col.primaryKey,
+                          })),
+                          indexes: t.indexes,
+                          constraints: t.constraints,
+                          data: t.data,
+                        }));
+
+                        // Execute query using Query Engine (with views support)
+                        const result = queryEngine.execute(sqlQuery, pgTables, indexes, views);
+
+                          if (result.success) {
+                          // Update tables if INSERT/UPDATE/DELETE
+                          const operation = result.queryPlan?.operation || '';
+                          if (result.queryPlan && (operation.includes('INSERT') || operation.includes('UPDATE') || operation.includes('DELETE'))) {
+                            // Find and update the affected table
+                            const updatedTables = [...tables];
+                            const affectedTable = updatedTables.find(t => 
+                              t.name === result.queryPlan?.table || 
+                              sqlQuery.toLowerCase().includes(t.name.toLowerCase())
+                            );
+                            
+                            if (affectedTable) {
+                              // Refresh table data from pgTables
+                              const pgTable = pgTables.find(pt => 
+                                pt.name === affectedTable.name && pt.schema === affectedTable.schema
+                              );
+                              if (pgTable && pgTable.data) {
+                                affectedTable.data = pgTable.data;
+                              }
+                            }
+
+                            updateConfig({ 
+                              tables: updatedTables,
+                              queryResults: [{
+                                message: `${result.queryPlan.operation} executed: ${result.rowCount || 0} row(s) affected`,
+                                queryPlan: result.queryPlan,
+                                rowCount: result.rowCount,
+                                indexesUsed: result.indexesUsed,
+                              }]
+                            });
+                          } else {
+                            // SELECT query - show results with query plan
+                            const results = result.rows || [];
+                            updateConfig({ 
+                              queryResults: results.length > 0 
+                                ? [{ queryPlan: result.queryPlan, rowCount: result.rowCount, indexesUsed: result.indexesUsed }, ...results]
+                                : [{ queryPlan: result.queryPlan, rowCount: 0, indexesUsed: result.indexesUsed }]
+                            });
+                          }
+
+                          if (result.queryPlan) {
+                            showSuccess(
+                              `Query executed successfully. ${result.rowCount || 0} row(s) returned. ` +
+                              (result.indexesUsed && result.indexesUsed.length > 0 
+                                ? `Index used: ${result.indexesUsed.join(', ')}` 
+                                : '')
+                            );
+                          } else {
+                            showSuccess(`Query executed successfully. ${result.rowCount || 0} row(s) returned.`);
+                          }
+                        } else {
+                          showError(result.error || 'Query execution failed');
+                          updateConfig({ queryResults: [{ error: result.error || 'Query execution failed' }] });
+                        }
+                      } catch (error) {
+                        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+                        showError(`Query execution error: ${errorMessage}`);
+                        updateConfig({ queryResults: [{ error: errorMessage }] });
                       }
                     }}
                   >
@@ -1027,15 +1094,66 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                   <div className="space-y-2">
                     <Label>Results</Label>
                     <div className="border rounded-lg overflow-x-auto">
-                      {queryResults[0]?.message ? (
+                      {queryResults[0]?.error ? (
+                        <div className="p-4 text-sm text-destructive bg-destructive/10 rounded">
+                          <strong>Error:</strong> {queryResults[0].error}
+                        </div>
+                      ) : queryResults[0]?.message ? (
                         <div className="p-4 text-sm text-muted-foreground">
                           {queryResults[0].message}
+                        </div>
+                      ) : queryResults[0]?.queryPlan ? (
+                        <div className="space-y-3 p-4">
+                          <div className="text-sm">
+                            <div className="font-semibold mb-2">Query Plan:</div>
+                            <div className="bg-muted/50 p-2 rounded font-mono text-xs">
+                              <div><strong>Operation:</strong> {queryResults[0].queryPlan.operation}</div>
+                              <div><strong>Table:</strong> {queryResults[0].queryPlan.table}</div>
+                              {queryResults[0].queryPlan.indexUsed && (
+                                <div><strong>Index Used:</strong> {queryResults[0].queryPlan.indexUsed}</div>
+                              )}
+                              <div><strong>Estimated Rows:</strong> {queryResults[0].queryPlan.estimatedRows}</div>
+                              <div><strong>Estimated Cost:</strong> {queryResults[0].queryPlan.estimatedCost}</div>
+                            </div>
+                          </div>
+                          {queryResults[0].rowCount !== undefined && (
+                            <div className="text-sm text-muted-foreground">
+                              Rows returned: {queryResults[0].rowCount}
+                            </div>
+                          )}
+                          {queryResults.length > 1 && (
+                            <div className="mt-2">
+                              <div className="text-xs font-semibold mb-1">Data:</div>
+                              <table className="w-full text-sm border rounded">
+                                <thead className="bg-muted">
+                                  <tr>
+                                    {Object.keys(queryResults[1] || {}).map((key) => (
+                                      <th key={key} className="text-left p-2 font-medium border-r">
+                                        {key}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {queryResults.slice(1).map((row, index) => (
+                                    <tr key={index} className="border-t hover:bg-muted/50">
+                                      {Object.values(row).map((value, colIndex) => (
+                                        <td key={colIndex} className="p-2 border-r">
+                                          {String(value)}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <table className="w-full text-sm">
                           <thead className="bg-muted">
                             <tr>
-                              {Object.keys(queryResults[0] || {}).map((key) => (
+                              {Object.keys(queryResults[0] || {}).filter(key => key !== 'queryPlan' && key !== 'indexesUsed' && key !== 'rowCount').map((key) => (
                                 <th key={key} className="text-left p-2 font-medium border-r">
                                   {key}
                                 </th>
@@ -1045,9 +1163,9 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                           <tbody>
                             {queryResults.map((row, index) => (
                               <tr key={index} className="border-t hover:bg-muted/50">
-                                {Object.values(row).map((value, colIndex) => (
-                                  <td key={colIndex} className="p-2 border-r">
-                                    {String(value)}
+                                {Object.keys(row).filter(key => key !== 'queryPlan' && key !== 'indexesUsed' && key !== 'rowCount').map((key) => (
+                                  <td key={key} className="p-2 border-r">
+                                    {String(row[key])}
                                   </td>
                                 ))}
                               </tr>
@@ -1060,10 +1178,28 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                 )}
                 <div className="text-xs text-muted-foreground space-y-1 p-3 bg-muted/50 rounded-lg">
                   <p className="font-semibold mb-2">💡 Example queries:</p>
-                  <p className="font-mono text-xs">SELECT * FROM users;</p>
-                  <p className="font-mono text-xs">INSERT INTO users (username, email) VALUES ('new_user', 'user@example.com');</p>
-                  <p className="font-mono text-xs">UPDATE users SET email = 'updated@example.com' WHERE id = 1;</p>
-                  <p className="font-mono text-xs">DELETE FROM users WHERE id = 2;</p>
+                  <div className="space-y-2">
+                    <div>
+                      <p className="font-semibold text-xs mb-1">Basic queries:</p>
+                      <p className="font-mono text-xs">SELECT * FROM users;</p>
+                      <p className="font-mono text-xs">INSERT INTO users (username, email) VALUES ('new_user', 'user@example.com');</p>
+                      <p className="font-mono text-xs">UPDATE users SET email = 'updated@example.com' WHERE id = 1;</p>
+                      <p className="font-mono text-xs">DELETE FROM users WHERE id = 2;</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-xs mb-1 mt-2">Transactions:</p>
+                      <p className="font-mono text-xs">BEGIN;</p>
+                      <p className="font-mono text-xs">INSERT INTO users (username, email) VALUES ('user1', 'user1@example.com');</p>
+                      <p className="font-mono text-xs">INSERT INTO users (username, email) VALUES ('user2', 'user2@example.com');</p>
+                      <p className="font-mono text-xs">COMMIT;</p>
+                      <p className="font-mono text-xs">-- or ROLLBACK; to cancel</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-xs mb-1 mt-2">With WHERE clause:</p>
+                      <p className="font-mono text-xs">SELECT * FROM users WHERE id &gt; 10;</p>
+                      <p className="font-mono text-xs">SELECT * FROM users WHERE email LIKE '%@example.com';</p>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1327,6 +1463,76 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                   >
                     Проверить подключение
                   </Button>
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground mb-2">Connection Pool Settings</h3>
+                    <p className="text-sm text-muted-foreground mb-4">Configure connection pooling behavior</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="maxConnections">Max Connections</Label>
+                      <Input
+                        id="maxConnections"
+                        type="number"
+                        min="1"
+                        max="10000"
+                        value={config.maxConnections || 100}
+                        onChange={(e) => updateConfig({ maxConnections: parseInt(e.target.value) || 100 })}
+                        placeholder="100"
+                      />
+                      <p className="text-xs text-muted-foreground">Maximum number of concurrent connections</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="minConnections">Min Connections</Label>
+                      <Input
+                        id="minConnections"
+                        type="number"
+                        min="0"
+                        value={config.minConnections || 0}
+                        onChange={(e) => updateConfig({ minConnections: parseInt(e.target.value) || 0 })}
+                        placeholder="0"
+                      />
+                      <p className="text-xs text-muted-foreground">Minimum number of idle connections</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="idleTimeout">Idle Timeout (ms)</Label>
+                      <Input
+                        id="idleTimeout"
+                        type="number"
+                        min="1000"
+                        value={config.idleTimeout || 300000}
+                        onChange={(e) => updateConfig({ idleTimeout: parseInt(e.target.value) || 300000 })}
+                        placeholder="300000"
+                      />
+                      <p className="text-xs text-muted-foreground">Time before idle connection is closed (default: 5 min)</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="maxLifetime">Max Connection Lifetime (ms)</Label>
+                      <Input
+                        id="maxLifetime"
+                        type="number"
+                        min="60000"
+                        value={config.maxLifetime || 3600000}
+                        onChange={(e) => updateConfig({ maxLifetime: parseInt(e.target.value) || 3600000 })}
+                        placeholder="3600000"
+                      />
+                      <p className="text-xs text-muted-foreground">Maximum time a connection can live (default: 1 hour)</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="queryLatency">Query Latency (ms)</Label>
+                      <Input
+                        id="queryLatency"
+                        type="number"
+                        min="1"
+                        value={config.queryLatency || 10}
+                        onChange={(e) => updateConfig({ queryLatency: parseInt(e.target.value) || 10 })}
+                        placeholder="10"
+                      />
+                      <p className="text-xs text-muted-foreground">Base query execution time for simulation</p>
+                    </div>
+                  </div>
                 </div>
                 <Separator />
                 <div className="space-y-4">

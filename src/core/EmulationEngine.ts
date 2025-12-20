@@ -12,6 +12,7 @@ import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
+import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
  * Component runtime state with real-time metrics
@@ -137,6 +138,9 @@ export class EmulationEngine {
 
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
+  
+  // PostgreSQL connection pools per node
+  private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -256,6 +260,26 @@ export class EmulationEngine {
         }
         if (node.type === 'webhook-relay') {
           this.initializeWebhookRelayRoutingEngine(node);
+        }
+        if (node.type === 'postgres') {
+          this.initializePostgreSQLConnectionPool(node);
+        }
+      }
+      
+      // Update existing PostgreSQL pools if config changed
+      for (const node of nodes) {
+        if (node.type === 'postgres') {
+          const existingPool = this.postgresConnectionPools.get(node.id);
+          if (existingPool) {
+            const config = node.data.config as any;
+            existingPool.updateConfig({
+              maxConnections: config.maxConnections || 100,
+              minConnections: config.minConnections || 0,
+              idleTimeout: config.idleTimeout || 300000,
+              maxLifetime: config.maxLifetime || 3600000,
+              connectionTimeout: config.connectionTimeout || 5000,
+            });
+          }
         }
       }
     
@@ -2750,11 +2774,80 @@ export class EmulationEngine {
       metrics.errorRate = 0;
       metrics.utilization = 0;
       metrics.customMetrics = {};
+      
+      // Reset connection pool if exists
+      if (node.type === 'postgres') {
+        const pool = this.postgresConnectionPools.get(node.id);
+        if (pool) {
+          pool.reset();
+        }
+      }
       return;
     }
     
     const maxConnections = config.maxConnections || 100;
     const queryLatency = config.queryLatency || 10; // ms
+    
+    // Для PostgreSQL используем Connection Pool
+    if (node.type === 'postgres') {
+      const pool = this.postgresConnectionPools.get(node.id);
+      if (pool) {
+        // Simulate queries coming in
+        const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+        const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+          const sourceMetrics = this.metrics.get(conn.source);
+          return sum + (sourceMetrics?.throughput || 0);
+        }, 0);
+
+        // Simulate acquiring connections for queries
+        const queriesPerSecond = Math.min(totalIncomingThroughput, maxConnections * 10);
+        const queriesThisUpdate = (queriesPerSecond * this.updateInterval) / 1000;
+        
+        for (let i = 0; i < Math.floor(queriesThisUpdate); i++) {
+          const connId = pool.acquireConnection('SELECT');
+          if (connId) {
+            // Simulate query execution time
+            const queryDuration = queryLatency + Math.random() * 20;
+            setTimeout(() => {
+              pool.releaseConnection(connId, queryDuration);
+            }, queryDuration);
+          }
+        }
+
+        // Get pool metrics
+        const poolMetrics = pool.getMetrics();
+        
+        metrics.throughput = poolMetrics.queriesPerSecond;
+        metrics.latency = poolMetrics.averageQueryTime || queryLatency;
+        metrics.utilization = poolMetrics.utilization;
+        metrics.errorRate = poolMetrics.waitingConnections > 0 ? 0.01 : 0.001; // Higher error rate if pool exhausted
+        
+        // Calculate index count for PostgreSQL
+        const pgConfig = node.data.config as any;
+        const tables = pgConfig.tables || [];
+        let indexCount = 0;
+        for (const table of tables) {
+          indexCount += (table.indexes || []).length;
+        }
+        if (indexCount === 0) indexCount = 5; // Default
+
+        // Cache hit ratio calculation (will be improved later)
+        const cacheHitRatio = this.calculateCacheHitRatio(node, poolMetrics.queriesPerSecond);
+        
+        metrics.customMetrics = {
+          'active_connections': poolMetrics.activeConnections,
+          'idle_connections': poolMetrics.idleConnections,
+          'waiting_connections': poolMetrics.waitingConnections,
+          'total_connections': poolMetrics.totalConnections,
+          'max_connections': maxConnections,
+          'indexes': indexCount,
+          'cache_hit_ratio': cacheHitRatio,
+          'connection_wait_time': poolMetrics.connectionWaitTime,
+        };
+        
+        return; // Early return for PostgreSQL
+      }
+    }
     
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;

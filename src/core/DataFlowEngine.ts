@@ -1,5 +1,7 @@
 import { CanvasNode, CanvasConnection, ComponentConfig } from '@/types';
 import { emulationEngine } from './EmulationEngine';
+import { PostgreSQLQueryEngine } from './postgresql/QueryEngine';
+import { PostgreSQLTable, PostgreSQLIndex } from './postgresql/types';
 
 /**
  * Data message format for transmission between components
@@ -58,6 +60,7 @@ export class DataFlowEngine {
   private nodes: CanvasNode[] = [];
   private connections: CanvasConnection[] = [];
   private handlers: Map<string, ComponentDataHandler> = new Map();
+  private postgresQueryEngine: PostgreSQLQueryEngine | null = null;
   private messageQueue: Map<string, DataMessage[]> = new Map(); // connectionId -> messages
   private messageHistory: DataMessage[] = [];
   private isRunning: boolean = false;
@@ -522,6 +525,11 @@ export class DataFlowEngine {
   private createDatabaseHandler(type: string): ComponentDataHandler {
     return {
       processData: (node, message, config) => {
+        // PostgreSQL specific: if payload contains SQL query, use Query Engine
+        if (type === 'postgres' && message.payload?.sql) {
+          return this.processPostgreSQLQuery(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -691,6 +699,93 @@ export class DataFlowEngine {
       
       getSupportedFormats: () => ['json', 'binary'],
     };
+  }
+
+  /**
+   * Process PostgreSQL SQL query using Query Engine
+   */
+  private processPostgreSQLQuery(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    if (!this.postgresQueryEngine) {
+      message.status = 'failed';
+      message.error = 'PostgreSQL Query Engine not initialized';
+      return message;
+    }
+
+    const sql = (message.payload as any)?.sql;
+    if (!sql || typeof sql !== 'string') {
+      message.status = 'failed';
+      message.error = 'No SQL query provided';
+      return message;
+    }
+
+    // Get tables, indexes, and views from config
+    const pgConfig = node.data.config as any;
+    const tables: PostgreSQLTable[] = pgConfig.tables || [];
+    const indexes: PostgreSQLIndex[] = this.extractIndexesFromConfig(pgConfig, tables);
+    const views = pgConfig.views || [];
+
+    // Execute query
+    const result = this.postgresQueryEngine.execute(sql, tables, indexes, views);
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.executionTime || (config.queryLatency as number) || 10;
+      message.payload = {
+        ...(message.payload as any),
+        results: result.rows || [],
+        rowCount: result.rowCount || 0,
+        queryPlan: result.queryPlan,
+        indexesUsed: result.indexesUsed || [],
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'Query execution failed';
+      message.latency = result.executionTime || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Extract indexes from PostgreSQL config
+   */
+  private extractIndexesFromConfig(
+    config: any,
+    tables: PostgreSQLTable[]
+  ): PostgreSQLIndex[] {
+    const indexes: PostgreSQLIndex[] = [];
+
+    // Extract indexes from table definitions
+    for (const table of tables) {
+      for (const indexName of table.indexes || []) {
+        // Try to parse index definition (simplified)
+        // Format: "CREATE INDEX idx_name ON table (col1, col2)"
+        const match = indexName.match(/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(\w+)\s+ON\s+\w+\s*\(([^)]+)\)/i);
+        if (match) {
+          indexes.push({
+            name: match[1],
+            table: table.name,
+            schema: table.schema,
+            columns: match[2].split(',').map((c) => c.trim()),
+            unique: indexName.toUpperCase().includes('UNIQUE'),
+          });
+        } else {
+          // Simple index name, assume single column
+          indexes.push({
+            name: indexName,
+            table: table.name,
+            schema: table.schema,
+            columns: [indexName.replace(/^idx_|^index_/i, '')], // Guess column from index name
+          });
+        }
+      }
+    }
+
+    return indexes;
   }
 
   /**

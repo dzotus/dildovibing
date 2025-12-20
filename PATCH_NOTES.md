@@ -1,5 +1,262 @@
 # Patch Notes
 
+## Версия 0.1.7m - PostgreSQL Advanced Simulation System
+
+### Обзор изменений
+Полная переработка системы симуляции PostgreSQL: реалистичный SQL-парсинг, Query Engine, Connection Pooling, транзакции, валидация данных, Roles & Permissions. Система теперь избегает хардкода и использует умные алгоритмы для расчета метрик на основе конфигурации.
+
+---
+
+## PostgreSQL: Полная переработка системы симуляции
+
+### 1. SQL Parser & Query Engine
+
+**Проблема:**
+- Простой regex-парсинг SQL запросов (`sqlQuery.toLowerCase().includes('select')`)
+- Невозможность выполнять сложные запросы (JOIN, подзапросы, агрегации)
+- Отсутствие связи между Query Tool и реальными данными таблиц
+- Результаты запросов не соответствовали реальным таблицам
+
+**Решение:**
+- ✅ Установлена библиотека `node-sql-parser` для полноценного парсинга SQL
+- ✅ Создан модуль `SQLParser.ts` для преобразования SQL в структурированный формат (AST)
+- ✅ Создан модуль `QueryEngine.ts` для выполнения SQL-запросов над реальными данными
+- ✅ Поддержка SELECT, INSERT, UPDATE, DELETE с полным парсингом
+- ✅ Парсинг WHERE, JOIN, ORDER BY, LIMIT, OFFSET
+- ✅ Интеграция Query Engine с DataFlowEngine
+- ✅ Обновлен Query Tool для использования нового движка
+- ✅ Отображение Query Plan и использованных индексов в результатах
+
+**Изменённые файлы:**
+- `src/core/postgresql/SQLParser.ts` (новый)
+- `src/core/postgresql/QueryEngine.ts` (новый)
+- `src/core/postgresql/types.ts` (новый)
+- `src/core/DataFlowEngine.ts`
+- `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+
+---
+
+### 2. Query Planner & Index Analysis
+
+**Проблема:**
+- Отсутствие планировщика запросов (Query Planner)
+- Индексы хранились как строки, но не использовались при запросах
+- Метрики латентности не отражали реальную сложность запросов
+- Невозможность определить оптимальный план выполнения
+
+**Решение:**
+- ✅ Создан модуль `QueryPlanner.ts` для анализа запросов
+- ✅ Определение использования индексов в WHERE-условиях
+- ✅ Расчет стоимости выполнения запросов
+- ✅ Оценка количества строк на основе индексов и условий
+- ✅ Выбор оптимального плана выполнения (Index Scan vs Seq Scan)
+- ✅ Влияние индексов на расчет латентности
+- ✅ Отображение использованных индексов в Query Plan
+
+**Изменённые файлы:**
+- `src/core/postgresql/QueryPlanner.ts` (новый)
+- `src/core/postgresql/QueryEngine.ts`
+
+---
+
+### 3. Connection Pooling System
+
+**Проблема:**
+- Упрощенный расчет `activeConnections` без учета реального пула
+- Отсутствие симуляции состояний соединений (idle/active/waiting)
+- Метрики utilization не отражали реальное поведение пула
+
+**Решение:**
+- ✅ Создан модуль `ConnectionPool.ts` для управления соединениями
+- ✅ Поддержка состояний: idle, active, waiting, terminated
+- ✅ Настраиваемые параметры: maxConnections, minConnections, idleTimeout, maxLifetime
+- ✅ Автоматическая очистка idle соединений по таймауту
+- ✅ Расчет метрик: utilization, queriesPerSecond, connectionWaitTime
+- ✅ Интеграция с EmulationEngine для расчета метрик PostgreSQL
+- ✅ Добавлены настройки Connection Pool в UI (Connection Tab)
+
+**Изменённые файлы:**
+- `src/core/postgresql/ConnectionPool.ts` (новый)
+- `src/core/EmulationEngine.ts`
+- `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+
+---
+
+### 4. Реалистичный Cache Hit Ratio
+
+**Проблема:**
+- Cache hit ratio был случайным значением (`Math.random() * 0.8 + 0.2`)
+- Не учитывались паттерны запросов и размер данных
+
+**Решение:**
+- ✅ Расчет Cache Hit Ratio на основе реальных факторов:
+  - Количество таблиц (больше таблиц = ниже hit ratio)
+  - Частота запросов (больше запросов = лучше кэширование)
+  - Размер данных (большие датасеты = ниже hit ratio)
+- ✅ Реалистичный диапазон: 70-95% (как в реальном PostgreSQL)
+- ✅ Динамическое изменение в зависимости от нагрузки
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 5. Views Execution Support
+
+**Проблема:**
+- Views хранились, но не использовались в Query Tool
+- Невозможность выполнять запросы к представлениям
+
+**Решение:**
+- ✅ Views выполняются как подзапросы (рекурсивно)
+- ✅ Интеграция с Query Engine
+- ✅ Поддержка в Query Tool
+- ✅ Безопасная рекурсия с обработкой ошибок
+
+**Изменённые файлы:**
+- `src/core/postgresql/QueryEngine.ts`
+- `src/core/DataFlowEngine.ts`
+- `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+
+---
+
+### 6. Transaction Support (BEGIN/COMMIT/ROLLBACK)
+
+**Проблема:**
+- Отсутствие поддержки транзакций
+- Невозможность симулировать ACID свойства
+
+**Решение:**
+- ✅ Создан модуль `TransactionManager.ts` для управления транзакциями
+- ✅ Поддержка BEGIN, COMMIT, ROLLBACK
+- ✅ Isolation levels: READ COMMITTED, REPEATABLE READ, SERIALIZABLE
+- ✅ Автоматический rollback при ошибках в транзакции
+- ✅ Отслеживание всех запросов в транзакции
+- ✅ Добавлены примеры транзакций в Query Tool
+
+**Изменённые файлы:**
+- `src/core/postgresql/TransactionManager.ts` (новый)
+- `src/core/postgresql/QueryEngine.ts`
+- `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+
+---
+
+### 7. Roles & Permissions System
+
+**Проблема:**
+- Роли хранились, но не влияли на доступ
+- Невозможность симулировать ограничения доступа
+
+**Решение:**
+- ✅ Создан модуль `PermissionManager.ts` для управления правами
+- ✅ Поддержка ролей: postgres (superuser), app_user, readonly
+- ✅ Проверка прав доступа перед выполнением запросов
+- ✅ Grant/Revoke для управления правами
+- ✅ Интеграция с Query Engine для проверки прав
+- ✅ Понятные сообщения об ошибках доступа
+
+**Изменённые файлы:**
+- `src/core/postgresql/PermissionManager.ts` (новый)
+- `src/core/postgresql/QueryEngine.ts`
+
+---
+
+### 8. Foreign Keys Validation
+
+**Проблема:**
+- Constraints хранились как строки
+- Отсутствие валидации Foreign Keys при INSERT/UPDATE
+
+**Решение:**
+- ✅ Добавлена поддержка Foreign Keys в типах данных
+- ✅ Валидация Foreign Keys при INSERT/UPDATE
+- ✅ Проверка существования ссылающихся строк
+- ✅ Поддержка onDelete/onUpdate действий (CASCADE, SET NULL, RESTRICT)
+- ✅ Понятные сообщения об ошибках валидации
+
+**Изменённые файлы:**
+- `src/core/postgresql/types.ts`
+- `src/core/postgresql/QueryEngine.ts`
+
+---
+
+### 9. Enhanced Data Type Validation
+
+**Проблема:**
+- Базовая валидация данных (только NOT NULL)
+- Отсутствие проверки типов данных
+
+**Решение:**
+- ✅ Валидация INTEGER, SERIAL, BIGINT
+- ✅ Валидация VARCHAR с проверкой длины
+- ✅ Валидация DECIMAL, NUMERIC, FLOAT
+- ✅ Валидация BOOLEAN
+- ✅ Валидация TIMESTAMP, DATE
+- ✅ Понятные сообщения об ошибках типов
+
+**Изменённые файлы:**
+- `src/core/postgresql/QueryEngine.ts`
+
+---
+
+### 10. UI Improvements
+
+**Проблема:**
+- Отсутствие настроек Connection Pool в UI
+- Недостаточно примеров в Query Tool
+- Таб Connection был вне TabsList (grid-cols-6 вместо 7)
+
+**Решение:**
+- ✅ Добавлена секция "Connection Pool Settings" в Connection Tab
+- ✅ Настройки: Max/Min Connections, Idle Timeout, Max Lifetime, Query Latency
+- ✅ Добавлены примеры транзакций в Query Tool
+- ✅ Исправлена структура табов (grid-cols-7)
+- ✅ Улучшено отображение Query Plan с информацией об индексах
+
+**Изменённые файлы:**
+- `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+
+---
+
+## Технические детали
+
+### Новые модули:
+1. `src/core/postgresql/SQLParser.ts` - Парсинг SQL запросов
+2. `src/core/postgresql/QueryEngine.ts` - Выполнение SQL запросов
+3. `src/core/postgresql/QueryPlanner.ts` - Планирование и оптимизация запросов
+4. `src/core/postgresql/ConnectionPool.ts` - Управление пулом соединений
+5. `src/core/postgresql/TransactionManager.ts` - Управление транзакциями
+6. `src/core/postgresql/PermissionManager.ts` - Управление правами доступа
+7. `src/core/postgresql/types.ts` - Типы данных для PostgreSQL
+
+### Зависимости:
+- `node-sql-parser` - для парсинга SQL запросов
+
+### Интеграция:
+- Полная интеграция с `DataFlowEngine` для обработки SQL запросов
+- Интеграция с `EmulationEngine` для расчета метрик
+- Обновлен UI компонент `PostgreSQLConfigAdvanced`
+
+---
+
+## Результаты
+
+### До улучшений:
+- ❌ Простой regex-парсинг SQL
+- ❌ Отсутствие реального выполнения запросов
+- ❌ Случайные метрики
+- ❌ Отсутствие транзакций, прав доступа, валидации
+
+### После улучшений:
+- ✅ Полноценный SQL-парсинг через node-sql-parser
+- ✅ Реальное выполнение запросов над данными
+- ✅ Query Planner с анализом индексов
+- ✅ Connection Pooling с реалистичными метриками
+- ✅ Транзакции, Roles & Permissions, Foreign Keys
+- ✅ Умная система без хардкода
+
+---
+
 ## MongoDB Configuration Improvements - 2024
 
 ### Обзор изменений
