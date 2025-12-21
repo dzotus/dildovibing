@@ -1,5 +1,226 @@
 # Patch Notes
 
+## Версия 0.1.7w - Jaeger: Полная симуляция распределенной трассировки
+
+### Обзор изменений
+Полная реализация симуляции Jaeger: создан JaegerEmulationEngine для сбора трассировок, применения sampling стратегий, хранения traces и выполнения запросов. Реализована автоматическая генерация трассировок в DataFlowEngine на основе реальных запросов между компонентами. Добавлена поддержка трех типов sampling (probabilistic, rate limiting, per-operation). Интегрирован Jaeger в EmulationEngine с периодическим cleanup старых traces. Обновлен UI для отображения реальных трассировок и статистики сервисов в реальном времени. Убраны предзаполненные данные - все трассировки генерируются динамически.
+
+---
+
+## Jaeger: Полная симуляция распределенной трассировки
+
+### 1. Jaeger Emulation Engine
+
+**Проблема:**
+- Jaeger был только UI компонентом без реальной симуляции
+- Нет сбора трассировок от компонентов
+- Нет применения sampling стратегий
+- Нет хранения и запросов трассировок
+- Нет расчета нагрузки на Collector, Query Service, Storage
+- Статические данные в UI (хардкод traces и services)
+
+**Решение:**
+- ✅ Создан `JaegerEmulationEngine` (`src/core/JaegerEmulationEngine.ts`):
+  - **Collector симуляция:**
+    - Прием spans от Agent (симуляция получения от приложений)
+    - Применение sampling стратегий перед обработкой
+    - Обработка spans и группировка в traces
+    - Обновление статистики сервисов
+    - Метрики: `spansReceivedTotal`, `spansDroppedTotal`, `spansProcessedTotal`
+  - **Sampling механизмы:**
+    - **Probabilistic sampling:** вероятность сэмплирования (0-1)
+    - **Rate limiting sampling:** ограничение количества traces в секунду
+    - **Per-operation sampling:** отдельные лимиты для каждой операции
+    - Расчет sampling rate и dropped spans
+  - **Storage симуляция:**
+    - Хранение traces в памяти (Map по traceId)
+    - Поддержка TTL (time-to-live) для traces
+    - Автоматический cleanup старых traces
+    - Ограничение максимального количества traces (maxTraces)
+    - Расчет storage size в байтах
+  - **Query Service симуляция:**
+    - Запросы трассировок с фильтрацией по service, operation, tags, времени
+    - Сортировка по времени (новые первыми)
+    - Поддержка лимитов результатов
+    - Расчет query latency и error rate
+  - **Service Statistics:**
+    - Автоматический сбор статистики по сервисам
+    - Количество traces, errors, средняя длительность
+    - Обновление при добавлении новых spans
+  - **Расчет нагрузки:**
+    - `spansPerSecond`, `tracesPerSecond`
+    - `samplingRate`, `storageUtilization`
+    - `queryLatency`, `errorRate`
+
+**Изменённые файлы:**
+- `src/core/JaegerEmulationEngine.ts` (новый)
+
+---
+
+### 2. Интеграция Jaeger в EmulationEngine
+
+**Проблема:**
+- Нет обработки Jaeger компонентов в симуляции
+- Jaeger не инициализировался при старте
+- Нет периодического cleanup старых traces
+
+**Решение:**
+- ✅ Добавлена интеграция Jaeger в `EmulationEngine`:
+  - Инициализация `JaegerEmulationEngine` при добавлении ноды типа `jaeger`
+  - Метод `initializeJaegerEngine()` для создания engine
+  - Периодический cleanup старых traces через `performCleanup()`
+  - Методы доступа: `getJaegerEmulationEngine()`, `getAllJaegerEngines()`
+  - Cleanup вызывается в основном цикле симуляции
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 3. Автоматическая генерация трассировок в DataFlowEngine
+
+**Проблема:**
+- Нет генерации трассировок на основе реальных запросов
+- Компоненты не отправляли spans в Jaeger
+- Нет trace context propagation между компонентами
+
+**Решение:**
+- ✅ Добавлена генерация трассировок в `DataFlowEngine`:
+  - Метод `generateTraceForMessage()` для создания spans из DataMessage
+  - Автоматическая генерация при обработке сообщений между компонентами
+  - Создание trace context (traceId, spanId, parentSpanId)
+  - Trace context propagation через metadata сообщений
+  - Определение operation names по типу компонентов:
+    - API Gateways: `HTTP {method}`
+    - Databases: `DB {queryType}`
+    - Message Queues: `MQ {queue}`
+    - Default: `{sourceType} -> {targetType}`
+  - Добавление tags из metadata сообщений
+  - Обработка ошибок (error tags и logs)
+  - Отправка spans во все активные Jaeger engines
+  - Поддержка distributed tracing (связь spans в разных компонентах)
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 4. Обновление UI для отображения реальных трассировок
+
+**Проблема:**
+- UI показывал только статические данные из конфига
+- Предзаполненные traces и services при создании компонента
+- Нет связи с реальными данными из JaegerEmulationEngine
+- Статус всегда показывал "Running"
+- Ненужная кнопка "UI"
+
+**Решение:**
+- ✅ Обновлен `JaegerConfigAdvanced.tsx`:
+  - Интеграция с `JaegerEmulationEngine` для получения реальных данных
+  - Отображение трассировок из `getRecentTraces()`
+  - Отображение статистики сервисов из `getServiceStats()`
+  - Автообновление данных каждые 2 секунды при запущенной симуляции
+  - Динамический статус: "Running" (зеленый) или "Stopped" (серый) на основе `isRunning`
+  - Убраны предзаполненные данные - показываются только реальные трассировки
+  - Убрана кнопка "UI"
+  - Добавлены пустые состояния: "No traces available", "No services available"
+  - Форматирование времени: "2m ago", "5h ago" и т.д.
+  - Конвертация времени из microseconds в milliseconds для отображения
+
+**Изменённые файлы:**
+- `src/components/config/observability/JaegerConfigAdvanced.tsx`
+
+---
+
+## Детали реализации Jaeger
+
+### JaegerEmulationEngine
+
+**Структура данных:**
+- `JaegerSpan`: traceId, spanId, parentSpanId, operationName, serviceName, startTime, duration, tags, logs, references
+- `JaegerTrace`: traceId, spans[], startTime, duration, serviceCount, spanCount, hasErrors, rootService, rootOperation
+- `TraceContext`: traceId, spanId, parentSpanId, sampled, baggage (для propagation)
+
+**Sampling стратегии:**
+1. **Probabilistic:** случайное сэмплирование с заданной вероятностью
+2. **Rate Limiting:** токен bucket алгоритм для ограничения traces/sec
+3. **Per-Operation:** отдельные токен buckets для каждой операции
+
+**Storage:**
+- In-memory хранение traces (Map<string, JaegerTrace>)
+- TTL cleanup каждую минуту
+- Eviction старых traces при превышении maxTraces
+
+**Query API:**
+- Фильтрация по service, operation, tags, времени
+- Сортировка по startTime (descending)
+- Лимит результатов
+
+### Интеграция с EmulationEngine
+
+- Инициализация при `initialize()` для нод типа `jaeger`
+- Cleanup в основном цикле `simulate()` через `performCleanup()`
+- Доступ через `getJaegerEmulationEngine(nodeId)`
+
+### Интеграция с DataFlowEngine
+
+- Генерация spans при обработке сообщений в `deliverMessages()`
+- Создание trace context для новых traces
+- Propagation через `message.metadata.traceContext`
+- Отправка во все активные Jaeger engines
+
+### UI улучшения
+
+- Реальные данные вместо статических
+- Автообновление при симуляции
+- Динамический статус
+- Пустые состояния
+- Убраны предзаполненные данные
+
+---
+
+## Проверка качества Jaeger
+
+### Отличия от других observability компонентов:
+
+**Prometheus:**
+- Prometheus: scraping метрик по интервалам
+- Jaeger: прием spans в реальном времени от DataFlowEngine
+
+**Loki:**
+- Loki: ingestion логов в streams
+- Jaeger: сбор spans в traces с иерархией (parent-child)
+
+**Grafana:**
+- Grafana: визуализация данных из других источников
+- Jaeger: самостоятельная система сбора и хранения трассировок
+
+### Соответствие реальной системе Jaeger:
+
+✅ **Collector:** прием spans, sampling, обработка  
+✅ **Storage:** хранение traces с TTL и лимитами  
+✅ **Query Service:** запросы с фильтрацией  
+✅ **Sampling:** три типа sampling стратегий  
+✅ **Service Statistics:** автоматический сбор статистики  
+✅ **Trace Context Propagation:** поддержка distributed tracing  
+✅ **Метрики:** расчет нагрузки на все компоненты  
+
+### Улучшения по сравнению с предыдущей реализацией:
+
+- ❌ Было: статические данные в UI
+- ✅ Стало: динамическая генерация на основе реальных запросов
+
+- ❌ Было: нет симуляции работы Jaeger
+- ✅ Стало: полная симуляция Collector, Storage, Query Service
+
+- ❌ Было: предзаполненные traces при создании
+- ✅ Стало: пустые данные, заполняются при симуляции
+
+- ❌ Было: статический статус "Running"
+- ✅ Стало: динамический статус на основе isRunning
+
+---
+
 ## Версия 0.1.7v - Loki: Полная симуляция работы системы агрегации логов
 
 ### Обзор изменений

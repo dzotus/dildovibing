@@ -2,6 +2,7 @@ import { CanvasNode, CanvasConnection, ComponentConfig } from '@/types';
 import { emulationEngine } from './EmulationEngine';
 import { PostgreSQLQueryEngine } from './postgresql/QueryEngine';
 import { PostgreSQLTable, PostgreSQLIndex } from './postgresql/types';
+import { JaegerSpan, TraceContext } from './JaegerEmulationEngine';
 
 /**
  * Data message format for transmission between components
@@ -68,6 +69,10 @@ export class DataFlowEngine {
   private intervalId: NodeJS.Timeout | null = null;
   private messageIdCounter: number = 0;
   private readonly MAX_HISTORY = 1000; // Keep last 1000 messages
+  
+  // Trace context tracking (traceId -> context)
+  private traceContexts: Map<string, TraceContext> = new Map();
+  private traceIdCounter: number = 0;
 
   constructor() {
     this.registerDefaultHandlers();
@@ -291,8 +296,16 @@ export class DataFlowEngine {
       const delivered = messages.filter(m => m.status === 'delivered');
       for (const message of delivered) {
         try {
+          // Get source node for trace generation
+          const sourceNode = this.nodes.find(n => n.id === connection.source);
+          
           const result = handler.processData(targetNode, message, config);
           if (result) {
+            // Generate trace for this message
+            if (sourceNode) {
+              this.generateTraceForMessage(message, sourceNode, targetNode, connection, result);
+            }
+            
             // Message was processed, add to history and remove from queue
             this.addToHistory(message);
             messages.splice(messages.indexOf(message), 1);
@@ -300,6 +313,13 @@ export class DataFlowEngine {
         } catch (error) {
           message.status = 'failed';
           message.error = error instanceof Error ? error.message : 'Unknown error';
+          
+          // Generate trace for failed message
+          const sourceNode = this.nodes.find(n => n.id === connection.source);
+          if (sourceNode) {
+            this.generateTraceForMessage(message, sourceNode, targetNode, connection, message);
+          }
+          
           this.addToHistory(message);
           messages.splice(messages.indexOf(message), 1);
         }
@@ -392,6 +412,154 @@ export class DataFlowEngine {
     const baseLatency = config.latencyMs || 10;
     const jitter = (config.jitterMs || 0) * (Math.random() - 0.5);
     return Math.max(1, baseLatency + jitter);
+  }
+
+  /**
+   * Генерирует трассировку для сообщения
+   */
+  private generateTraceForMessage(
+    message: DataMessage,
+    sourceNode: CanvasNode,
+    targetNode: CanvasNode,
+    connection: CanvasConnection,
+    result: DataMessage
+  ): void {
+    // Получаем все Jaeger engines
+    const jaegerEngines = emulationEngine.getAllJaegerEngines();
+    if (jaegerEngines.size === 0) return;
+    
+    // Получаем или создаем trace context
+    let traceContext = message.metadata?.traceContext as TraceContext | undefined;
+    
+    if (!traceContext) {
+      // Создаем новый trace
+      const traceId = this.generateTraceId();
+      const spanId = this.generateSpanId();
+      
+      traceContext = {
+        traceId,
+        spanId,
+        sampled: true, // По умолчанию sampled, Jaeger применит sampling
+      };
+      
+      this.traceContexts.set(traceId, traceContext);
+    }
+    
+    // Создаем span для передачи сообщения
+    const startTime = message.timestamp * 1000; // convert to microseconds
+    const endTime = (message.timestamp + (message.latency || 0)) * 1000; // convert to microseconds
+    const duration = endTime - startTime;
+    
+    // Определяем operation name
+    const operationName = this.getOperationName(message, sourceNode, targetNode);
+    
+    // Создаем span
+    const span: JaegerSpan = {
+      traceId: traceContext.traceId,
+      spanId: traceContext.spanId,
+      parentSpanId: traceContext.parentSpanId,
+      operationName,
+      serviceName: sourceNode.data.label || sourceNode.type,
+      startTime,
+      duration,
+      tags: [
+        { key: 'component.type', value: sourceNode.type },
+        { key: 'target.component', value: targetNode.data.label || targetNode.type },
+        { key: 'target.type', value: targetNode.type },
+        { key: 'message.format', value: message.format },
+        { key: 'message.size', value: message.size },
+        { key: 'connection.id', value: connection.id },
+        { key: 'status', value: result.status },
+      ],
+      logs: [],
+    };
+    
+    // Добавляем error tag если есть ошибка
+    if (result.status === 'failed' || result.error) {
+      span.tags.push({ key: 'error', value: true });
+      span.logs.push({
+        timestamp: endTime,
+        fields: [
+          { key: 'event', value: 'error' },
+          { key: 'error.message', value: result.error || 'Unknown error' },
+        ],
+      });
+    }
+    
+    // Добавляем metadata как tags
+    if (message.metadata) {
+      for (const [key, value] of Object.entries(message.metadata)) {
+        if (key !== 'traceContext' && value !== undefined && value !== null) {
+          span.tags.push({ key: `metadata.${key}`, value: String(value) });
+        }
+      }
+    }
+    
+    // Отправляем span во все Jaeger engines
+    for (const [, jaegerEngine] of jaegerEngines) {
+      jaegerEngine.receiveSpan(span);
+    }
+    
+    // Обновляем trace context для следующего span (если сообщение продолжает путь)
+    if (result.status === 'delivered' && targetNode) {
+      const nextSpanId = this.generateSpanId();
+      const nextTraceContext: TraceContext = {
+        traceId: traceContext.traceId,
+        spanId: nextSpanId,
+        parentSpanId: traceContext.spanId,
+        sampled: traceContext.sampled,
+      };
+      
+      // Сохраняем в metadata результата для propagation
+      if (!result.metadata) {
+        result.metadata = {};
+      }
+      result.metadata.traceContext = nextTraceContext;
+    }
+  }
+
+  /**
+   * Генерирует уникальный trace ID
+   */
+  private generateTraceId(): string {
+    return `trace-${++this.traceIdCounter}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Генерирует уникальный span ID
+   */
+  private generateSpanId(): string {
+    return `span-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  /**
+   * Определяет operation name для span
+   */
+  private getOperationName(
+    message: DataMessage,
+    sourceNode: CanvasNode,
+    targetNode: CanvasNode
+  ): string {
+    // Пытаемся определить из metadata
+    if (message.metadata?.operation) {
+      return String(message.metadata.operation);
+    }
+    
+    // Определяем по типу компонентов
+    if (sourceNode.type === 'api-gateway' || sourceNode.type === 'kong' || sourceNode.type === 'apigee') {
+      return `HTTP ${message.metadata?.method || 'REQUEST'}`;
+    }
+    
+    if (sourceNode.type.includes('database') || sourceNode.type === 'postgres' || sourceNode.type === 'mongodb') {
+      return `DB ${message.metadata?.queryType || 'QUERY'}`;
+    }
+    
+    if (sourceNode.type.includes('queue') || sourceNode.type === 'rabbitmq' || sourceNode.type === 'kafka') {
+      return `MQ ${message.metadata?.queue || 'SEND'}`;
+    }
+    
+    // Дефолтное имя
+    return `${sourceNode.type} -> ${targetNode.type}`;
   }
 
   /**

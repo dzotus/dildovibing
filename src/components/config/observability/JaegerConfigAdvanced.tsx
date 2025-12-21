@@ -18,6 +18,9 @@ import {
   Trash2,
   Eye
 } from 'lucide-react';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { useEffect, useState, useMemo } from 'react';
 
 interface JaegerConfigProps {
   componentId: string;
@@ -51,25 +54,121 @@ interface JaegerConfig {
 
 export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { isRunning } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as JaegerConfig;
   const serverUrl = config.serverUrl || 'http://jaeger:16686';
-  const traces = config.traces || [
-    { id: 'abc123', service: 'web-api', operation: 'GET /users', duration: 125, spans: 8, status: 'success', timestamp: '2m ago' },
-    { id: 'def456', service: 'auth-service', operation: 'POST /login', duration: 89, spans: 5, status: 'success', timestamp: '5m ago' },
-    { id: 'ghi789', service: 'payment-service', operation: 'POST /charge', duration: 450, spans: 12, status: 'error', timestamp: '10m ago' },
-  ];
-  const services = config.services || [
-    { name: 'web-api', traces: 1250, errors: 45, avgDuration: 125 },
-    { name: 'auth-service', traces: 890, errors: 12, avgDuration: 89 },
-    { name: 'payment-service', traces: 450, errors: 23, avgDuration: 234 },
-  ];
-  const totalTraces = config.totalTraces || traces.length;
-  const errorRate = config.errorRate || 2.5;
-  const avgTraceDuration = config.avgTraceDuration || 156;
+  
+  // Получаем Jaeger engine для реальных данных
+  const jaegerEngine = emulationEngine.getJaegerEmulationEngine(componentId);
+  
+  // Получаем реальные трассировки и статистику
+  const [realTraces, setRealTraces] = useState<Trace[]>([]);
+  const [realServices, setRealServices] = useState<Service[]>([]);
+  const [realMetrics, setRealMetrics] = useState<{
+    totalTraces: number;
+    errorRate: number;
+    avgTraceDuration: number;
+  }>({
+    totalTraces: 0,
+    errorRate: 0,
+    avgTraceDuration: 0,
+  });
+
+  // Обновляем данные из Jaeger engine
+  useEffect(() => {
+    if (!jaegerEngine) {
+      // Если engine не инициализирован, показываем пустые данные
+      setRealTraces([]);
+      setRealServices([]);
+      setRealMetrics({
+        totalTraces: 0,
+        errorRate: 0,
+        avgTraceDuration: 0,
+      });
+      return;
+    }
+
+    const updateData = () => {
+      // Получаем последние трассировки
+      const traces = jaegerEngine.getRecentTraces(20);
+      const convertedTraces: Trace[] = traces.map(trace => {
+        const rootSpan = trace.spans.find(s => !s.parentSpanId) || trace.spans[0];
+        const durationMs = trace.duration / 1000; // convert from microseconds to ms
+        const timestamp = new Date(trace.startTime / 1000).toISOString(); // convert from microseconds to ms
+        const timeAgo = getTimeAgo(trace.startTime / 1000);
+        
+        return {
+          id: trace.traceId,
+          service: rootSpan?.serviceName || 'unknown',
+          operation: rootSpan?.operationName || 'unknown',
+          duration: Math.round(durationMs),
+          spans: trace.spanCount,
+          status: trace.hasErrors ? 'error' : 'success',
+          timestamp: timeAgo,
+        };
+      });
+      setRealTraces(convertedTraces);
+
+      // Получаем статистику сервисов
+      const serviceStats = jaegerEngine.getServiceStats();
+      const convertedServices: Service[] = serviceStats.map(stats => ({
+        name: stats.name,
+        traces: stats.tracesTotal,
+        errors: stats.errorsTotal,
+        avgDuration: Math.round(stats.avgDuration / 1000), // convert from microseconds to ms
+      }));
+      setRealServices(convertedServices);
+
+      // Получаем метрики
+      const metrics = jaegerEngine.getJaegerMetrics();
+      const load = jaegerEngine.calculateLoad();
+      const totalTraces = traces.length;
+      const errorCount = traces.filter(t => t.hasErrors).length;
+      const errorRate = totalTraces > 0 ? (errorCount / totalTraces) * 100 : 0;
+      const avgDuration = traces.length > 0 
+        ? traces.reduce((sum, t) => sum + (t.duration / 1000), 0) / traces.length 
+        : 0;
+
+      setRealMetrics({
+        totalTraces,
+        errorRate,
+        avgTraceDuration: Math.round(avgDuration),
+      });
+    };
+
+    updateData();
+    
+    // Обновляем данные периодически если симуляция запущена
+    if (isRunning) {
+      const interval = setInterval(updateData, 2000); // каждые 2 секунды
+      return () => clearInterval(interval);
+    }
+  }, [jaegerEngine, isRunning, componentId]);
+
+  // Используем только реальные данные (без fallback к конфигу)
+  const traces = realTraces;
+  const services = realServices;
+  const totalTraces = realMetrics.totalTraces;
+  const errorRate = realMetrics.errorRate;
+  const avgTraceDuration = realMetrics.avgTraceDuration;
+
+  // Функция для форматирования времени
+  function getTimeAgo(timestampMs: number): string {
+    const now = Date.now();
+    const diff = now - timestampMs;
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    
+    if (seconds < 60) return `${seconds}s ago`;
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
+  }
 
   const updateConfig = (updates: Partial<JaegerConfig>) => {
     updateNode(componentId, {
@@ -98,13 +197,9 @@ export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+              <div className={`h-2 w-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {isRunning ? 'Running' : 'Stopped'}
             </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              UI
-            </Button>
           </div>
         </div>
 
@@ -136,8 +231,14 @@ export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
                 <CardDescription>Distributed trace information</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {traces.map((trace) => (
+                {traces.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p className="text-sm">No traces available</p>
+                    <p className="text-xs mt-1">Traces will appear here when simulation is running</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {traces.map((trace) => (
                     <Card key={trace.id} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -159,7 +260,8 @@ export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
                       </CardHeader>
                     </Card>
                   ))}
-                </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -172,8 +274,14 @@ export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
                 <CardDescription>Service trace statistics</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {services.map((service) => (
+                {services.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p className="text-sm">No services available</p>
+                    <p className="text-xs mt-1">Service statistics will appear here when traces are collected</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {services.map((service) => (
                     <Card key={service.name} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -196,7 +304,8 @@ export function JaegerConfigAdvanced({ componentId }: JaegerConfigProps) {
                       </CardContent>
                     </Card>
                   ))}
-                </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

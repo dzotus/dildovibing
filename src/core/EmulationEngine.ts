@@ -22,6 +22,7 @@ import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/Con
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
+import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -177,6 +178,9 @@ export class EmulationEngine {
 
   // Loki emulation engines per node
   private lokiEngines: Map<string, LokiEmulationEngine> = new Map();
+  
+  // Jaeger emulation engines per node
+  private jaegerEngines: Map<string, JaegerEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -323,6 +327,9 @@ export class EmulationEngine {
         }
         if (node.type === 'grafana') {
           this.initializeGrafanaEngine(node);
+        }
+        if (node.type === 'jaeger') {
+          this.initializeJaegerEngine(node);
         }
       }
       
@@ -611,6 +618,11 @@ export class EmulationEngine {
     // Perform Loki retention (cleanup old logs)
     for (const [nodeId, lokiEngine] of this.lokiEngines.entries()) {
       lokiEngine.performRetention(now);
+    }
+    
+    // Perform Jaeger cleanup (TTL and trace limits)
+    for (const [nodeId, jaegerEngine] of this.jaegerEngines.entries()) {
+      jaegerEngine.performCleanup(now);
     }
     
     // Update connection metrics based on source/target throughput
@@ -4607,6 +4619,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Jaeger Emulation Engine for Jaeger node
+   */
+  private initializeJaegerEngine(node: CanvasNode): void {
+    const jaegerEngine = new JaegerEmulationEngine();
+    jaegerEngine.initializeConfig(node);
+    this.jaegerEngines.set(node.id, jaegerEngine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5001,6 +5022,20 @@ export class EmulationEngine {
    */
   public getLokiEmulationEngine(nodeId: string): LokiEmulationEngine | undefined {
     return this.lokiEngines.get(nodeId);
+  }
+
+  /**
+   * Get Jaeger emulation engine for a node
+   */
+  public getJaegerEmulationEngine(nodeId: string): JaegerEmulationEngine | undefined {
+    return this.jaegerEngines.get(nodeId);
+  }
+
+  /**
+   * Get all Jaeger emulation engines
+   */
+  public getAllJaegerEngines(): Map<string, JaegerEmulationEngine> {
+    return new Map(this.jaegerEngines);
   }
 
   /**
