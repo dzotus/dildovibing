@@ -99,6 +99,20 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
   const [editingBucketIndex, setEditingBucketIndex] = useState<number | null>(null);
   const [selectedBucket, setSelectedBucket] = useState<number | null>(null);
   const [showCreateRule, setShowCreateRule] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  
+  const handleRefresh = () => {
+    // Force re-render by updating timestamp in config
+    updateNode(componentId, {
+      data: {
+        ...node.data,
+        config: {
+          ...config,
+          _lastRefresh: Date.now(),
+        },
+      },
+    });
+  };
 
   const updateConfig = (updates: Partial<S3DataLakeConfig>) => {
     updateNode(componentId, {
@@ -142,11 +156,52 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
       transitions: [],
     };
     updateConfig({ lifecycleRules: [...lifecycleRules, newRule] });
-    setShowCreateRule(false);
+    setEditingRuleId(newRule.id);
   };
 
   const removeLifecycleRule = (id: string) => {
     updateConfig({ lifecycleRules: lifecycleRules.filter((r) => r.id !== id) });
+    if (editingRuleId === id) {
+      setEditingRuleId(null);
+    }
+  };
+
+  const updateLifecycleRule = (id: string, updates: Partial<LifecycleRule>) => {
+    const updatedRules = lifecycleRules.map(rule => 
+      rule.id === id ? { ...rule, ...updates } : rule
+    );
+    updateConfig({ lifecycleRules: updatedRules });
+  };
+
+  const addTransitionToRule = (ruleId: string) => {
+    const rule = lifecycleRules.find(r => r.id === ruleId);
+    if (!rule) return;
+    
+    const newTransition = {
+      days: 30,
+      storageClass: 'STANDARD_IA',
+    };
+    updateLifecycleRule(ruleId, {
+      transitions: [...(rule.transitions || []), newTransition],
+    });
+  };
+
+  const removeTransitionFromRule = (ruleId: string, transitionIndex: number) => {
+    const rule = lifecycleRules.find(r => r.id === ruleId);
+    if (!rule || !rule.transitions) return;
+    
+    const updatedTransitions = rule.transitions.filter((_, idx) => idx !== transitionIndex);
+    updateLifecycleRule(ruleId, { transitions: updatedTransitions });
+  };
+
+  const updateTransitionInRule = (ruleId: string, transitionIndex: number, updates: Partial<{ days: number; storageClass: string }>) => {
+    const rule = lifecycleRules.find(r => r.id === ruleId);
+    if (!rule || !rule.transitions) return;
+    
+    const updatedTransitions = rule.transitions.map((transition, idx) =>
+      idx === transitionIndex ? { ...transition, ...updates } : transition
+    );
+    updateLifecycleRule(ruleId, { transitions: updatedTransitions });
   };
 
   const totalBuckets = buckets.length;
@@ -173,13 +228,13 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleRefresh}
+            >
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              AWS Console
             </Button>
           </div>
         </div>
@@ -433,30 +488,182 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
                 {lifecycleRules.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No lifecycle rules configured</p>
                 ) : (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                     {lifecycleRules.map((rule) => (
                       <Card key={rule.id} className="border-l-4 border-l-green-500">
-                        <CardContent className="pt-4">
+                        <CardContent className="pt-4 space-y-4">
                           <div className="flex items-center justify-between">
                             <div className="flex-1">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <Badge variant={rule.status === 'Enabled' ? 'default' : 'outline'}>
                                   {rule.status}
                                 </Badge>
-                                <span className="font-medium">{rule.name}</span>
+                                {editingRuleId === rule.id ? (
+                                  <Input
+                                    value={rule.name}
+                                    onChange={(e) => updateLifecycleRule(rule.id, { name: e.target.value })}
+                                    className="w-48"
+                                  />
+                                ) : (
+                                  <span className="font-medium">{rule.name}</span>
+                                )}
                                 {rule.prefix && (
                                   <Badge variant="outline">Prefix: {rule.prefix}</Badge>
                                 )}
                               </div>
                             </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeLifecycleRule(rule.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex gap-2">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setEditingRuleId(editingRuleId === rule.id ? null : rule.id)}
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeLifecycleRule(rule.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           </div>
+
+                          {editingRuleId === rule.id && (
+                            <div className="space-y-4 pt-4 border-t">
+                              {/* Rule Name */}
+                              <div className="space-y-2">
+                                <Label>Rule Name</Label>
+                                <Input
+                                  value={rule.name}
+                                  onChange={(e) => updateLifecycleRule(rule.id, { name: e.target.value })}
+                                />
+                              </div>
+
+                              {/* Status */}
+                              <div className="flex items-center justify-between">
+                                <Label>Status</Label>
+                                <Select
+                                  value={rule.status}
+                                  onValueChange={(value: 'Enabled' | 'Disabled') => 
+                                    updateLifecycleRule(rule.id, { status: value })
+                                  }
+                                >
+                                  <SelectTrigger className="w-32">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="Enabled">Enabled</SelectItem>
+                                    <SelectItem value="Disabled">Disabled</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
+                              {/* Prefix */}
+                              <div className="space-y-2">
+                                <Label>Prefix (optional)</Label>
+                                <Input
+                                  value={rule.prefix || ''}
+                                  onChange={(e) => updateLifecycleRule(rule.id, { prefix: e.target.value || undefined })}
+                                  placeholder="logs/"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Apply rule to objects with keys starting with this prefix
+                                </p>
+                              </div>
+
+                              {/* Transitions */}
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <Label>Transitions</Label>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => addTransitionToRule(rule.id)}
+                                  >
+                                    <Plus className="h-4 w-4 mr-2" />
+                                    Add Transition
+                                  </Button>
+                                </div>
+                                {rule.transitions && rule.transitions.length > 0 ? (
+                                  <div className="space-y-2">
+                                    {rule.transitions.map((transition, idx) => (
+                                      <div key={idx} className="flex gap-2 items-center p-2 border rounded">
+                                        <div className="flex-1 grid grid-cols-2 gap-2">
+                                          <div>
+                                            <Label className="text-xs">Days</Label>
+                                            <Input
+                                              type="number"
+                                              value={transition.days}
+                                              onChange={(e) => updateTransitionInRule(rule.id, idx, { days: Number(e.target.value) })}
+                                              min={1}
+                                            />
+                                          </div>
+                                          <div>
+                                            <Label className="text-xs">Storage Class</Label>
+                                            <Select
+                                              value={transition.storageClass}
+                                              onValueChange={(value) => updateTransitionInRule(rule.id, idx, { storageClass: value })}
+                                            >
+                                              <SelectTrigger>
+                                                <SelectValue />
+                                              </SelectTrigger>
+                                              <SelectContent>
+                                                <SelectItem value="STANDARD_IA">STANDARD_IA</SelectItem>
+                                                <SelectItem value="GLACIER">GLACIER</SelectItem>
+                                                <SelectItem value="DEEP_ARCHIVE">DEEP_ARCHIVE</SelectItem>
+                                                <SelectItem value="INTELLIGENT_TIERING">INTELLIGENT_TIERING</SelectItem>
+                                              </SelectContent>
+                                            </Select>
+                                          </div>
+                                        </div>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          onClick={() => removeTransitionFromRule(rule.id, idx)}
+                                        >
+                                          <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">No transitions configured</p>
+                                )}
+                              </div>
+
+                              {/* Expiration */}
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <Label>Expiration</Label>
+                                  <Switch
+                                    checked={!!rule.expiration}
+                                    onCheckedChange={(checked) => 
+                                      updateLifecycleRule(rule.id, { 
+                                        expiration: checked ? { days: 365 } : undefined 
+                                      })
+                                    }
+                                  />
+                                </div>
+                                {rule.expiration && (
+                                  <div className="flex items-center gap-2">
+                                    <Label className="text-xs">Delete after</Label>
+                                    <Input
+                                      type="number"
+                                      value={rule.expiration.days}
+                                      onChange={(e) => updateLifecycleRule(rule.id, { 
+                                        expiration: { days: Number(e.target.value) }
+                                      })}
+                                      min={1}
+                                      className="w-24"
+                                    />
+                                    <Label className="text-xs">days</Label>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     ))}

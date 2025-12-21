@@ -91,6 +91,9 @@ export class DataFlowEngine {
     this.registerHandler('snowflake', this.createDatabaseHandler('snowflake'));
     this.registerHandler('elasticsearch', this.createDatabaseHandler('elasticsearch'));
     
+    // Storage - object storage
+    this.registerHandler('s3-datalake', this.createStorageHandler('s3-datalake'));
+    
     // Message brokers - pass through messages
     this.registerHandler('kafka', this.createMessageBrokerHandler('kafka'));
     this.registerHandler('rabbitmq', this.createMessageBrokerHandler('rabbitmq'));
@@ -1045,6 +1048,175 @@ export class DataFlowEngine {
       message.status = 'failed';
       message.error = result.error || 'Elasticsearch operation failed';
       message.latency = result.latency || result.took || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Create handler for storage components (S3, etc.)
+   */
+  private createStorageHandler(type: string): ComponentDataHandler {
+    if (type === 's3-datalake') {
+      return {
+        processData: (node, message, config) => {
+          return this.processS3Operation(node, message, config);
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text', 'xml'],
+      };
+    }
+    
+    // Default storage handler
+    return {
+      processData: (node, message, config) => {
+        // Generic storage processing
+        message.status = 'delivered';
+        message.latency = 50;
+        return message;
+      },
+      
+      getSupportedFormats: () => ['json', 'binary', 'text'],
+    };
+  }
+
+  /**
+   * Process S3 operation using S3RoutingEngine
+   */
+  private processS3Operation(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get S3RoutingEngine from emulationEngine
+    const s3Engine = emulationEngine.getS3RoutingEngine(node.id);
+    if (!s3Engine) {
+      message.status = 'failed';
+      message.error = 'S3 Routing Engine not initialized';
+      return message;
+    }
+
+    // Extract operation from payload
+    const operation = payload?.operation || payload?.method || 'PUT';
+    const bucketName = payload?.bucket || payload?.bucketName || (node.data.config as any)?.buckets?.[0]?.name || 'default-bucket';
+    const key = payload?.key || payload?.objectKey || message.metadata?.key as string;
+    const versionId = payload?.versionId || message.metadata?.versionId as string;
+    
+    let result: any;
+
+    switch (operation.toUpperCase()) {
+      case 'PUT':
+      case 'UPLOAD':
+        if (!key || !message.payload) {
+          message.status = 'failed';
+          message.error = 'PUT operation requires key and payload';
+          return message;
+        }
+        
+        const data = payload?.data || payload?.body || message.payload;
+        const contentType = payload?.contentType || message.metadata?.contentType as string;
+        const metadata = payload?.metadata || message.metadata as Record<string, string>;
+        
+        result = s3Engine.putObject(
+          bucketName,
+          key,
+          data,
+          message.size,
+          metadata,
+          contentType
+        );
+        break;
+
+      case 'GET':
+      case 'DOWNLOAD':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'GET operation requires key';
+          return message;
+        }
+        result = s3Engine.getObject(bucketName, key, versionId);
+        break;
+
+      case 'DELETE':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'DELETE operation requires key';
+          return message;
+        }
+        result = s3Engine.deleteObject(bucketName, key, versionId);
+        break;
+
+      case 'LIST':
+        const prefix = payload?.prefix || message.metadata?.prefix as string;
+        const maxKeys = payload?.maxKeys || payload?.maxKeys || 1000;
+        result = s3Engine.listObjects(bucketName, prefix, maxKeys);
+        break;
+
+      case 'HEAD':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'HEAD operation requires key';
+          return message;
+        }
+        result = s3Engine.headObject(bucketName, key);
+        break;
+
+      default:
+        message.status = 'failed';
+        message.error = `Unsupported S3 operation: ${operation}`;
+        return message;
+    }
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || 50;
+      
+      // Update payload with operation result
+      if (result.object) {
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          object: result.object,
+          etag: result.object.etag,
+          versionId: result.versionId || result.object.versionId,
+          size: result.object.size,
+          storageClass: result.object.storageClass,
+        };
+      } else if (result.objects) {
+        message.payload = {
+          ...(message.payload as any),
+          operation: 'LIST',
+          bucket: bucketName,
+          objects: result.objects,
+          count: result.objects.length,
+        };
+      } else {
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          success: true,
+          versionId: result.versionId,
+          deleteMarker: result.deleteMarker,
+        };
+      }
+      
+      message.metadata = {
+        ...message.metadata,
+        s3Operation: operation.toUpperCase(),
+        bucket: bucketName,
+        key: key,
+        latency: result.latency,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || `S3 ${operation} operation failed`;
+      message.latency = result.latency || 0;
     }
 
     return message;

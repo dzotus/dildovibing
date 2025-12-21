@@ -17,6 +17,7 @@ import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
 import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
+import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -159,6 +160,9 @@ export class EmulationEngine {
   // Elasticsearch routing engines per node
   private elasticsearchRoutingEngines: Map<string, ElasticsearchRoutingEngine> = new Map();
   
+  // S3 routing engines per node
+  private s3RoutingEngines: Map<string, S3RoutingEngine> = new Map();
+  
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
@@ -299,6 +303,9 @@ export class EmulationEngine {
         if (node.type === 'elasticsearch') {
           this.initializeElasticsearchRoutingEngine(node);
         }
+        if (node.type === 's3-datalake') {
+          this.initializeS3RoutingEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -423,6 +430,8 @@ export class EmulationEngine {
         this.cassandraRoutingEngines.delete(nodeId);
         this.clickHouseRoutingEngines.delete(nodeId);
         this.snowflakeRoutingEngines.delete(nodeId);
+        this.elasticsearchRoutingEngines.delete(nodeId);
+        this.s3RoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -1033,7 +1042,7 @@ export class EmulationEngine {
       if (!sourceNode) continue;
       
       // Get producer principal (clientId or component ID)
-      const producerConfig = sourceNode.data.config || {};
+      const producerConfig = (sourceNode.data.config || {}) as any;
       const producerPrincipal = producerConfig.messaging?.producerId || 
                                 producerConfig.clientId || 
                                 `User:${sourceNode.id.slice(0, 8)}`;
@@ -1869,6 +1878,7 @@ export class EmulationEngine {
     }
     
     // Check ACL for consumers (Read operations on queues)
+    const queues = activeMQConfig.queues || [];
     for (const queue of queues) {
       if (queue.consumerCount && queue.consumerCount > 0) {
         // Simplified: check if any principal has read permission for this queue
@@ -2127,7 +2137,7 @@ export class EmulationEngine {
       
       connections.push({
         id: conn.id,
-        remoteAddress: `${sourceNode.label || sourceNode.id}`,
+        remoteAddress: `${sourceNode.data.label || sourceNode.id}`,
         clientId: `client-${conn.source.slice(0, 8)}`,
         userName: activeMQConfig.username || 'admin',
         connectedSince: new Date().toISOString(),
@@ -3263,6 +3273,103 @@ export class EmulationEngine {
       return; // Early return for Elasticsearch
     }
     
+    // Для S3 Data Lake используем S3RoutingEngine
+    if (node.type === 's3-datalake') {
+      if (!this.s3RoutingEngines.has(node.id)) {
+        this.initializeS3RoutingEngine(node);
+      }
+      
+      const routingEngine = this.s3RoutingEngines.get(node.id)!;
+      
+      // Process lifecycle transitions periodically
+      routingEngine.processLifecycleTransitions();
+      
+      if (!hasIncomingConnections) {
+        // No incoming data, reset metrics but keep bucket state
+        metrics.throughput = 0;
+        metrics.latency = 50; // Base latency for S3 (AWS API latency)
+        metrics.errorRate = 0;
+        
+        // Calculate utilization from storage usage
+        const bucketMetrics = routingEngine.getAllBucketMetrics();
+        const totalSize = routingEngine.getTotalStorageSize();
+        const totalObjects = routingEngine.getTotalObjectCount();
+        
+        // Utilization based on storage (assuming max 1TB per bucket)
+        const maxStoragePerBucket = 1024 * 1024 * 1024 * 1024; // 1TB
+        const bucketCount = bucketMetrics.size;
+        const maxTotalStorage = maxStoragePerBucket * bucketCount;
+        metrics.utilization = maxTotalStorage > 0 ? Math.min(1, totalSize / maxTotalStorage) : 0;
+        
+        metrics.customMetrics = {
+          'buckets': bucketCount,
+          'total_objects': totalObjects,
+          'total_size': totalSize,
+          'total_size_mb': Math.round(totalSize / (1024 * 1024) * 100) / 100,
+        };
+        
+        // Update bucket metrics in config
+        this.updateS3BucketMetricsInConfig(node, bucketMetrics);
+        return;
+      }
+      
+      // Calculate incoming throughput from connections
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let totalThroughput = 0;
+      let totalTraffic = 0;
+      
+      for (const conn of incomingConnections) {
+        const connMetrics = this.connectionMetrics.get(conn.id);
+        if (connMetrics) {
+          totalThroughput += connMetrics.traffic / 1024; // Convert bytes/sec to KB/sec
+          totalTraffic += connMetrics.traffic;
+        }
+      }
+      
+      // Estimate operations per second based on traffic
+      // Assume average object size of 1MB
+      const avgObjectSize = 1024 * 1024; // 1MB
+      const estimatedOpsPerSec = totalTraffic > 0 ? totalTraffic / avgObjectSize : 0;
+      
+      metrics.throughput = Math.max(0, estimatedOpsPerSec);
+      metrics.latency = 50 + (estimatedOpsPerSec > 100 ? (estimatedOpsPerSec - 100) * 0.1 : 0); // Increase latency with load
+      metrics.errorRate = 0.001; // Very low error rate for S3
+      
+      // Utilization based on storage and operations
+      const bucketMetrics = routingEngine.getAllBucketMetrics();
+      const totalSize = routingEngine.getTotalStorageSize();
+      const totalObjects = routingEngine.getTotalObjectCount();
+      const bucketCount = bucketMetrics.size;
+      
+      // Storage utilization (assuming max 1TB per bucket)
+      const maxStoragePerBucket = 1024 * 1024 * 1024 * 1024; // 1TB
+      const maxTotalStorage = maxStoragePerBucket * bucketCount;
+      const storageUtilization = maxTotalStorage > 0 ? Math.min(1, totalSize / maxTotalStorage) : 0;
+      
+      // Operations utilization (assuming max 3500 PUT/POST/DELETE per second per bucket)
+      const maxOpsPerBucket = 3500;
+      const maxTotalOps = maxOpsPerBucket * bucketCount;
+      const opsUtilization = maxTotalOps > 0 ? Math.min(1, estimatedOpsPerSec / maxTotalOps) : 0;
+      
+      metrics.utilization = Math.max(storageUtilization, opsUtilization);
+      
+      metrics.customMetrics = {
+        'buckets': bucketCount,
+        'total_objects': totalObjects,
+        'total_size': totalSize,
+        'total_size_mb': Math.round(totalSize / (1024 * 1024) * 100) / 100,
+        'total_size_gb': Math.round(totalSize / (1024 * 1024 * 1024) * 100) / 100,
+        'estimated_ops_per_sec': Math.round(estimatedOpsPerSec * 100) / 100,
+        'storage_utilization': Math.round(storageUtilization * 1000) / 10,
+        'ops_utilization': Math.round(opsUtilization * 1000) / 10,
+      };
+      
+      // Update bucket metrics in config
+      this.updateS3BucketMetricsInConfig(node, bucketMetrics);
+      
+      return; // Early return for S3
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -4136,6 +4243,53 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize S3 Routing Engine for S3 Data Lake node
+   */
+  private initializeS3RoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new S3RoutingEngine();
+
+    // Convert UI bucket format to S3 routing engine format
+    const buckets = (config.buckets || []).map((b: any) => ({
+      name: b.name,
+      region: b.region || config.defaultRegion || 'us-east-1',
+      versioning: b.versioning || false,
+      encryption: b.encryption || 'AES256',
+      lifecycleEnabled: b.lifecycleEnabled || false,
+      lifecycleDays: b.lifecycleDays,
+      glacierEnabled: b.glacierEnabled || false,
+      glacierDays: b.glacierDays,
+      publicAccess: b.publicAccess || false,
+      lifecycleRules: config.lifecycleRules || [], // Share lifecycle rules across buckets or use bucket-specific rules
+    }));
+
+    routingEngine.initialize({
+      buckets: buckets,
+      defaultRegion: config.defaultRegion || 'us-east-1',
+    });
+
+    this.s3RoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Initialize PostgreSQL Connection Pool for a node
+   */
+  private initializePostgreSQLConnectionPool(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const poolConfig: ConnectionPoolConfig = {
+      maxConnections: config.maxConnections || 100,
+      minConnections: config.minConnections || 0,
+      idleTimeout: config.idleTimeout || 300000,
+      maxLifetime: config.maxLifetime || 3600000,
+      connectionTimeout: config.connectionTimeout || 5000,
+    };
+    
+    const pool = new PostgreSQLConnectionPool(poolConfig);
+    this.postgresConnectionPools.set(node.id, pool);
+  }
+
+  /**
    * Update Elasticsearch metrics in node config (for UI display)
    */
   private updateElasticsearchMetricsInConfig(
@@ -4183,6 +4337,32 @@ export class EmulationEngine {
   }
 
   /**
+   * Update S3 bucket metrics in node config (for UI display)
+   */
+  private updateS3BucketMetricsInConfig(
+    node: CanvasNode,
+    bucketMetrics: Map<string, { bucket: string; objectCount: number; totalSize: number; versionsCount: number; putCount: number; getCount: number; deleteCount: number; listCount: number; errorCount: number; averageLatency: number; lastOperation?: number }>
+  ): void {
+    const config = (node.data.config as any) || {};
+    const buckets = config.buckets || [];
+    
+    // Update buckets with runtime metrics
+    for (let i = 0; i < buckets.length; i++) {
+      const bucket = buckets[i];
+      const metrics = bucketMetrics.get(bucket.name);
+      if (metrics) {
+        buckets[i] = {
+          ...bucket,
+          objectCount: metrics.objectCount,
+          totalSize: metrics.totalSize,
+        };
+      }
+    }
+    
+    config.buckets = buckets;
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -4211,6 +4391,38 @@ export class EmulationEngine {
     const networkLatency = 2 + Math.random() * 8 + configuredLatency + jitter;
     
     return connLatency + (sourceLatency + targetLatency) / 2 + networkLatency;
+  }
+
+  /**
+   * Calculate cache hit ratio for PostgreSQL
+   * Returns a value between 0 and 1 representing the cache hit ratio
+   */
+  private calculateCacheHitRatio(node: CanvasNode, queriesPerSecond: number): number {
+    // Base cache hit ratio depends on query patterns and workload
+    // Higher query throughput with repeated patterns = better cache hit ratio
+    // Very high throughput might overwhelm cache = lower hit ratio
+    
+    // Base cache hit ratio (typical PostgreSQL shared_buffers cache hit ratio is 95-99%)
+    let baseRatio = 0.95;
+    
+    // Adjust based on query throughput
+    // Moderate throughput (100-1000 qps) = optimal cache utilization
+    if (queriesPerSecond > 0 && queriesPerSecond < 100) {
+      // Low throughput: cache might not be fully utilized
+      baseRatio = 0.90 + Math.random() * 0.05; // 90-95%
+    } else if (queriesPerSecond >= 100 && queriesPerSecond < 1000) {
+      // Moderate throughput: optimal cache utilization
+      baseRatio = 0.95 + Math.random() * 0.04; // 95-99%
+    } else if (queriesPerSecond >= 1000) {
+      // High throughput: cache might be overwhelmed
+      baseRatio = 0.92 + Math.random() * 0.05; // 92-97%
+    }
+    
+    // Add some variation based on simulation time (cache warming effect)
+    const timeVariation = Math.sin(this.simulationTime / 10000) * 0.02; // ±2% variation
+    
+    // Ensure ratio stays within reasonable bounds (85-99%)
+    return Math.max(0.85, Math.min(0.99, baseRatio + timeVariation));
   }
 
   /**
