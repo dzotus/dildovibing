@@ -22,13 +22,14 @@ import {
   FileText,
   Play,
   RefreshCcw,
-  Cloud,
   Code,
   Layers,
   AlertCircle
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { showSuccess, showError } from '@/utils/toast';
 
 interface ElasticsearchConfigProps {
   componentId: string;
@@ -76,7 +77,7 @@ interface ElasticsearchConfig {
 }
 
 export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -94,7 +95,20 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
   const password = config.password || '';
   const indices = config.indices || [];
   const queries = config.queries || [];
-  const clusterHealth = config.clusterHealth || 'green';
+  
+  // Check if component has connections - if not, show red/yellow health
+  const hasConnections = connections.some(conn => conn.source === componentId || conn.target === componentId);
+  const elasticsearchEngine = (emulationEngine as any).elasticsearchRoutingEngines?.get(componentId);
+  const engineMetrics = elasticsearchEngine?.getMetrics();
+  
+  // Determine cluster health: use engine metrics if available and connected, otherwise show status based on connections
+  let clusterHealth: 'green' | 'yellow' | 'red' = config.clusterHealth || 'green';
+  if (engineMetrics) {
+    clusterHealth = engineMetrics.clusterHealth;
+  } else if (!hasConnections) {
+    // If no connections and no engine, show yellow (not fully operational)
+    clusterHealth = 'yellow';
+  }
   const activeShards = config.activeShards || 10;
   const relocatingShards = config.relocatingShards || 0;
   const initializingShards = config.initializingShards || 0;
@@ -104,6 +118,53 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
   const [editingIndexIndex, setEditingIndexIndex] = useState<number | null>(null);
   const [showQueryEditor, setShowQueryEditor] = useState(false);
   const [queryText, setQueryText] = useState('');
+  const [queryError, setQueryError] = useState<string>('');
+  const [refreshIntervalError, setRefreshIntervalError] = useState<string>('');
+
+  const handleRefresh = () => {
+    const elasticsearchEngine = (emulationEngine as any).elasticsearchRoutingEngines?.get(componentId);
+    if (!elasticsearchEngine) {
+      showError('Elasticsearch engine not initialized. Please start emulation first.');
+      return;
+    }
+    
+    // Get latest metrics and state from engine
+    const metrics = elasticsearchEngine.getMetrics();
+    const engineIndices = elasticsearchEngine.getIndices();
+    const recentQueries = elasticsearchEngine.getRecentQueries(100);
+    
+    // Update indices in config with runtime state
+    const updatedIndices = engineIndices.map((engineIdx: any) => {
+      const configIdx = indices.find(i => i.name === engineIdx.name);
+      return {
+        ...engineIdx,
+        // Preserve config settings
+        shards: configIdx?.shards ?? engineIdx.shards,
+        replicas: configIdx?.replicas ?? engineIdx.replicas,
+      };
+    });
+    
+    // Update config with refreshed data
+    updateConfig({
+      indices: updatedIndices.length > 0 ? updatedIndices : indices,
+      queries: recentQueries.map((q: any) => ({
+        id: `query-${Date.now()}-${Math.random()}`,
+        query: JSON.stringify(q.query || q.queryString || '', null, 2),
+        status: q.success ? 'success' : 'error',
+        duration: q.latency,
+        hits: q.hits,
+        took: q.took,
+      })).slice(0, 100),
+      clusterHealth: metrics.clusterHealth,
+      activeShards: metrics.activeShards,
+      relocatingShards: metrics.relocatingShards,
+      initializingShards: metrics.initializingShards,
+      totalDocs: metrics.totalDocs,
+      totalSize: metrics.totalSize,
+    });
+    
+    showSuccess('Elasticsearch metrics refreshed');
+  };
 
   const updateConfig = (updates: Partial<ElasticsearchConfig>) => {
     updateNode(componentId, {
@@ -150,6 +211,24 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
     return validateNodes();
   };
 
+  const validateRefreshInterval = (value: string): boolean => {
+    if (!value.trim()) {
+      setRefreshIntervalError('Refresh interval cannot be empty');
+      return false;
+    }
+    
+    // Elasticsearch refresh interval format: number + unit (s, m, h, d)
+    // Examples: 1s, 5m, 1h, -1 (disabled)
+    const pattern = /^-1$|^\d+[smhd]$/i;
+    if (!pattern.test(value.trim())) {
+      setRefreshIntervalError('Invalid format. Use format like: 1s, 5m, 1h, or -1 to disable');
+      return false;
+    }
+    
+    setRefreshIntervalError('');
+    return true;
+  };
+
   const addNode = () => {
     updateConfig({ nodes: [...nodesList, 'localhost:9201'] });
   };
@@ -180,20 +259,105 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
     updateConfig({ indices: newIndices });
   };
 
-  const executeQuery = () => {
-    if (!queryText.trim()) return;
+  const validateQuery = (query: string): { valid: boolean; error?: string } => {
+    if (!query.trim()) {
+      return { valid: false, error: 'Query cannot be empty' };
+    }
     
-    const newQuery: Query = {
-      id: `query-${Date.now()}`,
-      query: queryText,
-      status: 'running',
-      duration: 0,
-      hits: 0,
-      took: 0,
-    };
-    updateConfig({ queries: [newQuery, ...queries.slice(0, 9)] });
-    setQueryText('');
-    setShowQueryEditor(false);
+    // Try to parse as JSON if it looks like JSON
+    const trimmed = query.trim();
+    if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+      try {
+        JSON.parse(trimmed);
+      } catch (e) {
+        return { valid: false, error: 'Invalid JSON format' };
+      }
+    }
+    
+    // Check if it's a valid Elasticsearch API call format
+    const lines = trimmed.split('\n');
+    if (lines.length > 1) {
+      const firstLine = lines[0].trim();
+      if (!firstLine.match(/^(GET|POST|PUT|DELETE)\s+/)) {
+        return { valid: false, error: 'API call format should start with HTTP method (GET, POST, PUT, DELETE)' };
+      }
+      
+      // Try to parse JSON body if present
+      if (lines.length > 1) {
+        const body = lines.slice(1).join('\n').trim();
+        if (body && (body.startsWith('{') || body.startsWith('['))) {
+          try {
+            JSON.parse(body);
+          } catch (e) {
+            return { valid: false, error: 'Invalid JSON in request body' };
+          }
+        }
+      }
+    }
+    
+    return { valid: true };
+  };
+
+  const executeQuery = () => {
+    if (!queryText.trim()) {
+      setQueryError('Query cannot be empty');
+      return;
+    }
+    
+    const validation = validateQuery(queryText);
+    if (!validation.valid) {
+      setQueryError(validation.error || 'Invalid query format');
+      return;
+    }
+    
+    setQueryError('');
+    
+    // Try to execute query through engine if available
+    let queryResult: Query | null = null;
+    if (elasticsearchEngine) {
+      try {
+        const result = elasticsearchEngine.executeQuery(queryText);
+        queryResult = {
+          id: `query-${Date.now()}`,
+          query: queryText,
+          status: result.success ? 'success' : 'error',
+          duration: result.latency || result.took || 0,
+          hits: result.hits,
+          took: result.took,
+        };
+      } catch (error) {
+        queryResult = {
+          id: `query-${Date.now()}`,
+          query: queryText,
+          status: 'error',
+          duration: 0,
+          hits: 0,
+          took: 0,
+        };
+      }
+    } else {
+      // If engine not available, just mark as running (simulation)
+      queryResult = {
+        id: `query-${Date.now()}`,
+        query: queryText,
+        status: 'running',
+        duration: 0,
+        hits: 0,
+        took: 0,
+      };
+    }
+    
+    if (queryResult) {
+      updateConfig({ queries: [queryResult, ...queries.slice(0, 99)] });
+      setQueryText('');
+      setShowQueryEditor(false);
+      showSuccess('Query executed');
+    }
+  };
+
+  const deleteQuery = (queryId: string) => {
+    updateConfig({ queries: queries.filter(q => q.id !== queryId) });
+    showSuccess('Query deleted');
   };
 
   const getHealthColor = (health: string) => {
@@ -233,13 +397,9 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
               } animate-pulse`} />
               {clusterHealth === 'green' ? 'Healthy' : clusterHealth === 'yellow' ? 'Degraded' : 'Unhealthy'}
             </Badge>
-            <Button size="sm" variant="outline">
+            <Button size="sm" variant="outline" onClick={handleRefresh}>
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
-            </Button>
-            <Button size="sm" variant="outline">
-              <Cloud className="h-4 w-4 mr-2" />
-              Kibana
             </Button>
           </div>
         </div>
@@ -328,22 +488,36 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {indices.map((idx, index) => (
+                  {indices.map((idx, index) => {
+                    // Get health from engine if available, otherwise use config
+                    let indexHealth = idx.health;
+                    if (elasticsearchEngine) {
+                      const engineIndices = elasticsearchEngine.getIndices();
+                      const engineIndex = engineIndices.find(ei => ei.name === idx.name);
+                      if (engineIndex) {
+                        indexHealth = engineIndex.health;
+                      }
+                    } else if (!hasConnections) {
+                      // If no connections, show yellow for indices
+                      indexHealth = 'yellow';
+                    }
+                    
+                    return (
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <div className={`h-3 w-3 rounded-full ${getHealthColor(idx.health)}`} />
+                            <div className={`h-3 w-3 rounded-full ${getHealthColor(indexHealth)}`} />
                             <div>
                               <CardTitle className="text-lg">{idx.name}</CardTitle>
                               <CardDescription className="text-xs mt-1">
-                                {idx.shards} shards • {idx.replicas} replicas • Health: {idx.health}
+                                {idx.shards} shards • {idx.replicas} replicas • Health: {indexHealth}
                               </CardDescription>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
-                            <Badge variant={idx.health === 'green' ? 'default' : idx.health === 'yellow' ? 'secondary' : 'destructive'}>
-                              {idx.health}
+                            <Badge variant={indexHealth === 'green' ? 'default' : indexHealth === 'yellow' ? 'secondary' : 'destructive'}>
+                              {indexHealth}
                             </Badge>
                             {indices.length > 1 && (
                               <Button
@@ -414,7 +588,8 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                         )}
                       </CardContent>
                     </Card>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -443,23 +618,41 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                     </CardHeader>
                     <CardContent className="space-y-4">
                       <div className="space-y-2">
-                        <Label>Query (JSON)</Label>
+                        <Label>Query (JSON or Elasticsearch API)</Label>
                         <Textarea
                           value={queryText}
-                          onChange={(e) => setQueryText(e.target.value)}
+                          onChange={(e) => {
+                            setQueryText(e.target.value);
+                            if (queryError) setQueryError('');
+                          }}
+                          onBlur={() => {
+                            if (queryText.trim()) {
+                              const validation = validateQuery(queryText);
+                              if (!validation.valid) {
+                                setQueryError(validation.error || 'Invalid query format');
+                              }
+                            }
+                          }}
                           placeholder='GET /_search\n{\n  "query": {\n    "match_all": {}\n  }\n}'
                           rows={8}
-                          className="font-mono text-sm"
+                          className={`font-mono text-sm ${queryError ? 'border-destructive' : ''}`}
                         />
+                        {queryError && (
+                          <div className="flex items-center gap-1 text-sm text-destructive">
+                            <AlertCircle className="h-4 w-4" />
+                            <span>{queryError}</span>
+                          </div>
+                        )}
                       </div>
                       <div className="flex gap-2">
-                        <Button onClick={executeQuery} disabled={!queryText.trim()}>
+                        <Button onClick={executeQuery} disabled={!queryText.trim() || !!queryError}>
                           <Play className="h-4 w-4 mr-2" />
                           Execute
                         </Button>
                         <Button variant="outline" onClick={() => {
                           setShowQueryEditor(false);
                           setQueryText('');
+                          setQueryError('');
                         }}>
                           Cancel
                         </Button>
@@ -494,6 +687,14 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                                 {query.query}
                               </pre>
                             </div>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => deleteQuery(query.id)}
+                              className="ml-2"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </CardContent>
                       </Card>
@@ -617,18 +818,6 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                   >
                     Сохранить настройки
                   </Button>
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      if (validateConnectionFields()) {
-                        showSuccess('Параметры подключения валидны');
-                      } else {
-                        showError('Пожалуйста, укажите хотя бы один корректный узел (host:port)');
-                      }
-                    }}
-                  >
-                    Проверить подключение
-                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -742,10 +931,23 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                   <Input
                     id="refresh-interval"
                     value={refreshInterval}
-                    onChange={(e) => updateConfig({ refreshInterval: e.target.value })}
+                    onChange={(e) => {
+                      updateConfig({ refreshInterval: e.target.value });
+                      if (refreshIntervalError) {
+                        validateRefreshInterval(e.target.value);
+                      }
+                    }}
+                    onBlur={(e) => validateRefreshInterval(e.target.value)}
                     placeholder="1s"
+                    className={refreshIntervalError ? 'border-destructive' : ''}
                   />
-                  <p className="text-xs text-muted-foreground">How often to refresh the index (e.g., 1s, 5m)</p>
+                  {refreshIntervalError && (
+                    <div className="flex items-center gap-1 text-sm text-destructive">
+                      <AlertCircle className="h-4 w-4" />
+                      <span>{refreshIntervalError}</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-muted-foreground">How often to refresh the index (e.g., 1s, 5m, 1h, or -1 to disable)</p>
                 </div>
               </CardContent>
             </Card>

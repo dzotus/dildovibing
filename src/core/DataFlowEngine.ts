@@ -89,6 +89,7 @@ export class DataFlowEngine {
     this.registerHandler('cassandra', this.createDatabaseHandler('cassandra'));
     this.registerHandler('clickhouse', this.createDatabaseHandler('clickhouse'));
     this.registerHandler('snowflake', this.createDatabaseHandler('snowflake'));
+    this.registerHandler('elasticsearch', this.createDatabaseHandler('elasticsearch'));
     
     // Message brokers - pass through messages
     this.registerHandler('kafka', this.createMessageBrokerHandler('kafka'));
@@ -553,6 +554,11 @@ export class DataFlowEngine {
           return this.processSnowflakeQuery(node, message, config);
         }
 
+        // Elasticsearch specific: if payload contains Elasticsearch query or document, use ElasticsearchRoutingEngine
+        if (type === 'elasticsearch') {
+          return this.processElasticsearchOperation(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -926,6 +932,119 @@ export class DataFlowEngine {
       message.status = 'failed';
       message.error = result.error || 'Snowflake query execution failed';
       message.latency = result.latency || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Process Elasticsearch operation using ElasticsearchRoutingEngine
+   */
+  private processElasticsearchOperation(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get ElasticsearchRoutingEngine from emulationEngine
+    const elasticsearchEngine = emulationEngine.getElasticsearchRoutingEngine(node.id);
+    if (!elasticsearchEngine) {
+      message.status = 'failed';
+      message.error = 'Elasticsearch Routing Engine not initialized';
+      return message;
+    }
+
+    // Extract operation from payload
+    const operation = payload?.operation || payload?.method || 'index';
+    const index = payload?.index || payload?._index || (node.data.config as any)?.index || 'archiphoenix-index';
+    const id = payload?.id || payload?._id;
+    const document = payload?.document || payload?._source || payload?.body || payload;
+    const query = payload?.query;
+    const routing = payload?.routing || payload?._routing;
+
+    let result: any;
+
+    switch (operation.toLowerCase()) {
+      case 'index':
+      case 'create':
+      case 'update':
+        if (!id || !document) {
+          message.status = 'failed';
+          message.error = 'Index operation requires id and document';
+          return message;
+        }
+        result = elasticsearchEngine.indexDocument(index, id, document, routing);
+        break;
+
+      case 'get':
+      case 'read':
+        if (!id) {
+          message.status = 'failed';
+          message.error = 'Get operation requires id';
+          return message;
+        }
+        result = elasticsearchEngine.getDocument(index, id, routing);
+        break;
+
+      case 'search':
+      case 'query':
+        if (query) {
+          result = elasticsearchEngine.search(index, query);
+        } else if (payload?.queryString) {
+          // Try to parse query string
+          result = elasticsearchEngine.executeQuery(payload.queryString);
+        } else {
+          // Default match_all query
+          result = elasticsearchEngine.search(index, { query: { match_all: {} } });
+        }
+        break;
+
+      case 'delete':
+        if (!id) {
+          message.status = 'failed';
+          message.error = 'Delete operation requires id';
+          return message;
+        }
+        result = elasticsearchEngine.deleteDocument(index, id, routing);
+        break;
+
+      default:
+        // Try to execute as query string
+        if (typeof payload === 'string' || payload?.queryString) {
+          const queryString = typeof payload === 'string' ? payload : payload.queryString;
+          result = elasticsearchEngine.executeQuery(queryString);
+        } else {
+          message.status = 'failed';
+          message.error = `Unsupported Elasticsearch operation: ${operation}`;
+          return message;
+        }
+    }
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || result.took || 10;
+      message.payload = {
+        ...(message.payload as any),
+        operation: result.operation,
+        index: result.index,
+        id: result.id,
+        document: result.document,
+        hits: result.hits,
+        took: result.took,
+        elasticsearchResult: result,
+      };
+      message.metadata = {
+        ...message.metadata,
+        elasticsearchOperation: result.operation,
+        index: result.index,
+        hits: result.hits,
+        took: result.took,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'Elasticsearch operation failed';
+      message.latency = result.latency || result.took || 0;
     }
 
     return message;

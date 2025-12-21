@@ -16,6 +16,7 @@ import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
 import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
+import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -155,6 +156,9 @@ export class EmulationEngine {
   // Snowflake routing engines per node
   private snowflakeRoutingEngines: Map<string, SnowflakeRoutingEngine> = new Map();
   
+  // Elasticsearch routing engines per node
+  private elasticsearchRoutingEngines: Map<string, ElasticsearchRoutingEngine> = new Map();
+  
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
@@ -291,6 +295,9 @@ export class EmulationEngine {
         }
         if (node.type === 'snowflake') {
           this.initializeSnowflakeRoutingEngine(node);
+        }
+        if (node.type === 'elasticsearch') {
+          this.initializeElasticsearchRoutingEngine(node);
         }
       }
       
@@ -3171,6 +3178,91 @@ export class EmulationEngine {
       return; // Early return for Snowflake
     }
     
+    // Для Elasticsearch используем ElasticsearchRoutingEngine
+    if (node.type === 'elasticsearch') {
+      if (!this.elasticsearchRoutingEngines.has(node.id)) {
+        this.initializeElasticsearchRoutingEngine(node);
+      }
+      
+      const routingEngine = this.elasticsearchRoutingEngines.get(node.id)!;
+      const elasticsearchConfig = node.data.config as any;
+      
+      // Sync configuration from UI with runtime state
+      if (elasticsearchConfig) {
+        routingEngine.syncFromConfig({
+          clusterName: elasticsearchConfig.clusterName,
+          nodes: elasticsearchConfig.nodes,
+          indices: elasticsearchConfig.indices,
+          defaultShards: elasticsearchConfig.shards,
+          defaultReplicas: elasticsearchConfig.replicas,
+          refreshInterval: elasticsearchConfig.refreshInterval,
+        });
+      }
+      
+      const elasticsearchMetrics = routingEngine.getMetrics();
+      
+      // Throughput based on incoming connections
+      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+        const sourceMetrics = this.metrics.get(conn.source);
+        return sum + (sourceMetrics?.throughput || 0);
+      }, 0);
+      
+      // Elasticsearch throughput combines index and search operations
+      metrics.throughput = Math.max(
+        elasticsearchMetrics.indexOperationsPerSecond + elasticsearchMetrics.searchOperationsPerSecond,
+        totalIncomingThroughput
+      );
+      
+      // Latency depends on operation type (weighted average)
+      const totalOps = elasticsearchMetrics.indexOperationsPerSecond + elasticsearchMetrics.searchOperationsPerSecond;
+      if (totalOps > 0) {
+        const indexWeight = elasticsearchMetrics.indexOperationsPerSecond / totalOps;
+        const searchWeight = elasticsearchMetrics.searchOperationsPerSecond / totalOps;
+        metrics.latency = (elasticsearchMetrics.averageIndexLatency * indexWeight) + 
+                          (elasticsearchMetrics.averageSearchLatency * searchWeight);
+      } else {
+        metrics.latency = elasticsearchMetrics.averageSearchLatency || 10;
+      }
+      
+      // Error rate is very low for Elasticsearch
+      // Increase slightly if cluster health is not green
+      const healthFactor = elasticsearchMetrics.clusterHealth === 'red' ? 0.01 : 
+                          elasticsearchMetrics.clusterHealth === 'yellow' ? 0.002 : 0.001;
+      metrics.errorRate = healthFactor;
+      
+      // Utilization based on cluster health and shard status
+      const shardUtilization = elasticsearchMetrics.unassignedShards > 0 ? 1.0 :
+                               elasticsearchMetrics.relocatingShards > 0 ? 0.7 :
+                               elasticsearchMetrics.initializingShards > 0 ? 0.5 : 0.3;
+      const nodeUtilization = elasticsearchMetrics.healthyNodes / elasticsearchMetrics.totalNodes;
+      metrics.utilization = Math.max(shardUtilization, 1 - nodeUtilization);
+      
+      // Update metrics in node config (for UI display)
+      this.updateElasticsearchMetricsInConfig(node, elasticsearchMetrics);
+      
+      metrics.customMetrics = {
+        'cluster_health': elasticsearchMetrics.clusterHealth === 'green' ? 1 : 
+                          elasticsearchMetrics.clusterHealth === 'yellow' ? 0.5 : 0,
+        'total_nodes': elasticsearchMetrics.totalNodes,
+        'healthy_nodes': elasticsearchMetrics.healthyNodes,
+        'total_indices': elasticsearchMetrics.totalIndices,
+        'total_docs': elasticsearchMetrics.totalDocs,
+        'total_size_gb': elasticsearchMetrics.totalSize / (1024 * 1024 * 1024),
+        'active_shards': elasticsearchMetrics.activeShards,
+        'relocating_shards': elasticsearchMetrics.relocatingShards,
+        'initializing_shards': elasticsearchMetrics.initializingShards,
+        'unassigned_shards': elasticsearchMetrics.unassignedShards,
+        'index_ops_per_sec': elasticsearchMetrics.indexOperationsPerSecond,
+        'search_ops_per_sec': elasticsearchMetrics.searchOperationsPerSecond,
+        'avg_index_latency_ms': elasticsearchMetrics.averageIndexLatency,
+        'avg_search_latency_ms': elasticsearchMetrics.averageSearchLatency,
+        'avg_get_latency_ms': elasticsearchMetrics.averageGetLatency,
+      };
+      
+      return; // Early return for Elasticsearch
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -4021,6 +4113,76 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Elasticsearch routing engine for a node
+   */
+  private initializeElasticsearchRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new ElasticsearchRoutingEngine();
+
+    routingEngine.initialize({
+      clusterName: config.clusterName || 'archiphoenix-cluster',
+      nodes: config.nodes || ['localhost:9200'],
+      indices: config.indices || [],
+      defaultShards: config.shards || 5,
+      defaultReplicas: config.replicas || 1,
+      refreshInterval: config.refreshInterval || '1s',
+      enableSSL: config.enableSSL ?? false,
+      enableAuth: config.enableAuth ?? false,
+      username: config.username || 'elastic',
+      password: config.password || '',
+    });
+
+    this.elasticsearchRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Update Elasticsearch metrics in node config (for UI display)
+   */
+  private updateElasticsearchMetricsInConfig(
+    node: CanvasNode,
+    metrics: {
+      clusterHealth: 'green' | 'yellow' | 'red';
+      totalIndices: number;
+      totalDocs: number;
+      totalSize: number;
+      activeShards: number;
+      relocatingShards: number;
+      initializingShards: number;
+    }
+  ): void {
+    const config = (node.data.config as any) || {};
+    
+    // Update cluster health
+    config.clusterHealth = metrics.clusterHealth;
+    
+    // Update shard metrics
+    config.activeShards = metrics.activeShards;
+    config.relocatingShards = metrics.relocatingShards;
+    config.initializingShards = metrics.initializingShards;
+    
+    // Update indices with runtime metrics
+    const indices = config.indices || [];
+    const engineIndices = this.elasticsearchRoutingEngines.get(node.id)?.getIndices() || [];
+    
+    for (let i = 0; i < indices.length; i++) {
+      const index = indices[i];
+      const engineIndex = engineIndices.find(ei => ei.name === index.name);
+      if (engineIndex) {
+        indices[i] = {
+          ...index,
+          docs: engineIndex.docs,
+          size: engineIndex.size,
+          health: engineIndex.health,
+        };
+      }
+    }
+    
+    config.indices = indices;
+    config.totalDocs = metrics.totalDocs;
+    config.totalSize = metrics.totalSize;
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -4160,6 +4322,10 @@ export class EmulationEngine {
    */
   public getSnowflakeRoutingEngine(nodeId: string): SnowflakeRoutingEngine | undefined {
     return this.snowflakeRoutingEngines.get(nodeId);
+  }
+
+  public getElasticsearchRoutingEngine(nodeId: string): ElasticsearchRoutingEngine | undefined {
+    return this.elasticsearchRoutingEngines.get(nodeId);
   }
 
   /**
