@@ -1,5 +1,235 @@
 # Patch Notes
 
+## Версия 0.1.7o - Cassandra Full Simulation System
+
+### Обзор изменений
+Полная реализация Apache Cassandra симуляции: создан CassandraRoutingEngine с поддержкой CQL запросов, consistency levels, replication factor, cluster topology и метрик. Интеграция с DataFlowEngine, EmulationEngine и UI. Система теперь реалистично симулирует распределенную природу Cassandra с учетом consistency levels, replication и topology awareness.
+
+---
+
+## Cassandra: Полная реализация симуляции
+
+### 1. CassandraRoutingEngine - Core Engine
+
+**Проблема:**
+- Cassandra не обрабатывалась в EmulationEngine (отсутствовал case 'cassandra')
+- Нет обработки CQL запросов
+- Нет учета consistency levels и replication factor
+- Нет симуляции кластера с узлами и топологией
+- UI конфигурация не связана с runtime логикой
+
+**Решение:**
+- ✅ Создан `CassandraRoutingEngine` (`src/core/CassandraRoutingEngine.ts`):
+  - **CQL запросы**: SELECT, INSERT, UPDATE, DELETE, CREATE KEYSPACE, CREATE TABLE
+  - **Consistency levels**: ONE, QUORUM, ALL, LOCAL_QUORUM, LOCAL_ONE, EACH_QUORUM
+  - **Replication**: учет replication factor для расчета количества реплик
+  - **Cluster topology**: симуляция узлов кластера с статусом (up/down) и нагрузкой
+  - **Latency расчет**: реалистичный расчет с учетом:
+    - Consistency level (ONE = быстрее, ALL = медленнее)
+    - Replication factor (больше реплик = выше latency)
+    - Сетевая задержка между узлами
+    - Количество узлов для чтения/записи
+  - **Метрики**: read/write latency, operations per second, consistency violations, hinted handoffs, pending compactions
+
+**Изменённые файлы:**
+- `src/core/CassandraRoutingEngine.ts` (новый)
+
+---
+
+### 2. Интеграция в DataFlowEngine
+
+**Проблема:**
+- Cassandra обрабатывалась через общий `createDatabaseHandler()` без специфики
+- Нет обработки CQL запросов в payload
+- Нет связи между UI CQL shell и runtime
+
+**Решение:**
+- ✅ Добавлен метод `processCQLQuery()` в DataFlowEngine
+- ✅ Поддержка форматов: `{cql: "SELECT ...", consistency: "QUORUM"}`, `{query: "SELECT ..."}`, строковый формат
+- ✅ Автоматическое определение операции (select/insert/update/delete)
+- ✅ Реальное выполнение CQL запросов через CassandraRoutingEngine
+- ✅ Возврат результатов с метаданными (consistency, replicasQueried, latency)
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 3. Интеграция в EmulationEngine
+
+**Проблема:**
+- Cassandra не обрабатывалась в switch-case (`simulateDatabase()`)
+- Нет реальных метрик Cassandra
+- Нет синхронизации конфигурации UI с runtime
+
+**Решение:**
+- ✅ Добавлен `cassandraRoutingEngines` Map для хранения инстансов
+- ✅ Метод `initializeCassandraRoutingEngine()` для инициализации
+- ✅ Метод `getCassandraRoutingEngine()` для доступа к engine
+- ✅ Добавлен case 'cassandra' в `simulateDatabase()` с реальными метриками:
+  - Throughput на основе read/write operations per second
+  - Latency с учетом consistency level и replication (weighted average)
+  - Error rate на основе consistency violations
+  - Utilization на основе здоровых узлов и pending compactions
+  - Custom metrics: total_nodes, healthy_nodes, keyspaces, tables, read/write latency, violations, hinted handoffs
+- ✅ Синхронизация конфигурации из UI с runtime через `syncFromConfig()` (nodes, keyspaces, tables)
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. UI Improvements
+
+**Проблема:**
+- CQL Shell только сохранял запросы, но не выполнял их
+- Отсутствовал импорт иконки Play
+- Нет связи между UI и routing engine
+
+**Решение:**
+- ✅ Добавлен импорт `emulationEngine` в UI компонент
+- ✅ Улучшен `executeQuery()` для реального выполнения CQL через routing engine
+- ✅ Запросы выполняются через `emulationEngine.getCassandraRoutingEngine()`
+- ✅ Результаты отображаются в UI (status, duration, rows returned)
+- ✅ Синхронизация keyspaces и tables между UI и runtime
+
+**Изменённые файлы:**
+- `src/components/config/data/CassandraConfigAdvanced.tsx`
+
+---
+
+### 6. Исправление багов в CassandraRoutingEngine
+
+**Проблемы:**
+- `readConsistencyViolations` не отслеживались правильно - violations не проверялись для read операций
+- Размер таблиц не обновлялся при INSERT/DELETE операциях
+- Синхронизация таблиц при обновлении конфигурации не сохраняла runtime данные
+
+**Решение:**
+- ✅ Исправлен расчет `readConsistencyViolations` - теперь violations отслеживаются для read операций аналогично write
+- ✅ Добавлено обновление `table.size` при INSERT/DELETE операциях на основе количества строк
+- ✅ Улучшена синхронизация конфигурации - сохранение существующих данных таблиц при обновлении
+- ✅ Добавлено отслеживание violated флага для read операций в метриках
+
+**Изменённые файлы:**
+- `src/core/CassandraRoutingEngine.ts`
+
+---
+
+## Технические детали Cassandra
+
+### Архитектура CassandraRoutingEngine:
+
+- **Consistency Levels**: реалистичное влияние на latency и количество реплик
+  - ONE/LOCAL_ONE: 1 реплика (самый быстрый)
+  - QUORUM/LOCAL_QUORUM: (RF/2 + 1) реплик (баланс)
+  - ALL: все реплики (самый медленный, но самый консистентный)
+  
+- **Replication Factor**: определяет количество реплик для данных
+  - Влияет на доступность и latency
+  - Больше реплик = выше latency, но лучше availability
+  
+- **Latency Calculation**: 
+  - Base latency + consistency latency + network latency + replication latency
+  - Случайные вариации для реалистичности
+  
+- **Cluster Topology**: симуляция узлов с токенами, статусом и нагрузкой
+
+### Поддерживаемые функции:
+
+- CQL запросы: SELECT, INSERT, UPDATE, DELETE
+- Schema management: CREATE KEYSPACE, CREATE TABLE
+- Consistency levels и их влияние на производительность
+- Replication factor и топология кластера
+- Метрики производительности и health
+
+### Интеграция:
+
+- DataFlowEngine: обработка CQL запросов из других компонентов
+- EmulationEngine: расчет метрик на основе реальной работы кластера
+- UI: синхронизация конфигурации и выполнение CQL запросов
+
+---
+
+## Результаты
+
+### До улучшений:
+
+- ❌ Cassandra не обрабатывалась в runtime (отсутствовал case в switch)
+- ❌ Нет routing engine - только UI конфигурация
+- ❌ Нет выполнения CQL запросов
+- ❌ Нет учета consistency levels и replication
+- ❌ Метрики не рассчитывались
+- ❌ UI не связан с runtime логикой
+
+### После улучшений:
+
+- ✅ Полноценная симуляция Cassandra кластера
+- ✅ Реальное выполнение CQL запросов через routing engine
+- ✅ Учет consistency levels для расчета latency
+- ✅ Учет replication factor и topology
+- ✅ Реалистичные метрики (latency, throughput, violations)
+- ✅ Синхронизация конфигурации UI ↔ Runtime
+- ✅ Работает аналогично Redis и PostgreSQL с учетом специфики Cassandra
+
+---
+
+## Cassandra: Исправления и улучшения UI
+
+### 5. Исправление функциональности и UI
+
+**Проблемы:**
+- CREATE KEYSPACE не отображался в списке keyspaces после создания
+- CREATE TABLE кнопка не работала - таблицы не создавались
+- Cluster Healthy всегда показывал зеленый статус независимо от состояния узлов
+- Read/Write Latency показывались даже когда компонент не подключен/неактивен
+- Кнопка CQL Shell в header была бесполезной
+- Consistency Level и Compaction Strategy были неправильно реализованы (текстовые поля вместо соответствия реальному Cassandra)
+
+**Решение:**
+
+#### 5.1. Исправление CREATE KEYSPACE и CREATE TABLE
+- ✅ Улучшена синхронизация keyspaces после CREATE KEYSPACE через CQL Shell
+- ✅ Исправлена кнопка CREATE TABLE - теперь автоматически выполняет запрос через engine
+- ✅ Добавлена автоматическая инициализация engine если он не существует
+- ✅ Принудительное обновление runtime state для немедленного отображения в UI
+- ✅ Добавлена обработка ошибок с отображением сообщений пользователю
+- ✅ Улучшен парсинг CREATE TABLE для корректной обработки WITH клаузы
+
+#### 5.2. Динамический статус Cluster Healthy
+- ✅ Статус теперь основывается на реальных метриках `healthyNodes` из engine
+- ✅ Зеленый: все узлы healthy (`healthyNodes === totalNodes`)
+- ✅ Желтый: часть узлов down (degraded state)
+- ✅ Красный: нет healthy узлов или кластер не инициализирован
+- ✅ Удалена бесполезная кнопка CQL Shell из header
+
+#### 5.3. Улучшение отображения метрик
+- ✅ Read/Write Latency показываются только при активности (есть операции или данные)
+- ✅ Отображается "—" и "No activity" когда нет активности
+- ✅ Метрики обновляются из реальных операций через engine
+- ✅ Добавлена динамическая симуляция load узлов на основе операций
+
+#### 5.4. Правильная реализация Consistency Level и Compaction Strategy
+- ✅ Consistency Level изменен с текстового Input на Select с валидными значениями
+- ✅ Добавлено пояснение что это default значение для запросов (можно переопределить в CQL)
+- ✅ Добавлена заметка о том, что в реальном Cassandra consistency level указывается per query/session
+- ✅ Compaction Strategy удален из настроек кластера (в реальном Cassandra настраивается per table)
+- ✅ Compaction Strategy теперь указывается при создании таблицы через CQL (CREATE TABLE ... WITH compaction)
+- ✅ Удалены поля enableCompaction и compactionStrategy из Settings (не являются глобальными настройками)
+
+#### 5.5. Симуляция Cluster Nodes
+- ✅ Добавлен метод `getNodes()` в CassandraRoutingEngine
+- ✅ UI теперь использует runtime nodes из engine вместо только config
+- ✅ Динамическая симуляция load узлов на основе количества операций
+- ✅ Nodes отображаются с реальным статусом и нагрузкой из engine
+
+**Изменённые файлы:**
+- `src/components/config/data/CassandraConfigAdvanced.tsx`
+- `src/core/CassandraRoutingEngine.ts`
+- `src/core/EmulationEngine.ts`
+
+---
+
 ## Версия 0.1.7n - Redis Full Simulation System
 
 ### Обзор изменений

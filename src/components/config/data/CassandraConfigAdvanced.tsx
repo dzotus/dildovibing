@@ -21,11 +21,13 @@ import {
   Code,
   RefreshCcw,
   Table,
-  Layers
+  Layers,
+  Play
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface CassandraConfigProps {
   componentId: string;
@@ -75,15 +77,13 @@ interface CassandraConfig {
   queries?: Query[];
   consistencyLevel?: string;
   replicationFactor?: number;
-  enableCompaction?: boolean;
-  compactionStrategy?: string;
   totalSize?: number;
   readLatency?: number;
   writeLatency?: number;
 }
 
 export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, connections, updateNode } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -100,14 +100,110 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
   
   const [editingKeyspaceIndex, setEditingKeyspaceIndex] = useState<number | null>(null);
   const [showQueryEditor, setShowQueryEditor] = useState(false);
+  const [showCreateTableDialog, setShowCreateTableDialog] = useState(false);
+  const [newTableName, setNewTableName] = useState('');
+  const [newTableKeyspace, setNewTableKeyspace] = useState(keyspaces[0]?.name || 'system');
   const [queryText, setQueryText] = useState('');
   const consistencyLevel = config.consistencyLevel || 'QUORUM';
   const replicationFactor = config.replicationFactor || 3;
-  const enableCompaction = config.enableCompaction ?? true;
-  const compactionStrategy = config.compactionStrategy || 'SizeTieredCompactionStrategy';
-  const totalSize = config.totalSize || keyspaces.reduce((sum, k) => sum + k.size, 0);
-  const readLatency = config.readLatency || 2.5;
-  const writeLatency = config.writeLatency || 3.2;
+  
+  // Real-time metrics from CassandraRoutingEngine
+  const [realMetrics, setRealMetrics] = useState<{
+    readLatency: number;
+    writeLatency: number;
+    totalNodes: number;
+    healthyNodes: number;
+    totalKeyspaces: number;
+    totalTables: number;
+    totalRows: number;
+    totalSize: number;
+  } | null>(null);
+  
+  // Runtime keyspaces and tables from engine
+  const [runtimeKeyspaces, setRuntimeKeyspaces] = useState<Keyspace[]>(keyspaces);
+  const [runtimeTables, setRuntimeTables] = useState<Table[]>(tables);
+  const [runtimeNodes, setRuntimeNodes] = useState<Node[]>(nodesList);
+  
+  // Update metrics, keyspaces, and tables from runtime
+  useEffect(() => {
+    if (!node) return;
+    
+    const interval = setInterval(() => {
+      const cassandraEngine = emulationEngine.getCassandraRoutingEngine(componentId);
+      if (cassandraEngine) {
+        const metrics = cassandraEngine.getMetrics();
+        const engineKeyspaces = cassandraEngine.getKeyspaces();
+        const engineTables = cassandraEngine.getTables();
+        const engineNodes = cassandraEngine.getNodes();
+        
+        setRealMetrics({
+          readLatency: metrics.readLatency,
+          writeLatency: metrics.writeLatency,
+          totalNodes: metrics.totalNodes,
+          healthyNodes: metrics.healthyNodes,
+          totalKeyspaces: metrics.totalKeyspaces,
+          totalTables: metrics.totalTables,
+          totalRows: metrics.totalRows,
+          totalSize: metrics.totalSize,
+        });
+        
+        // Update runtime nodes from engine (for simulation)
+        setRuntimeNodes(engineNodes);
+        
+        // Merge runtime keyspaces with config
+        const configKeyspaceMap = new Map(keyspaces.map(k => [k.name, k]));
+        const mergedKeyspaces = engineKeyspaces.map(engineKs => {
+          const configKs = configKeyspaceMap.get(engineKs.name);
+          return {
+            ...engineKs,
+            // Keep config metadata (size, tables count) if exists, otherwise use engine values
+            size: configKs?.size ?? engineKs.size ?? 0,
+            tables: engineTables.filter(t => t.keyspace === engineKs.name).length,
+          };
+        });
+        setRuntimeKeyspaces(mergedKeyspaces);
+        
+        // Merge runtime tables with config
+        const configTableMap = new Map(tables.map(t => [`${t.keyspace}.${t.name}`, t]));
+        const mergedTables = engineTables.map(engineTable => {
+          const configTable = configTableMap.get(`${engineTable.keyspace}.${engineTable.name}`);
+          return {
+            ...engineTable,
+            // Keep config metadata if exists
+            ...(configTable && {
+              columns: configTable.columns,
+            }),
+          };
+        });
+        setRuntimeTables(mergedTables);
+        
+        // Don't sync back to config automatically to avoid loops
+        // Config is updated only when user actions or CQL commands change structure
+      } else {
+        // Engine not initialized, clear runtime metrics
+        setRealMetrics(null);
+        setRuntimeKeyspaces(keyspaces);
+        setRuntimeTables(tables);
+        setRuntimeNodes(nodesList);
+      }
+    }, 500); // Update every 500ms
+    
+    return () => clearInterval(interval);
+  }, [componentId, node, keyspaces, tables]); // Include keyspaces and tables to update when config changes
+  
+  const totalSize = realMetrics?.totalSize ? realMetrics.totalSize / (1024 * 1024 * 1024) : (config.totalSize || keyspaces.reduce((sum, k) => sum + k.size, 0));
+  // Show latencies only if engine is active and has operations
+  const readLatency = realMetrics && (realMetrics.readOperationsPerSecond > 0 || realMetrics.totalRows > 0)
+    ? realMetrics.readLatency
+    : null;
+  const writeLatency = realMetrics && (realMetrics.writeOperationsPerSecond > 0 || realMetrics.totalRows > 0)
+    ? realMetrics.writeLatency
+    : null;
+  
+  // Use runtime data if available, fallback to config
+  const displayKeyspaces = runtimeKeyspaces.length > 0 ? runtimeKeyspaces : keyspaces;
+  const displayTables = runtimeTables.length > 0 ? runtimeTables : tables;
+  const displayNodes = runtimeNodes.length > 0 ? runtimeNodes : nodesList;
 
   const updateConfig = (updates: Partial<CassandraConfig>) => {
     updateNode(componentId, {
@@ -137,14 +233,82 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
   const executeQuery = () => {
     if (!queryText.trim()) return;
     
+    const queryId = `query-${Date.now()}`;
+    const startTime = Date.now();
+    
     const newQuery: Query = {
-      id: `query-${Date.now()}`,
+      id: queryId,
       query: queryText,
       status: 'running',
       duration: 0,
       rowsReturned: 0,
     };
-    updateConfig({ queries: [newQuery, ...queries.slice(0, 9)] });
+    
+    // Execute query through CassandraRoutingEngine
+    const cassandraEngine = emulationEngine.getCassandraRoutingEngine(componentId);
+    let resultQuery: Query = newQuery;
+    
+    if (cassandraEngine) {
+      try {
+        const result = cassandraEngine.executeCQL(queryText, consistencyLevel as any);
+        const duration = Date.now() - startTime;
+        
+        resultQuery = {
+          id: queryId,
+          query: queryText,
+          status: result.success ? 'success' : 'error',
+          duration,
+          rowsReturned: result.rowCount || 0,
+        };
+        
+        // If CREATE TABLE or CREATE KEYSPACE succeeded, sync tables/keyspaces from engine
+        if (result.success) {
+          const normalizedQuery = queryText.trim().toUpperCase();
+          if (normalizedQuery.startsWith('CREATE TABLE') || normalizedQuery.startsWith('CREATE KEYSPACE') || 
+              normalizedQuery.startsWith('DROP TABLE') || normalizedQuery.startsWith('DROP KEYSPACE')) {
+            // Force sync from engine
+            const engineKeyspaces = cassandraEngine.getKeyspaces();
+            const engineTables = cassandraEngine.getTables();
+            
+            // Merge with existing config to preserve metadata
+            const configKeyspaceMap = new Map(keyspaces.map(k => [k.name, k]));
+            const mergedKeyspaces = engineKeyspaces.map(ks => {
+              const configKs = configKeyspaceMap.get(ks.name);
+              return {
+                ...ks,
+                size: configKs?.size || ks.size || 0,
+                tables: engineTables.filter(t => t.keyspace === ks.name).length,
+              };
+            });
+            
+            // Update config to trigger re-render
+            updateConfig({
+              keyspaces: mergedKeyspaces,
+              tables: engineTables,
+            });
+            
+            // Force refresh runtime keyspaces/tables state
+            setRuntimeKeyspaces(mergedKeyspaces);
+            setRuntimeTables(engineTables);
+          }
+        }
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        resultQuery = {
+          id: queryId,
+          query: queryText,
+          status: 'error',
+          duration,
+          rowsReturned: 0,
+        };
+      }
+    } else {
+      // No engine available, just mark as running (simulated)
+      resultQuery.status = 'success';
+      resultQuery.duration = Date.now() - startTime;
+    }
+    
+    updateConfig({ queries: [resultQuery, ...queries.slice(0, 9)] });
     setQueryText('');
     setShowQueryEditor(false);
   };
@@ -166,14 +330,23 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Cluster Healthy
+            <Badge 
+              variant="outline" 
+              className="gap-2"
+            >
+              <div 
+                className={`h-2 w-2 rounded-full animate-pulse ${
+                  realMetrics && realMetrics.healthyNodes > 0 && realMetrics.healthyNodes === realMetrics.totalNodes
+                    ? 'bg-green-500'
+                    : realMetrics && realMetrics.healthyNodes > 0
+                    ? 'bg-yellow-500'
+                    : 'bg-red-500'
+                }`} 
+              />
+              {realMetrics && realMetrics.totalNodes > 0
+                ? `Cluster ${realMetrics.healthyNodes === realMetrics.totalNodes ? 'Healthy' : 'Degraded'}`
+                : 'Cluster Not Initialized'}
             </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              CQL Shell
-            </Button>
           </div>
         </div>
 
@@ -186,7 +359,7 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
               <CardTitle className="text-sm font-medium text-muted-foreground">Nodes</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{nodesList.length}</div>
+              <div className="text-2xl font-bold">{realMetrics?.totalNodes ?? displayNodes.length}</div>
               <p className="text-xs text-muted-foreground mt-1">Cluster nodes</p>
             </CardContent>
           </Card>
@@ -195,7 +368,7 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
               <CardTitle className="text-sm font-medium text-muted-foreground">Keyspaces</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{keyspaces.length}</div>
+              <div className="text-2xl font-bold">{realMetrics?.totalKeyspaces ?? keyspaces.length}</div>
               <p className="text-xs text-muted-foreground mt-1">Total keyspaces</p>
             </CardContent>
           </Card>
@@ -204,8 +377,12 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
               <CardTitle className="text-sm font-medium text-muted-foreground">Read Latency</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{readLatency}ms</div>
-              <p className="text-xs text-muted-foreground mt-1">Average</p>
+              <div className="text-2xl font-bold">
+                {readLatency !== null ? `${readLatency}ms` : '—'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {readLatency !== null ? 'Average' : 'No activity'}
+              </p>
             </CardContent>
           </Card>
           <Card>
@@ -261,7 +438,7 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {keyspaces.map((ks, index) => (
+                  {displayKeyspaces.map((ks, index) => (
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -277,7 +454,7 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
                               </CardDescription>
                             </div>
                           </div>
-                          {keyspaces.length > 1 && (
+                          {displayKeyspaces.length > 1 && (
                             <Button
                               size="icon"
                               variant="ghost"
@@ -352,18 +529,134 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
                     <CardTitle>Tables</CardTitle>
                     <CardDescription>Cassandra table configuration</CardDescription>
                   </div>
-                  <Button size="sm" variant="outline">
+                  <Button size="sm" variant="outline" onClick={() => setShowCreateTableDialog(true)}>
                     <Plus className="h-4 w-4 mr-2" />
                     Create Table
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                {tables.length === 0 ? (
+                {/* Create Table Dialog */}
+                {showCreateTableDialog && (
+                  <Card className="mb-4 border-primary">
+                    <CardHeader>
+                      <CardTitle>Create New Table</CardTitle>
+                      <CardDescription>Create a table in a keyspace</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <Label>Keyspace</Label>
+                        <Select value={newTableKeyspace} onValueChange={setNewTableKeyspace}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {displayKeyspaces.map(ks => (
+                              <SelectItem key={ks.name} value={ks.name}>{ks.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Table Name</Label>
+                        <Input
+                          value={newTableName}
+                          onChange={(e) => setNewTableName(e.target.value)}
+                          placeholder="users"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={async () => {
+                            if (!newTableName.trim() || !newTableKeyspace) return;
+                            
+                            // Create table (compaction strategy will be set by default in engine)
+                            const cql = `CREATE TABLE ${newTableKeyspace}.${newTableName.trim()} (id UUID PRIMARY KEY, data TEXT)`;
+                            
+                            // Execute directly through engine
+                            let cassandraEngine = emulationEngine.getCassandraRoutingEngine(componentId);
+                            
+                            // If engine doesn't exist, initialize it
+                            if (!cassandraEngine && node) {
+                              emulationEngine.initialize(nodes, connections || []);
+                              cassandraEngine = emulationEngine.getCassandraRoutingEngine(componentId);
+                            }
+                            
+                            if (cassandraEngine) {
+                              try {
+                                console.log('Executing CREATE TABLE:', cql);
+                                const result = cassandraEngine.executeCQL(cql, consistencyLevel as any);
+                                console.log('CREATE TABLE result:', result);
+                                
+                                if (result.success) {
+                                  // Sync tables and keyspaces from engine
+                                  const engineKeyspaces = cassandraEngine.getKeyspaces();
+                                  const engineTables = cassandraEngine.getTables();
+                                  
+                                  console.log('Engine keyspaces:', engineKeyspaces);
+                                  console.log('Engine tables:', engineTables);
+                                  
+                                  const configKeyspaceMap = new Map(keyspaces.map(k => [k.name, k]));
+                                  const mergedKeyspaces = engineKeyspaces.map(ks => {
+                                    const configKs = configKeyspaceMap.get(ks.name);
+                                    return {
+                                      ...ks,
+                                      size: configKs?.size || 0,
+                                      tables: engineTables.filter(t => t.keyspace === ks.name).length,
+                                    };
+                                  });
+                                  
+                                  console.log('Merged keyspaces:', mergedKeyspaces);
+                                  console.log('Merged tables:', engineTables);
+                                  
+                                  updateConfig({
+                                    keyspaces: mergedKeyspaces,
+                                    tables: engineTables,
+                                  });
+                                  
+                                  // Force update runtime state immediately for UI refresh
+                                  setRuntimeKeyspaces(mergedKeyspaces);
+                                  setRuntimeTables(engineTables);
+                                  
+                                  setNewTableName('');
+                                  setNewTableKeyspace(keyspaces[0]?.name || 'system');
+                                  setShowCreateTableDialog(false);
+                                } else {
+                                  console.error('CREATE TABLE failed:', result.error);
+                                  alert(`Failed to create table: ${result.error || 'Unknown error'}`);
+                                }
+                              } catch (error) {
+                                console.error('CREATE TABLE error:', error);
+                                alert(`Error creating table: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                              }
+                            } else {
+                              console.warn('Cassandra engine not available, using CQL Shell fallback');
+                              // Fallback: use CQL Shell
+                              setQueryText(cql);
+                              setShowCreateTableDialog(false);
+                              setShowQueryEditor(true);
+                            }
+                          }}
+                          disabled={!newTableName.trim() || !newTableKeyspace}
+                        >
+                          Create Table
+                        </Button>
+                        <Button variant="outline" onClick={() => {
+                          setShowCreateTableDialog(false);
+                          setNewTableName('');
+                          setNewTableKeyspace(keyspaces[0]?.name || 'system');
+                        }}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+                {displayTables.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No tables created</p>
                 ) : (
                   <div className="space-y-3">
-                    {tables.map((table, index) => (
+                    {displayTables.map((table, index) => (
                       <Card key={index} className="border-border">
                         <CardHeader className="pb-3">
                           <div className="flex items-center justify-between">
@@ -419,7 +712,11 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
                         />
                       </div>
                       <div className="flex gap-2">
-                        <Button onClick={executeQuery} disabled={!queryText.trim()}>
+                        <Button 
+                          onClick={executeQuery} 
+                          disabled={!queryText.trim()}
+                          title={!queryText.trim() ? 'Enter a CQL query to execute' : 'Execute CQL query'}
+                        >
                           <Play className="h-4 w-4 mr-2" />
                           Execute
                         </Button>
@@ -479,7 +776,7 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {nodesList.map((n, index) => (
+                  {displayNodes.map((n, index) => (
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -552,52 +849,51 @@ export function CassandraConfigAdvanced({ componentId }: CassandraConfigProps) {
                     placeholder="my-cluster"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="replication-factor">Replication Factor</Label>
-                    <Input
-                      id="replication-factor"
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={replicationFactor}
-                      onChange={(e) => updateConfig({ replicationFactor: parseInt(e.target.value) || 3 })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="consistency-level">Consistency Level</Label>
-                    <Input
-                      id="consistency-level"
-                      value={consistencyLevel}
-                      onChange={(e) => updateConfig({ consistencyLevel: e.target.value })}
-                      placeholder="QUORUM"
-                    />
-                  </div>
+                <div className="space-y-2">
+                  <Label htmlFor="replication-factor">Default Replication Factor</Label>
+                  <Input
+                    id="replication-factor"
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={replicationFactor}
+                    onChange={(e) => updateConfig({ replicationFactor: parseInt(e.target.value) || 3 })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default replication factor for new keyspaces. Can be overridden per keyspace.
+                  </p>
                 </div>
                 <Separator />
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label>Enable Compaction</Label>
-                    <div className="text-sm text-muted-foreground">
-                      Automatic data compaction
-                    </div>
-                  </div>
-                  <Switch
-                    checked={enableCompaction}
-                    onCheckedChange={(checked) => updateConfig({ enableCompaction: checked })}
-                  />
+                <div className="space-y-2">
+                  <Label htmlFor="default-consistency-level">Default Consistency Level</Label>
+                  <Select
+                    value={consistencyLevel}
+                    onValueChange={(value) => updateConfig({ consistencyLevel: value })}
+                  >
+                    <SelectTrigger id="default-consistency-level">
+                      <SelectValue placeholder="Select consistency level" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ONE">ONE</SelectItem>
+                      <SelectItem value="TWO">TWO</SelectItem>
+                      <SelectItem value="THREE">THREE</SelectItem>
+                      <SelectItem value="QUORUM">QUORUM</SelectItem>
+                      <SelectItem value="ALL">ALL</SelectItem>
+                      <SelectItem value="LOCAL_ONE">LOCAL_ONE</SelectItem>
+                      <SelectItem value="LOCAL_QUORUM">LOCAL_QUORUM</SelectItem>
+                      <SelectItem value="EACH_QUORUM">EACH_QUORUM</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Default consistency level for CQL queries. Can be overridden per query using CONSISTENCY command or in CQL Shell.
+                  </p>
                 </div>
-                {enableCompaction && (
-                  <div className="space-y-2">
-                    <Label htmlFor="compaction-strategy">Compaction Strategy</Label>
-                    <Input
-                      id="compaction-strategy"
-                      value={compactionStrategy}
-                      onChange={(e) => updateConfig({ compactionStrategy: e.target.value })}
-                      placeholder="SizeTieredCompactionStrategy"
-                    />
-                  </div>
-                )}
+                <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 p-3">
+                  <p className="text-sm text-blue-900 dark:text-blue-100">
+                    <strong>Note:</strong> In real Apache Cassandra, consistency level is specified per query/session, not as a global cluster setting. 
+                    This is a default value used when not explicitly specified in queries.
+                  </p>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

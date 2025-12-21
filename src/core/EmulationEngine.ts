@@ -13,6 +13,7 @@ import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
+import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -143,6 +144,9 @@ export class EmulationEngine {
   // Redis routing engines per node
   private redisRoutingEngines: Map<string, RedisRoutingEngine> = new Map();
   
+  // Cassandra routing engines per node
+  private cassandraRoutingEngines: Map<string, CassandraRoutingEngine> = new Map();
+  
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
@@ -270,6 +274,9 @@ export class EmulationEngine {
         }
         if (node.type === 'redis') {
           this.initializeRedisRoutingEngine(node);
+        }
+        if (node.type === 'cassandra') {
+          this.initializeCassandraRoutingEngine(node);
         }
       }
       
@@ -574,6 +581,7 @@ export class EmulationEngine {
         case 'postgres':
         case 'mongodb':
         case 'redis':
+        case 'cassandra':
           this.simulateDatabase(node, config, metrics, hasIncomingConnections);
           break;
         case 'nginx':
@@ -2918,6 +2926,86 @@ export class EmulationEngine {
       return; // Early return for Redis
     }
     
+    // Для Cassandra используем CassandraRoutingEngine
+    if (node.type === 'cassandra') {
+      if (!this.cassandraRoutingEngines.has(node.id)) {
+        this.initializeCassandraRoutingEngine(node);
+      }
+      
+      const routingEngine = this.cassandraRoutingEngines.get(node.id)!;
+      const cassandraConfig = node.data.config as any;
+      
+      // Sync configuration from UI with runtime state
+      if (cassandraConfig) {
+        routingEngine.syncFromConfig({
+          clusterName: cassandraConfig.clusterName,
+          nodes: cassandraConfig.nodes,
+          keyspaces: cassandraConfig.keyspaces,
+          tables: cassandraConfig.tables,
+          defaultConsistencyLevel: cassandraConfig.consistencyLevel,
+          defaultReplicationFactor: cassandraConfig.replicationFactor,
+        });
+      }
+      
+      const cassandraMetrics = routingEngine.getMetrics();
+      
+      // Throughput based on incoming connections
+      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+        const sourceMetrics = this.metrics.get(conn.source);
+        return sum + (sourceMetrics?.throughput || 0);
+      }, 0);
+      
+      // Cassandra throughput combines reads and writes
+      metrics.throughput = Math.max(
+        cassandraMetrics.readOperationsPerSecond + cassandraMetrics.writeOperationsPerSecond,
+        totalIncomingThroughput
+      );
+      
+      // Latency depends on consistency level and replication
+      // Average of read and write latency weighted by operations
+      const totalOps = cassandraMetrics.readOperationsPerSecond + cassandraMetrics.writeOperationsPerSecond;
+      if (totalOps > 0) {
+        const readWeight = cassandraMetrics.readOperationsPerSecond / totalOps;
+        const writeWeight = cassandraMetrics.writeOperationsPerSecond / totalOps;
+        metrics.latency = (cassandraMetrics.readLatency * readWeight) + (cassandraMetrics.writeLatency * writeWeight);
+      } else {
+        metrics.latency = (cassandraMetrics.readLatency + cassandraMetrics.writeLatency) / 2;
+      }
+      
+      // Error rate increases with consistency violations
+      const consistencyErrors = cassandraMetrics.readConsistencyViolations + cassandraMetrics.writeConsistencyViolations;
+      metrics.errorRate = Math.min(0.1, consistencyErrors / Math.max(1, totalOps)) || 0.001;
+      
+      // Utilization based on healthy nodes vs total nodes
+      // More healthy nodes = lower utilization per node (better capacity)
+      // Also factor in pending compactions as workload indicator
+      const nodeUtilizationFactor = cassandraMetrics.totalNodes > 0
+        ? (cassandraMetrics.totalNodes - cassandraMetrics.healthyNodes) / cassandraMetrics.totalNodes
+        : 0;
+      const compactionLoad = Math.min(1, cassandraMetrics.pendingCompactions / 100);
+      metrics.utilization = Math.min(1, nodeUtilizationFactor * 0.7 + compactionLoad * 0.3);
+      
+      metrics.customMetrics = {
+        'total_nodes': cassandraMetrics.totalNodes,
+        'healthy_nodes': cassandraMetrics.healthyNodes,
+        'total_keyspaces': cassandraMetrics.totalKeyspaces,
+        'total_tables': cassandraMetrics.totalTables,
+        'total_rows': cassandraMetrics.totalRows,
+        'total_size_gb': cassandraMetrics.totalSize / (1024 * 1024 * 1024),
+        'read_latency_ms': cassandraMetrics.readLatency,
+        'write_latency_ms': cassandraMetrics.writeLatency,
+        'read_ops_per_sec': cassandraMetrics.readOperationsPerSecond,
+        'write_ops_per_sec': cassandraMetrics.writeOperationsPerSecond,
+        'pending_compactions': cassandraMetrics.pendingCompactions,
+        'read_consistency_violations': cassandraMetrics.readConsistencyViolations,
+        'write_consistency_violations': cassandraMetrics.writeConsistencyViolations,
+        'hinted_handoffs': cassandraMetrics.hintedHandoffs,
+      };
+      
+      return; // Early return for Cassandra
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -3680,6 +3768,26 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Cassandra routing engine for a node
+   */
+  private initializeCassandraRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new CassandraRoutingEngine();
+
+    routingEngine.initialize({
+      clusterName: config.clusterName || 'archiphoenix-cluster',
+      nodes: config.nodes || [],
+      keyspaces: config.keyspaces || [],
+      tables: config.tables || [],
+      defaultConsistencyLevel: config.consistencyLevel || 'QUORUM',
+      defaultReplicationFactor: config.replicationFactor || 3,
+      datacenter: config.datacenter || 'dc1',
+    });
+
+    this.cassandraRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -3798,6 +3906,13 @@ export class EmulationEngine {
    */
   public getRedisRoutingEngine(nodeId: string): RedisRoutingEngine | undefined {
     return this.redisRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Cassandra routing engine for a node
+   */
+  public getCassandraRoutingEngine(nodeId: string): CassandraRoutingEngine | undefined {
+    return this.cassandraRoutingEngines.get(nodeId);
   }
 
   /**

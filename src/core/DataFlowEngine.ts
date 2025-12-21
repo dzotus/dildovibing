@@ -535,6 +535,11 @@ export class DataFlowEngine {
           return this.processRedisCommand(node, message, config);
         }
 
+        // Cassandra specific: if payload contains CQL query, use CassandraRoutingEngine
+        if (type === 'cassandra') {
+          return this.processCQLQuery(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -841,6 +846,120 @@ export class DataFlowEngine {
     } else {
       message.status = 'failed';
       message.error = result.error || 'Redis command execution failed';
+      message.latency = result.latency || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Process CQL query using CassandraRoutingEngine
+   */
+  private processCQLQuery(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get CassandraRoutingEngine from emulationEngine
+    const cassandraEngine = emulationEngine.getCassandraRoutingEngine(node.id);
+    if (!cassandraEngine) {
+      message.status = 'failed';
+      message.error = 'Cassandra Routing Engine not initialized';
+      return message;
+    }
+
+    // Extract CQL query from payload
+    let cqlQuery: string;
+    let consistencyLevel: string | undefined;
+
+    if (payload?.cql) {
+      // Explicit CQL format: { cql: "SELECT * FROM keyspace.table", consistency: "QUORUM" }
+      cqlQuery = payload.cql;
+      consistencyLevel = payload.consistency;
+    } else if (payload?.query) {
+      // Alternative format: { query: "SELECT * FROM keyspace.table" }
+      cqlQuery = payload.query;
+      consistencyLevel = payload.consistency;
+    } else if (typeof payload === 'string') {
+      // String format: "SELECT * FROM keyspace.table"
+      cqlQuery = payload;
+    } else {
+      // Try to infer from operation
+      const operation = payload?.operation || 'select';
+      const cassandraConfig = node.data.config as any;
+      const keyspace = payload?.keyspace || cassandraConfig?.keyspace || 'system';
+      const table = payload?.table || 'default_table';
+      
+      switch (operation.toLowerCase()) {
+        case 'select':
+        case 'read':
+          cqlQuery = `SELECT * FROM ${keyspace}.${table}`;
+          if (payload?.limit) {
+            cqlQuery += ` LIMIT ${payload.limit}`;
+          }
+          break;
+        case 'insert':
+        case 'write':
+          const columns = payload?.columns ? Object.keys(payload.columns).join(', ') : 'id, data';
+          const values = payload?.columns 
+            ? Object.values(payload.columns).map((v: any) => `'${v}'`).join(', ')
+            : `${Date.now()}, 'data'`;
+          cqlQuery = `INSERT INTO ${keyspace}.${table} (${columns}) VALUES (${values})`;
+          break;
+        case 'update':
+          const updateCols = payload?.columns || {};
+          const setClause = Object.entries(updateCols)
+            .map(([k, v]) => `${k} = '${v}'`)
+            .join(', ');
+          cqlQuery = `UPDATE ${keyspace}.${table} SET ${setClause}`;
+          if (payload?.where) {
+            cqlQuery += ` WHERE ${payload.where}`;
+          }
+          break;
+        case 'delete':
+          cqlQuery = `DELETE FROM ${keyspace}.${table}`;
+          if (payload?.where) {
+            cqlQuery += ` WHERE ${payload.where}`;
+          }
+          break;
+        default:
+          message.status = 'failed';
+          message.error = `Unknown CQL operation: ${operation}`;
+          return message;
+      }
+    }
+
+    // Get consistency level from config if not provided
+    if (!consistencyLevel) {
+      const cassandraConfig = node.data.config as any;
+      consistencyLevel = cassandraConfig?.consistencyLevel || 'QUORUM';
+    }
+
+    // Execute CQL query
+    const result = cassandraEngine.executeCQL(cqlQuery, consistencyLevel as any);
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || 5; // Cassandra latency
+      message.payload = {
+        ...(message.payload as any),
+        cql: cqlQuery,
+        consistency: result.consistency,
+        rows: result.rows || [],
+        rowCount: result.rowCount || 0,
+        replicasQueried: result.replicasQueried,
+        cqlResult: result.rows,
+      };
+      message.metadata = {
+        ...message.metadata,
+        cassandraConsistency: result.consistency,
+        cassandraReplicasQueried: result.replicasQueried,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'CQL query execution failed';
       message.latency = result.latency || 0;
     }
 
