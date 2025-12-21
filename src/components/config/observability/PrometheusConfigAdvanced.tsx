@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,15 +11,18 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useState } from 'react';
-import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit } from 'lucide-react';
+import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit, Download } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { showError } from '@/utils/toast';
+import { showError, showSuccess } from '@/utils/toast';
 import { PageTitle, Description } from '@/components/ui/typography';
+import { exportPrometheusConfig, exportAlertingRules, exportRecordingRules } from '@/utils/prometheusYamlExporter';
+import { migrateConfigIfNeeded, needsMigration } from '@/utils/prometheusConfigMigrator';
 
 interface PrometheusConfigProps {
   componentId: string;
 }
 
+// Старый интерфейс для миграции (deprecated)
 interface ScrapeTarget {
   job: string;
   endpoint: string;
@@ -27,6 +31,20 @@ interface ScrapeTarget {
   scrapeTimeout?: string;
   labels?: Record<string, string>;
   status?: 'up' | 'down';
+}
+
+// Новая структура, соответствующая реальному Prometheus формату
+interface StaticConfig {
+  targets: string[]; // ['host:port', ...] без протокола
+  labels?: Record<string, string>;
+}
+
+interface ScrapeConfig {
+  job_name: string;
+  scrape_interval?: string;
+  scrape_timeout?: string;
+  metrics_path?: string;
+  static_configs: StaticConfig[];
 }
 
 interface RemoteWriteEndpoint {
@@ -55,7 +73,8 @@ interface ServiceDiscovery {
 }
 
 interface PrometheusConfig {
-  scrapeInterval?: string;
+  version?: string;
+  scrapeInterval?: string; // Global scrape interval
   evaluationInterval?: string;
   retentionTime?: string;
   storagePath?: string;
@@ -63,6 +82,9 @@ interface PrometheusConfig {
   remoteWrite?: RemoteWriteEndpoint[];
   alertmanagerUrl?: string;
   enableAlertmanager?: boolean;
+  // Новая структура (приоритет)
+  scrape_configs?: ScrapeConfig[];
+  // Старая структура (для миграции, deprecated)
   targets?: ScrapeTarget[];
   alertingRules?: AlertingRule[];
   recordingRules?: RecordingRule[];
@@ -70,56 +92,76 @@ interface PrometheusConfig {
 }
 
 export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
+  const { getComponentMetrics, isRunning } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) {
     return <div className="p-4 text-muted-foreground">Component not found</div>;
   }
 
-  const config = (node.data.config as any) || ({} as PrometheusConfig);
+  let config = (node.data.config as any) || ({} as PrometheusConfig);
+  
+  // Автоматическая миграция старой структуры в новую
+  if (needsMigration(config)) {
+    config = migrateConfigIfNeeded(config);
+    // Сохраняем мигрированный конфиг
+    updateNode(componentId, {
+      data: {
+        ...node.data,
+        config,
+      },
+    });
+  }
+  
+  const version = config.version || '2.48.0';
   const scrapeInterval = config.scrapeInterval || '15s';
   const evaluationInterval = config.evaluationInterval || '15s';
   const retentionTime = config.retentionTime || '15d';
   const storagePath = config.storagePath || '/prometheus';
   const enableRemoteWrite = config.enableRemoteWrite ?? false;
-  const remoteWrite = config.remoteWrite || [{ url: 'https://remote-metrics.example.com/api/v1/write' }];
+  const remoteWrite = config.remoteWrite || [];
   const enableAlertmanager = config.enableAlertmanager ?? true;
   const alertmanagerUrl = config.alertmanagerUrl || 'http://alertmanager:9093';
-  const targets = config.targets || [
-    { job: 'kubernetes-nodes', endpoint: 'https://kube-nodes:9100', interval: '30s', status: 'up' },
-    { job: 'istio-mesh', endpoint: 'http://istio-telemetry:15014', interval: '15s', status: 'up' },
-    { job: 'custom-app', endpoint: 'http://app:8080/metrics', interval: '10s', status: 'down' },
-  ];
-  const alertingRules = config.alertingRules || [
-    {
-      name: 'HighCPUUsage',
-      expr: 'rate(process_cpu_seconds_total[5m]) > 0.8',
-      for: '5m',
-      labels: { severity: 'warning' },
-      annotations: { summary: 'High CPU usage detected', description: 'CPU usage is above 80%' },
-      severity: 'warning'
-    },
-    {
-      name: 'InstanceDown',
-      expr: 'up == 0',
-      for: '1m',
-      labels: { severity: 'critical' },
-      annotations: { summary: 'Instance is down', description: 'Target instance is not responding' },
-      severity: 'critical'
+  const scrapeConfigs = config.scrape_configs || [];
+  const alertingRules = config.alertingRules || [];
+  const recordingRules = config.recordingRules || [];
+  const serviceDiscovery = config.serviceDiscovery || [];
+
+  // Вычисляем статус Prometheus на основе реальных данных
+  const getPrometheusStatus = () => {
+    // Если нет scrape_configs - статус "Idle"
+    const totalTargets = scrapeConfigs.reduce((sum, sc) => 
+      sum + (sc.static_configs?.reduce((s, stc) => s + (stc.targets?.length || 0), 0) || 0), 0
+    );
+    
+    if (totalTargets === 0) {
+      return { status: 'idle', label: 'Idle', color: 'bg-gray-500' };
     }
-  ];
-  const recordingRules = config.recordingRules || [
-    {
-      name: 'cpu:usage:rate5m',
-      expr: 'rate(process_cpu_seconds_total[5m])',
-      labels: { job: 'node-exporter' }
+
+    // Если эмуляция работает, пытаемся получить реальные метрики
+    if (isRunning) {
+      const metrics = getComponentMetrics(componentId);
+      if (metrics?.customMetrics) {
+        const targetsUp = metrics.customMetrics.targets_up || 0;
+        const targetsDown = metrics.customMetrics.targets_down || 0;
+        const scrapeErrors = metrics.customMetrics.scrape_errors_total || 0;
+        
+        if (targetsDown > 0 || scrapeErrors > 0) {
+          return { status: 'degraded', label: 'Degraded', color: 'bg-yellow-500' };
+        }
+        if (targetsUp > 0) {
+          return { status: 'healthy', label: 'Healthy', color: 'bg-green-500' };
+        }
+      }
     }
-  ];
-  const serviceDiscovery = config.serviceDiscovery || [
-    { type: 'kubernetes', config: { role: 'pod', namespaces: { names: ['default', 'production'] } } },
-    { type: 'consul', config: { server: 'consul:8500', services: ['web', 'api'] } }
-  ];
+
+    // Если эмуляция не работает, проверяем наличие конфигов
+    // Есть конфиги, но неизвестен статус - показываем "Configured"
+    return { status: 'configured', label: 'Configured', color: 'bg-blue-500' };
+  };
+
+  const prometheusStatus = getPrometheusStatus();
 
   const [editingRuleIndex, setEditingRuleIndex] = useState<number | null>(null);
   const [editingRecordingRuleIndex, setEditingRecordingRuleIndex] = useState<number | null>(null);
@@ -136,28 +178,116 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
     });
   };
 
-  const addTarget = () => {
+  // Функции управления scrape_configs
+  const addScrapeConfig = () => {
     updateConfig({
-      targets: [
-        ...targets,
-        { job: 'new-job', endpoint: 'http://service:port/metrics', interval: scrapeInterval, status: 'up' },
+      scrape_configs: [
+        ...scrapeConfigs,
+        {
+          job_name: 'new-job',
+          static_configs: [{
+            targets: [],
+          }],
+        },
       ],
     });
   };
 
-  const removeTarget = (index: number) => {
-    updateConfig({ targets: targets.filter((_, i) => i !== index) });
+  const removeScrapeConfig = (index: number) => {
+    updateConfig({ 
+      scrape_configs: scrapeConfigs.filter((_, i) => i !== index) 
+    });
   };
 
-  const updateTarget = (index: number, field: keyof ScrapeTarget, value: string) => {
-    const updated = [...targets];
+  const updateScrapeConfig = (index: number, field: keyof ScrapeConfig, value: any) => {
+    const updated = [...scrapeConfigs];
     updated[index] = { ...updated[index], [field]: value };
-    updateConfig({ targets: updated });
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const addStaticConfigToJob = (jobIndex: number) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: [
+        ...(job.static_configs || []),
+        { targets: [] },
+      ],
+    };
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const removeStaticConfigFromJob = (jobIndex: number, configIndex: number) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: job.static_configs.filter((_, i) => i !== configIndex),
+    };
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const addTargetToStaticConfig = (jobIndex: number, configIndex: number, target: string) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    const staticConfig = job.static_configs[configIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: job.static_configs.map((sc, i) => 
+        i === configIndex 
+          ? { ...sc, targets: [...(sc.targets || []), target] }
+          : sc
+      ),
+    };
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const removeTargetFromStaticConfig = (jobIndex: number, configIndex: number, targetIndex: number) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: job.static_configs.map((sc, i) => 
+        i === configIndex 
+          ? { ...sc, targets: sc.targets.filter((_, ti) => ti !== targetIndex) }
+          : sc
+      ),
+    };
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const updateTargetInStaticConfig = (jobIndex: number, configIndex: number, targetIndex: number, newTarget: string) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: job.static_configs.map((sc, i) => 
+        i === configIndex 
+          ? { ...sc, targets: sc.targets.map((t, ti) => ti === targetIndex ? newTarget : t) }
+          : sc
+      ),
+    };
+    updateConfig({ scrape_configs: updated });
+  };
+
+  const updateStaticConfigLabels = (jobIndex: number, configIndex: number, labels: Record<string, string>) => {
+    const updated = [...scrapeConfigs];
+    const job = updated[jobIndex];
+    updated[jobIndex] = {
+      ...job,
+      static_configs: job.static_configs.map((sc, i) => 
+        i === configIndex 
+          ? { ...sc, labels: Object.keys(labels).length > 0 ? labels : undefined }
+          : sc
+      ),
+    };
+    updateConfig({ scrape_configs: updated });
   };
 
   const addRemoteWrite = () => {
     updateConfig({
-      remoteWrite: [...remoteWrite, { url: 'https://remote-storage.example.com/write' }],
+      remoteWrite: [...remoteWrite, { url: '' }],
     });
   };
 
@@ -233,6 +363,57 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
     updateConfig({ serviceDiscovery: updated });
   };
 
+  const exportConfig = () => {
+    try {
+      const prometheusYaml = exportPrometheusConfig(config);
+      const alertingYaml = config.alertingRules && config.alertingRules.length > 0 
+        ? exportAlertingRules(config.alertingRules)
+        : '';
+      const recordingYaml = config.recordingRules && config.recordingRules.length > 0
+        ? exportRecordingRules(config.recordingRules)
+        : '';
+
+      // Создаем blob и скачиваем
+      const blob = new Blob([prometheusYaml], { type: 'text/yaml' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'prometheus.yml';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      if (alertingYaml) {
+        const alertBlob = new Blob([alertingYaml], { type: 'text/yaml' });
+        const alertUrl = URL.createObjectURL(alertBlob);
+        const alertA = document.createElement('a');
+        alertA.href = alertUrl;
+        alertA.download = 'alerts.yml';
+        document.body.appendChild(alertA);
+        alertA.click();
+        document.body.removeChild(alertA);
+        URL.revokeObjectURL(alertUrl);
+      }
+
+      if (recordingYaml) {
+        const recBlob = new Blob([recordingYaml], { type: 'text/yaml' });
+        const recUrl = URL.createObjectURL(recBlob);
+        const recA = document.createElement('a');
+        recA.href = recUrl;
+        recA.download = 'recording_rules.yml';
+        document.body.appendChild(recA);
+        recA.click();
+        document.body.removeChild(recA);
+        URL.revokeObjectURL(recUrl);
+      }
+
+      showSuccess('Configuration exported successfully');
+    } catch (error) {
+      showError(`Failed to export configuration: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  };
+
   return (
     <div className="h-full overflow-y-auto bg-background">
       <div className="p-6 space-y-6">
@@ -248,11 +429,14 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">v2.48.0</Badge>
             <Badge variant="secondary" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Healthy
+              <div className={`h-2 w-2 rounded-full ${prometheusStatus.color} ${isRunning && prometheusStatus.status === 'healthy' ? 'animate-pulse' : ''}`} />
+              {prometheusStatus.label}
             </Badge>
+            <Button variant="outline" size="sm" onClick={exportConfig}>
+              <Download className="h-4 w-4 mr-2" />
+              Export YAML
+            </Button>
           </div>
         </div>
 
@@ -294,7 +478,15 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                 <CardTitle>Global Settings</CardTitle>
                 <CardDescription>Intervals for scraping targets and evaluating rules</CardDescription>
               </CardHeader>
-              <CardContent className="grid grid-cols-3 gap-4">
+              <CardContent className="grid grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <Label>Version</Label>
+                  <Input
+                    value={version}
+                    onChange={(e) => updateConfig({ version: e.target.value })}
+                    placeholder="2.48.0"
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label>Scrape Interval</Label>
                   <Input
@@ -319,50 +511,136 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
             <Card>
               <CardHeader className="flex items-center justify-between">
                 <div>
-                  <CardTitle>Scrape Targets</CardTitle>
-                  <CardDescription>Endpoints Prometheus scrapes for metrics</CardDescription>
+                  <CardTitle>Scrape Configs</CardTitle>
+                  <CardDescription>Scrape configurations for Prometheus (matches real Prometheus format)</CardDescription>
                 </div>
-                <Button variant="outline" size="sm" onClick={addTarget}>
+                <Button variant="outline" size="sm" onClick={addScrapeConfig}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Target
+                  Add Scrape Config
                 </Button>
               </CardHeader>
-              <CardContent className="space-y-3">
-                {targets.map((target, index) => (
-                  <div key={`${target.job}-${index}`} className="p-4 border border-border rounded-lg bg-card space-y-3">
+              <CardContent className="space-y-4">
+                {scrapeConfigs.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No scrape configurations</p>
+                    <p className="text-xs mt-2">Add scrape configs manually or connect components to automatically add them</p>
+                  </div>
+                )}
+                {scrapeConfigs.map((scrapeConfig, jobIndex) => (
+                  <div key={`${scrapeConfig.job_name}-${jobIndex}`} className="p-4 border border-border rounded-lg bg-card space-y-4">
                     <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <Input
-                          value={target.job}
-                          className="font-semibold"
-                          onChange={(e) => updateTarget(index, 'job', e.target.value)}
-                        />
-                        <div className="text-xs text-muted-foreground">Job Name</div>
+                      <div className="flex-1 space-y-2">
+                        <div>
+                          <Label>Job Name</Label>
+                          <Input
+                            value={scrapeConfig.job_name}
+                            className="font-semibold"
+                            onChange={(e) => updateScrapeConfig(jobIndex, 'job_name', e.target.value)}
+                            placeholder="my-job"
+                          />
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Badge variant={target.status === 'up' ? 'secondary' : 'destructive'}>
-                          {target.status === 'up' ? 'UP' : 'DOWN'}
-                        </Badge>
-                        <Button variant="ghost" size="icon" onClick={() => removeTarget(index)}>
-                          <Trash2 className="h-4 w-4" />
+                      <Button variant="ghost" size="icon" onClick={() => removeScrapeConfig(jobIndex)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <Label>Scrape Interval</Label>
+                        <Input
+                          value={scrapeConfig.scrape_interval || scrapeInterval}
+                          onChange={(e) => updateScrapeConfig(jobIndex, 'scrape_interval', e.target.value || undefined)}
+                          placeholder={scrapeInterval}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Metrics Path</Label>
+                        <Input
+                          value={scrapeConfig.metrics_path || '/metrics'}
+                          onChange={(e) => updateScrapeConfig(jobIndex, 'metrics_path', e.target.value || undefined)}
+                          placeholder="/metrics"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Scrape Timeout</Label>
+                        <Input
+                          value={scrapeConfig.scrape_timeout || ''}
+                          onChange={(e) => updateScrapeConfig(jobIndex, 'scrape_timeout', e.target.value || undefined)}
+                          placeholder="10s"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label>Static Configs</Label>
+                        <Button variant="outline" size="sm" onClick={() => addStaticConfigToJob(jobIndex)}>
+                          <Plus className="h-3 w-3 mr-1" />
+                          Add Static Config
                         </Button>
                       </div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Endpoint</Label>
-                      <Input
-                        value={target.endpoint}
-                        onChange={(e) => updateTarget(index, 'endpoint', e.target.value)}
-                        placeholder="http://service:port/metrics"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Scrape Interval</Label>
-                      <Input
-                        value={target.interval}
-                        onChange={(e) => updateTarget(index, 'interval', e.target.value)}
-                        placeholder="15s"
-                      />
+                      {scrapeConfig.static_configs.map((staticConfig, configIndex) => (
+                        <div key={configIndex} className="p-3 border border-border rounded bg-muted/50 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <Label className="text-sm">Static Config #{configIndex + 1}</Label>
+                            {scrapeConfig.static_configs.length > 1 && (
+                              <Button variant="ghost" size="icon" onClick={() => removeStaticConfigFromJob(jobIndex, configIndex)}>
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            )}
+                          </div>
+                          
+                          <div className="space-y-2">
+                            <Label className="text-xs">Targets (host:port)</Label>
+                            <div className="space-y-2">
+                              {staticConfig.targets.map((target, targetIndex) => (
+                                <div key={targetIndex} className="flex gap-2">
+                                  <Input
+                                    value={target}
+                                    onChange={(e) => updateTargetInStaticConfig(jobIndex, configIndex, targetIndex, e.target.value)}
+                                    placeholder="host:port"
+                                  />
+                                  <Button 
+                                    variant="ghost" 
+                                    size="icon"
+                                    onClick={() => removeTargetFromStaticConfig(jobIndex, configIndex, targetIndex)}
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              ))}
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={() => addTargetToStaticConfig(jobIndex, configIndex, '')}
+                                className="w-full"
+                              >
+                                <Plus className="h-3 w-3 mr-1" />
+                                Add Target
+                              </Button>
+                            </div>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label className="text-xs">Labels (JSON)</Label>
+                            <Textarea
+                              className="font-mono text-xs"
+                              rows={2}
+                              value={JSON.stringify(staticConfig.labels || {}, null, 2)}
+                              onChange={(e) => {
+                                try {
+                                  const parsed = JSON.parse(e.target.value);
+                                  updateStaticConfigLabels(jobIndex, configIndex, parsed);
+                                } catch (error) {
+                                  showError(`Неверный формат JSON: ${error instanceof Error ? error.message : 'Неизвестная ошибка'}`);
+                                }
+                              }}
+                              placeholder='{"env": "prod", "region": "us-east-1"}'
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 ))}
@@ -458,6 +736,12 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                 </Button>
               </CardHeader>
               <CardContent className="space-y-3">
+                {serviceDiscovery.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No service discovery configured</p>
+                    <p className="text-xs mt-2">Configure automatic target discovery for Kubernetes, Consul, etc.</p>
+                  </div>
+                )}
                 {serviceDiscovery.map((sd, index) => (
                   <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">
@@ -542,6 +826,12 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                 </CardContent>
               )}
               <CardContent className="space-y-3">
+                {alertingRules.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No alerting rules configured</p>
+                    <p className="text-xs mt-2">Create rules to monitor your system and trigger alerts</p>
+                  </div>
+                )}
                 {alertingRules.map((rule, index) => (
                   <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">
@@ -690,6 +980,12 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
                 </CardContent>
               )}
               <CardContent className="space-y-3">
+                {recordingRules.length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <p>No recording rules configured</p>
+                    <p className="text-xs mt-2">Create rules to pre-compute frequently used queries</p>
+                  </div>
+                )}
                 {recordingRules.map((rule, index) => (
                   <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">

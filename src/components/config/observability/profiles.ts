@@ -8,6 +8,7 @@ export const OBSERVABILITY_PROFILES: Record<string, ComponentProfile> = {
     badge: 'Metrics',
     docsUrl: 'https://prometheus.io/',
     defaults: {
+      version: '2.48.0',
       scrapeInterval: '15s',
       evaluationInterval: '15s',
       retentionTime: '15d',
@@ -16,7 +17,10 @@ export const OBSERVABILITY_PROFILES: Record<string, ComponentProfile> = {
       remoteWriteUrl: '',
       enableAlertmanager: true,
       alertmanagerUrl: 'http://alertmanager:9093',
-      targets: ['localhost:9090'],
+      scrape_configs: [],
+      alertingRules: [],
+      recordingRules: [],
+      serviceDiscovery: [],
     },
     sections: [
       {

@@ -19,6 +19,7 @@ import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
+import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -165,6 +166,9 @@ export class EmulationEngine {
   
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
+  
+  // Prometheus emulation engines per node
+  private prometheusEngines: Map<string, PrometheusEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -305,6 +309,9 @@ export class EmulationEngine {
         }
         if (node.type === 's3-datalake') {
           this.initializeS3RoutingEngine(node);
+        }
+        if (node.type === 'prometheus') {
+          this.initializePrometheusEngine(node);
         }
       }
       
@@ -571,6 +578,11 @@ export class EmulationEngine {
       this.updateComponentMetrics(node);
     }
     
+    // Perform Prometheus scraping (after metrics are updated)
+    for (const [nodeId, prometheusEngine] of this.prometheusEngines.entries()) {
+      prometheusEngine.performScraping(now, this.nodes, this.metrics);
+    }
+    
     // Update connection metrics based on source/target throughput
     for (const connection of this.connections) {
       this.updateConnectionMetrics(connection);
@@ -651,6 +663,9 @@ export class EmulationEngine {
           break;
         case 'bff-service':
           this.simulateBFF(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'prometheus':
+          this.simulatePrometheus(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3832,6 +3847,53 @@ export class EmulationEngine {
   }
 
   /**
+   * Prometheus emulation
+   */
+  private simulatePrometheus(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Get Prometheus emulation engine
+    const prometheusEngine = this.prometheusEngines.get(node.id);
+    
+    if (!prometheusEngine) {
+      // No engine initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1; // Minimal utilization when idle
+      return;
+    }
+
+    // Get Prometheus metrics (scrape load, etc.)
+    const promMetrics = prometheusEngine.getPrometheusMetrics();
+    const load = prometheusEngine.calculateLoad();
+    
+    // Prometheus throughput = scrape requests per second
+    metrics.throughput = load.scrapeRequestsPerSecond;
+    
+    // Prometheus latency = average scrape duration
+    metrics.latency = load.averageScrapeDuration;
+    
+    // Error rate from scraping
+    metrics.errorRate = load.errorRate;
+    
+    // Utilization based on number of targets and scrape frequency
+    // More targets and shorter intervals = higher utilization
+    const targetCount = prometheusEngine.getTargetStatuses().length;
+    const utilization = Math.min(0.95, 0.1 + (targetCount / 100) * 0.5 + (load.scrapeRequestsPerSecond / 10) * 0.2);
+    metrics.utilization = utilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'scrape_requests_total': promMetrics.scrapeRequestsTotal,
+      'scrape_errors_total': promMetrics.scrapeErrorsTotal,
+      'targets_up': promMetrics.targetsUp,
+      'targets_down': promMetrics.targetsDown,
+      'samples_scraped': promMetrics.samplesScraped,
+      'scrape_requests_per_second': load.scrapeRequestsPerSecond,
+      'samples_per_second': load.samplesPerSecond,
+    };
+  }
+
+  /**
    * BFF Service emulation
    */
   private simulateBFF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -4274,6 +4336,15 @@ export class EmulationEngine {
   /**
    * Initialize PostgreSQL Connection Pool for a node
    */
+  /**
+   * Initialize Prometheus Emulation Engine for Prometheus node
+   */
+  private initializePrometheusEngine(node: CanvasNode): void {
+    const prometheusEngine = new PrometheusEmulationEngine();
+    prometheusEngine.initializeConfig(node);
+    this.prometheusEngines.set(node.id, prometheusEngine);
+  }
+
   private initializePostgreSQLConnectionPool(node: CanvasNode): void {
     const config = (node.data.config || {}) as any;
     

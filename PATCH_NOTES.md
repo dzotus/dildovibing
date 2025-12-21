@@ -1,5 +1,151 @@
 # Patch Notes
 
+## Версия 0.1.7t - Prometheus: Реальная структура конфига и симуляция scraping
+
+### Обзор изменений
+Полная переработка конфигурации Prometheus: приведена к реальному формату Prometheus (scrape_configs структура), создана симуляция scraping процесса через PrometheusEmulationEngine, автоматическая миграция старых конфигов, экспорт в YAML формат, реалистичный статус компонента. Убран хардкод дефолтных значений, добавлена поддержка версии Prometheus в конфиге.
+
+---
+
+## Prometheus: Реальная структура конфига и симуляция scraping
+
+### 1. Исправление структуры конфига (соответствие реальному Prometheus)
+
+**Проблема:**
+- Структура конфига не соответствовала реальному формату Prometheus
+- Использовалась упрощенная структура `targets: [{ job, endpoint, interval }]` вместо `scrape_configs`
+- Невозможно было экспортировать корректный `prometheus.yml`
+- Хардкод дефолтных значений (примеры targets, alerting rules)
+
+**Решение:**
+- ✅ Обновлены типы и интерфейсы:
+  - `ScrapeConfig` с полями: `job_name`, `scrape_interval`, `scrape_timeout`, `metrics_path`, `static_configs`
+  - `StaticConfig` с полями: `targets: string[]` (host:port), `labels`
+  - Структура полностью соответствует реальному Prometheus формату
+- ✅ Создан мигратор данных (`src/utils/prometheusConfigMigrator.ts`):
+  - Автоматическая конвертация старой структуры `targets` в новую `scrape_configs`
+  - Группировка targets по job_name
+  - Извлечение host:port из endpoints
+  - Автоматическая миграция при загрузке конфига
+- ✅ Обновлен UI компонент:
+  - Полностью переделан под новую структуру scrape_configs
+  - Управление static_configs внутри каждого job
+  - Валидация формата targets (host:port без протокола)
+  - Удалены хардкод дефолтные значения (пустые массивы вместо примеров)
+- ✅ Обновлен YAML экспортер (`src/utils/prometheusYamlExporter.ts`):
+  - Поддержка новой структуры `scrape_configs`
+  - Обратная совместимость со старой структурой
+  - Корректный экспорт в формат `prometheus.yml`
+- ✅ Обновлены правила подключения (`src/services/connection/rules/prometheusRules.ts`):
+  - Работа с новой структурой `scrape_configs`
+  - Автоматическое добавление targets в правильные static_configs
+  - Корректный cleanup при удалении связей
+
+**Изменённые файлы:**
+- `src/components/config/observability/PrometheusConfigAdvanced.tsx`
+- `src/components/config/observability/profiles.ts`
+- `src/utils/prometheusConfigMigrator.ts` (новый)
+- `src/utils/prometheusYamlExporter.ts`
+- `src/services/connection/rules/prometheusRules.ts`
+
+---
+
+### 2. Prometheus Metrics Exporter
+
+**Проблема:**
+- Метрики компонентов не экспортировались в формате Prometheus
+- Невозможно было симулировать реальный scraping процесс
+- Метрики хранились только в виде TypeScript объектов
+
+**Решение:**
+- ✅ Создан `PrometheusMetricsExporter` (`src/core/PrometheusMetricsExporter.ts`):
+  - Конвертация `ComponentMetrics` в Prometheus exposition format
+  - Поддержка типов метрик: gauge, counter
+  - Экспорт метрик: throughput, latency, latencyP50, latencyP99, errorRate, utilization
+  - Поддержка custom metrics
+  - Правильное экранирование labels и sanitization имен метрик
+  - Формат: `metric_name{labels} value timestamp`
+
+**Изменённые файлы:**
+- `src/core/PrometheusMetricsExporter.ts` (новый)
+
+---
+
+### 3. Prometheus Emulation Engine
+
+**Проблема:**
+- Prometheus не симулировал реальный процесс scraping
+- Не было расчета нагрузки на Prometheus
+- Не отслеживались статусы targets (up/down)
+- Метрики самого Prometheus не генерировались
+
+**Решение:**
+- ✅ Создан `PrometheusEmulationEngine` (`src/core/PrometheusEmulationEngine.ts`):
+  - Симуляция scraping процесса по scrape_interval
+  - Отслеживание статусов targets (up/down, lastSuccess, lastError, scrapeDuration)
+  - Расчет нагрузки: scrape requests/sec, average scrape duration, error rate, samples/sec
+  - Метрики Prometheus: `scrape_requests_total`, `scrape_errors_total`, `targets_up`, `targets_down`, `samples_scraped`
+  - Поддержка новой структуры `scrape_configs` с обратной совместимостью
+  - Интеграция с `PrometheusMetricsExporter` для получения метрик компонентов
+- ✅ Интеграция в `EmulationEngine`:
+  - Метод `initializePrometheusEngine()` для инициализации
+  - Метод `simulatePrometheus()` для генерации метрик Prometheus
+  - Вызов `performScraping()` в каждом цикле симуляции
+  - Метрики Prometheus учитывают нагрузку от scraping
+
+**Изменённые файлы:**
+- `src/core/PrometheusEmulationEngine.ts` (новый)
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. UI улучшения
+
+**Проблема:**
+- Badge с версией отображался в UI (не нужен пользователю)
+- Статус всегда показывал "Healthy" даже при отсутствии связей
+- Не было реалистичного отображения состояния Prometheus
+
+**Решение:**
+- ✅ Удален Badge с версией из UI
+- ✅ Реалистичный статус Prometheus:
+  - **Idle** (серый) - нет scrape_configs или нет targets
+  - **Configured** (синий) - есть конфиги, но эмуляция не запущена
+  - **Healthy** (зеленый, с пульсацией) - эмуляция работает, все targets up
+  - **Degraded** (желтый) - есть ошибки или down targets
+  - Статус берется из метрик эмуляции (`targets_up`, `targets_down`, `scrape_errors_total`)
+- ✅ Добавлена кнопка "Export YAML" для экспорта конфигурации
+
+**Изменённые файлы:**
+- `src/components/config/observability/PrometheusConfigAdvanced.tsx`
+
+---
+
+### 5. Добавление версии в конфиг
+
+**Проблема:**
+- Версия Prometheus была захардкожена в UI
+- Невозможно было указать версию в конфиге
+
+**Решение:**
+- ✅ Добавлено поле `version` в `PrometheusConfig`
+- ✅ Дефолтное значение: `'2.48.0'`
+- ✅ Версия хранится в конфиге компонента (можно изменить)
+
+**Изменённые файлы:**
+- `src/components/config/observability/PrometheusConfigAdvanced.tsx`
+- `src/components/config/observability/profiles.ts`
+
+---
+
+### Результат
+
+Структура конфига Prometheus теперь полностью соответствует реальному формату Prometheus. Реализована симуляция scraping процесса с отслеживанием статусов targets, расчетом нагрузки и генерацией метрик самого Prometheus. Система автоматически мигрирует старые конфиги в новый формат. UI показывает реалистичный статус компонента на основе реальных метрик эмуляции.
+
+Оценка симуляции: с 3/10 (только UI конфигурация) до 8/10 (полноценная симуляция scraping и метрик).
+
+---
+
 ## Версия 0.1.7s - S3 Data Lake Full Simulation System
 
 ### Обзор изменений
