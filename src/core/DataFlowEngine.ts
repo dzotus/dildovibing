@@ -114,6 +114,9 @@ export class DataFlowEngine {
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
     this.registerHandler('bff-service', this.createIntegrationHandler('bff-service'));
     this.registerHandler('webhook-relay', this.createIntegrationHandler('webhook-relay'));
+    
+    // Observability - logs and metrics
+    this.registerHandler('loki', this.createLokiHandler());
   }
 
   /**
@@ -2392,6 +2395,116 @@ export class DataFlowEngine {
   private getTargetFormats(type: string): string[] {
     const handler = this.handlers.get(type);
     return handler?.getSupportedFormats?.({ type } as CanvasNode) || ['json'];
+  }
+
+  /**
+   * Create handler for Loki
+   */
+  private createLokiHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        // Get Loki emulation engine from emulation engine
+        const lokiEngine = emulationEngine.getLokiEmulationEngine(node.id);
+        
+        if (!lokiEngine) {
+          // No engine, just pass through
+          message.status = 'delivered';
+          return message;
+        }
+
+        const payload = message.payload as any;
+        
+        // Check if this is a LogQL query or log ingestion
+        if (payload?.query || payload?.logql) {
+          // This is a LogQL query
+          const query = payload.query || payload.logql;
+          const startTime = payload.startTime || payload.start;
+          const endTime = payload.endTime || payload.end;
+          const limit = payload.limit || 100;
+          
+          const result = lokiEngine.executeQuery(query, startTime, endTime, limit);
+          
+          if (result.success) {
+            message.status = 'delivered';
+            message.latency = result.latency;
+            message.payload = {
+              ...(message.payload as any),
+              query,
+              results: result.result || [],
+              resultsCount: result.resultsCount,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.error || 'LogQL query execution failed';
+            message.latency = result.latency || 0;
+          }
+        } else {
+          // This is log ingestion (push API format)
+          // Convert message payload to Loki push format
+          const logs: Array<{ stream: Record<string, string>; values: Array<[string, string]> }> = [];
+          
+          // Extract stream labels from metadata or payload
+          const streamLabels = payload?.stream || payload?.labels || message.metadata?.labels || {
+            app: node.data.label?.toLowerCase().replace(/\s+/g, '-') || 'unknown',
+            source: message.source.slice(0, 8),
+          };
+          
+          // Extract log entries
+          let values: Array<[string, string]> = [];
+          
+          if (payload?.values && Array.isArray(payload.values)) {
+            // Already in Loki format
+            values = payload.values;
+          } else if (payload?.logs && Array.isArray(payload.logs)) {
+            // Array of log strings
+            const timestamp = Date.now() * 1000000; // nanoseconds
+            values = payload.logs.map((log: string, index: number) => [
+              (timestamp + index).toString(),
+              String(log),
+            ]);
+          } else if (payload?.log) {
+            // Single log string
+            const timestamp = Date.now() * 1000000;
+            values = [[timestamp.toString(), String(payload.log)]];
+          } else if (typeof payload === 'string') {
+            // Plain string
+            const timestamp = Date.now() * 1000000;
+            values = [[timestamp.toString(), payload]];
+          } else {
+            // Try to extract from JSON payload
+            const logLine = JSON.stringify(payload);
+            const timestamp = Date.now() * 1000000;
+            values = [[timestamp.toString(), logLine]];
+          }
+          
+          if (values.length > 0) {
+            logs.push({ stream: streamLabels, values });
+            
+            const result = lokiEngine.processIngestion(logs, message.source);
+            
+            if (result.success) {
+              message.status = 'delivered';
+              message.latency = 10; // Ingestion latency
+              message.payload = {
+                ...(message.payload as any),
+                ingestedLines: result.ingestedLines,
+                ingestedBytes: result.ingestedBytes,
+              };
+            } else {
+              message.status = 'failed';
+              message.error = result.error || 'Log ingestion failed';
+            }
+          } else {
+            message.status = 'failed';
+            message.error = 'No log entries found in payload';
+          }
+        }
+        
+        return message;
+      },
+      
+      getSupportedFormats: () => ['json', 'text'],
+    };
   }
 
   // ========== Data Generation Methods ==========

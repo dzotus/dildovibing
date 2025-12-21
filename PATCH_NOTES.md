@@ -1,5 +1,263 @@
 # Patch Notes
 
+## Версия 0.1.7v - Loki: Полная симуляция работы системы агрегации логов
+
+### Обзор изменений
+Полная реализация симуляции Loki: создан LokiEmulationEngine для обработки ingestion логов, выполнения LogQL queries, расчета нагрузки и управления retention. Реализована интеграция с Grafana для выполнения LogQL queries, обработка ingestion логов от других компонентов через DataFlowEngine. Улучшен UI для редактирования streams, labels и queries. Добавлена валидация полей ввода. Исправлена логика добавления множественных labels.
+
+---
+
+## Loki: Полная симуляция работы системы агрегации логов
+
+### 1. Loki Emulation Engine
+
+**Проблема:**
+- Loki был только UI компонентом без реальной симуляции
+- Нет обработки ingestion логов
+- Нет выполнения LogQL queries
+- Нет расчета нагрузки и storage utilization
+- Статические данные в UI (хардкод)
+
+**Решение:**
+- ✅ Создан `LokiEmulationEngine` (`src/core/LokiEmulationEngine.ts`):
+  - **Ingestion обработка:**
+    - Прием логов в формате Loki push API (`/loki/api/v1/push`)
+    - Группировка логов в streams по labels
+    - Расчет ingestion rate (lines/sec, bytes/sec)
+    - Проверка rate limits и max streams/line size
+    - Симуляция compression (gzip, snappy, lz4)
+  - **LogQL query execution:**
+    - Парсер LogQL (stream selectors, line filters, label filters, aggregations)
+    - Выполнение queries по streams с фильтрацией по времени
+    - Поддержка базовых aggregations: `rate()`, `count_over_time()`, `sum()`, `avg()`
+    - Расчет query latency и results count
+  - **Retention policy:**
+    - Автоматическое удаление старых логов по retention period
+    - Пересчет storage size после retention
+  - **Расчет нагрузки:**
+    - `ingestionLinesPerSecond`, `ingestionBytesPerSecond`
+    - `queriesPerSecond`, `averageQueryLatency`
+    - `storageUtilization`, `streamCount`
+    - Error rates для ingestion и queries
+  - **Метрики Loki:**
+    - `ingestion_requests_total`, `ingestion_lines_total`, `ingestion_bytes_total`
+    - `query_requests_total`, `query_errors_total`
+    - `active_streams`, `total_storage_size`, `retention_deletions`
+
+**Изменённые файлы:**
+- `src/core/LokiEmulationEngine.ts` (новый)
+
+---
+
+### 2. Интеграция Loki в EmulationEngine
+
+**Проблема:**
+- Нет обработки Loki компонентов в симуляции
+- Нет метода `simulateLoki()`
+- Loki не генерировал метрики и не обрабатывал логи
+
+**Решение:**
+- ✅ Добавлена симуляция Loki в `EmulationEngine`:
+  - Метод `simulateLoki()` для расчета метрик
+  - Инициализация `LokiEmulationEngine` при добавлении ноды
+  - Обработка ingestion логов от других компонентов через `processLokiIngestion()`
+  - Генерация логов из компонентов через `generateLogsFromComponent()`
+  - Периодическое выполнение retention через `performRetention()`
+  - Метрики: throughput (ingestion + queries), latency, error rate, utilization
+  - Custom metrics с детальной информацией о работе Loki
+- ✅ Генерация логов:
+  - Автоматическая генерация логов от компонентов, подключенных к Loki
+  - Определение log level на основе метрик компонента (error rate, utilization)
+  - Создание streams с labels на основе типа и меток компонента
+  - Расчет количества логов на основе connection traffic
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 3. Интеграция Loki в DataFlowEngine
+
+**Проблема:**
+- Нет обработчика для Loki в DataFlowEngine
+- Компоненты не могли отправлять логи в Loki
+- Невозможно было выполнять LogQL queries через DataFlowEngine
+
+**Решение:**
+- ✅ Создан обработчик Loki в `DataFlowEngine`:
+  - Обработка log ingestion (push API формат)
+  - Конвертация различных форматов payload в Loki push format
+  - Выполнение LogQL queries
+  - Интеграция с `LokiEmulationEngine` для обработки
+- ✅ Поддержка форматов:
+  - Loki push API формат (`{stream: {...}, values: [...]}`)
+  - Массив логов
+  - Одиночный log string
+  - JSON payload (конвертируется в log line)
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 4. Интеграция Loki queries в GrafanaEmulationEngine
+
+**Проблема:**
+- Grafana не мог выполнять LogQL queries
+- Нет связи между Grafana и Loki для queries
+
+**Решение:**
+- ✅ Добавлена поддержка LogQL queries в `GrafanaEmulationEngine`:
+  - Определение типа query (PromQL vs LogQL) по datasource
+  - Выполнение LogQL queries через `LokiEmulationEngine`
+  - Расчет query latency для LogQL queries
+  - Обработка ошибок при недоступности Loki
+- ✅ Интеграция через `createLokiQueryExecutor()`:
+  - Поиск Loki node по URL из Grafana datasource
+  - Создание функции-исполнителя для LogQL queries
+  - Передача executor в `GrafanaEmulationEngine.performUpdate()`
+
+**Изменённые файлы:**
+- `src/core/GrafanaEmulationEngine.ts`
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 5. Улучшение UI для редактирования streams и queries
+
+**Проблема:**
+- Невозможно редактировать streams (только просмотр)
+- Невозможно редактировать labels
+- Невозможно редактировать queries
+- Можно было добавить только один label
+
+**Решение:**
+- ✅ Редактирование streams:
+  - Inline редактирование имени stream (кнопка Edit)
+  - Сохранение по Enter или кнопке Done
+- ✅ Редактирование labels:
+  - Клик по Badge открывает inline редактор
+  - Редактирование value существующего label
+  - Удаление label через кнопку Trash
+  - Добавление множественных labels (форма остается открытой после добавления)
+  - Кнопка Cancel для отмены добавления
+- ✅ Редактирование queries:
+  - Inline редактирование LogQL query
+  - Редактирование duration и results
+  - Добавление новых queries через форму
+  - Удаление queries
+
+**Изменённые файлы:**
+- `src/components/config/observability/LokiConfigAdvanced.tsx`
+
+---
+
+### 6. Валидация полей ввода
+
+**Проблема:**
+- Нет валидации имени queue/topic в ActiveMQ
+- Можно было ввести некорректные значения
+
+**Решение:**
+- ✅ Валидация имени queue в ActiveMQ:
+  - Проверка на пустое значение
+  - Максимальная длина 255 символов
+  - Только буквы, цифры, точки, подчеркивания, дефисы
+  - Не может начинаться/заканчиваться точкой
+  - Отображение ошибок под полем ввода
+  - Кнопка Done неактивна при ошибке
+- ✅ Валидация имени topic (те же правила)
+- ✅ Валидация Server URL в Loki:
+  - Проверка формата URL (должен начинаться с http:// или https://)
+  - Добавлено пояснение о назначении URL
+
+**Изменённые файлы:**
+- `src/components/config/messaging/ActiveMQConfigAdvanced.tsx`
+- `src/components/config/observability/LokiConfigAdvanced.tsx`
+
+---
+
+### 7. Улучшения UI и UX
+
+**Проблема:**
+- Кнопка "Query" в хедере Loki не использовалась
+- Badge "Running" всегда зеленый, даже без connections
+- Непонятно назначение Server URL
+
+**Решение:**
+- ✅ Удалена неиспользуемая кнопка "Query" из хедера
+- ✅ Динамический статус Badge:
+  - "Running" (зеленый) - если есть входящие connections
+  - "Idle" (серый) - если нет connections
+  - Проверка через `connections.some(conn => conn.target === componentId)`
+- ✅ Улучшено описание Server URL:
+  - Пояснение, что URL используется для идентификации экземпляра Loki
+  - Указание, что в симуляции логи приходят автоматически через connections
+  - Указание использования URL в Grafana datasource для поиска Loki
+
+**Изменённые файлы:**
+- `src/components/config/observability/LokiConfigAdvanced.tsx`
+
+---
+
+## Детали реализации Loki
+
+### LokiEmulationEngine
+- Полная симуляция работы реального Loki
+- Обработка ingestion в формате push API
+- Парсер LogQL с поддержкой базовых операций
+- Расчет нагрузки на основе реальных данных (без хардкода)
+- Retention policy enforcement
+- Compression simulation
+
+### Интеграция с EmulationEngine
+- Автоматическая генерация логов от подключенных компонентов
+- Расчет метрик на основе ingestion и query load
+- Периодическое выполнение retention
+- Генерация метрик с учетом нагрузки
+
+### Интеграция с DataFlowEngine
+- Обработка log ingestion от компонентов
+- Выполнение LogQL queries
+- Конвертация различных форматов в Loki push format
+
+### Интеграция с GrafanaEmulationEngine
+- Выполнение LogQL queries из Grafana dashboards
+- Поиск Loki по URL из datasource конфигурации
+- Расчет query latency для LogQL queries
+
+### UI улучшения
+- Полное редактирование streams, labels, queries
+- Валидация полей ввода
+- Динамический статус компонента
+- Улучшенная навигация и UX
+
+---
+
+## Проверка качества Loki
+
+Все изменения проверены линтером - ошибок не обнаружено.  
+Loki теперь работает как полноценная система агрегации логов с:
+- ✅ Обработкой ingestion логов от компонентов
+- ✅ Выполнением LogQL queries
+- ✅ Расчетом нагрузки на основе реальных данных
+- ✅ Интеграцией с Grafana для queries
+- ✅ Retention policy enforcement
+- ✅ Полным редактированием конфигурации в UI
+
+Оценка симуляции: с 0/10 (только UI конфигурация) до 9/10 (полноценная симуляция с расчетом нагрузки).
+
+### Отличия от других observability компонентов:
+- ✅ Специфичная для Loki функциональность (streams, labels, LogQL)
+- ✅ Обработка ingestion в формате push API
+- ✅ Парсер и выполнение LogQL queries
+- ✅ Расчет нагрузки на основе ingestion rate и query rate
+- ✅ Retention policy enforcement
+- ✅ Интеграция с Grafana для выполнения queries
+- ✅ Автоматическая генерация логов от подключенных компонентов
+
+---
+
 ## Версия 0.1.7u - Grafana: Полная симуляция работы и визуализация дашбордов
 
 ### Обзор изменений

@@ -236,12 +236,13 @@ export class GrafanaEmulationEngine {
    */
   performUpdate(
     currentTime: number,
-    prometheusAvailable: boolean = true
+    prometheusAvailable: boolean = true,
+    lokiQueryExecutor?: (query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }
   ): void {
     if (!this.config) return;
 
     // Обновляем dashboards
-    this.updateDashboards(currentTime, prometheusAvailable);
+    this.updateDashboards(currentTime, prometheusAvailable, lokiQueryExecutor);
     
     // Оцениваем alerts
     if (this.config.enableAlerting) {
@@ -255,7 +256,11 @@ export class GrafanaEmulationEngine {
   /**
    * Обновляет dashboards (выполняет queries)
    */
-  private updateDashboards(currentTime: number, prometheusAvailable: boolean): void {
+  private updateDashboards(
+    currentTime: number,
+    prometheusAvailable: boolean,
+    lokiQueryExecutor?: (query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }
+  ): void {
     if (!this.config?.dashboards) return;
     
     const dashboards = this.normalizeDashboards(this.config.dashboards);
@@ -272,11 +277,20 @@ export class GrafanaEmulationEngine {
         
         // Выполняем queries для всех panels
         for (const panel of dashboard.panels) {
+          // Определяем datasource для panel
+          const datasource = panel.datasource;
+          const isLokiQuery = datasource && this.isLokiDatasource(datasource);
+          
           for (const query of panel.queries) {
             totalQueries++;
             
             // Симулируем выполнение query
-            const queryLatency = this.simulateQueryExecution(query, prometheusAvailable);
+            const queryLatency = this.simulateQueryExecution(
+              query,
+              prometheusAvailable,
+              isLokiQuery,
+              lokiQueryExecutor
+            );
             totalQueryLatency += queryLatency;
             
             // Добавляем в историю для расчета среднего
@@ -302,10 +316,29 @@ export class GrafanaEmulationEngine {
       this.grafanaMetrics.queryLatency = totalQueryLatency / totalQueries;
     }
     
-    // Обновляем ошибки datasource
-    if (!prometheusAvailable) {
-      this.grafanaMetrics.datasourceErrors += totalQueries;
+    // Обновляем ошибки datasource (только для Prometheus queries)
+    // Loki errors обрабатываются в simulateQueryExecution
+  }
+
+  /**
+   * Проверяет, является ли datasource Loki
+   */
+  private isLokiDatasource(datasource: string): boolean {
+    if (!this.config?.datasources) return false;
+    
+    const datasources = Array.isArray(this.config.datasources)
+      ? this.config.datasources
+      : [];
+    
+    const ds = datasources.find((d: any) => 
+      (typeof d === 'string' ? d === datasource : d.name === datasource)
+    );
+    
+    if (typeof ds === 'object' && ds.type) {
+      return ds.type === 'loki';
     }
+    
+    return false;
   }
 
   /**
@@ -339,9 +372,34 @@ export class GrafanaEmulationEngine {
   /**
    * Симулирует выполнение query
    */
-  private simulateQueryExecution(query: GrafanaPanelQuery, prometheusAvailable: boolean): number {
+  private simulateQueryExecution(
+    query: GrafanaPanelQuery,
+    prometheusAvailable: boolean,
+    isLokiQuery: boolean = false,
+    lokiQueryExecutor?: (query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }
+  ): number {
+    // Если это LogQL query, выполняем через Loki
+    if (isLokiQuery && lokiQueryExecutor) {
+      try {
+        const startTime = Date.now() - 3600000; // Last hour
+        const endTime = Date.now();
+        const result = lokiQueryExecutor(query.expr, startTime, endTime, 100);
+        
+        if (!result.success) {
+          this.grafanaMetrics.datasourceErrors++;
+        }
+        
+        return result.latency;
+      } catch (error) {
+        this.grafanaMetrics.datasourceErrors++;
+        return 1000; // High latency для ошибки
+      }
+    }
+    
+    // PromQL query
     if (!prometheusAvailable) {
       // Datasource недоступен - ошибка
+      this.grafanaMetrics.datasourceErrors++;
       return 1000; // High latency для ошибки
     }
     

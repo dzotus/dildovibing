@@ -19,6 +19,8 @@ import {
   Settings, 
   Plus, 
   Trash2,
+  Edit2,
+  X,
   Users,
   TrendingUp,
   ArrowRightLeft,
@@ -160,8 +162,42 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
     updateConfig({ queues: queues.filter((_, i) => i !== index) });
   };
 
-  // Queues can only be added/removed, not edited
-  // Name editing is not allowed - queues are identified by name
+  const validateQueueName = (name: string): string | null => {
+    if (!name || name.trim() === '') {
+      return 'Queue name cannot be empty';
+    }
+    if (name.length > 255) {
+      return 'Queue name cannot exceed 255 characters';
+    }
+    // ActiveMQ queue names should not contain certain characters
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+      return 'Queue name can only contain letters, numbers, dots, underscores, and hyphens';
+    }
+    if (name.startsWith('.') || name.endsWith('.')) {
+      return 'Queue name cannot start or end with a dot';
+    }
+    return null;
+  };
+
+  const updateQueue = (index: number, field: keyof Queue, value: any) => {
+    if (field === 'name') {
+      const error = validateQueueName(value);
+      if (error) {
+        setQueueNameErrors({ ...queueNameErrors, [index]: error });
+        return;
+      } else {
+        const newErrors = { ...queueNameErrors };
+        delete newErrors[index];
+        setQueueNameErrors(newErrors);
+      }
+    }
+    const newQueues = [...queues];
+    newQueues[index] = { ...newQueues[index], [field]: value };
+    updateConfig({ queues: newQueues });
+  };
+
+  const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
+  const [queueNameErrors, setQueueNameErrors] = useState<Record<number, string>>({});
 
   const addTopic = () => {
     const topicName = `topic-${Date.now()}`;
@@ -176,6 +212,42 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const removeTopic = (index: number) => {
     updateConfig({ topics: topics.filter((_, i) => i !== index) });
   };
+
+  const validateTopicName = (name: string): string | null => {
+    if (!name || name.trim() === '') {
+      return 'Topic name cannot be empty';
+    }
+    if (name.length > 255) {
+      return 'Topic name cannot exceed 255 characters';
+    }
+    if (!/^[a-zA-Z0-9._-]+$/.test(name)) {
+      return 'Topic name can only contain letters, numbers, dots, underscores, and hyphens';
+    }
+    if (name.startsWith('.') || name.endsWith('.')) {
+      return 'Topic name cannot start or end with a dot';
+    }
+    return null;
+  };
+
+  const updateTopic = (index: number, field: keyof Topic, value: any) => {
+    if (field === 'name') {
+      const error = validateTopicName(value);
+      if (error) {
+        setTopicNameErrors({ ...topicNameErrors, [index]: error });
+        return;
+      } else {
+        const newErrors = { ...topicNameErrors };
+        delete newErrors[index];
+        setTopicNameErrors(newErrors);
+      }
+    }
+    const newTopics = [...topics];
+    newTopics[index] = { ...newTopics[index], [field]: value };
+    updateConfig({ topics: newTopics });
+  };
+
+  const [editingTopicIndex, setEditingTopicIndex] = useState<number | null>(null);
+  const [topicNameErrors, setTopicNameErrors] = useState<Record<number, string>>({});
 
   // Topics can only be added/removed, not edited
   // Name editing is not allowed - topics are identified by name
@@ -480,20 +552,77 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                     <Card key={index} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-1">
                             <MessageSquare className="h-5 w-5 text-blue-500" />
-                            <CardTitle className="text-base">
-                              {queue.name}
-                            </CardTitle>
+                            {editingQueueIndex === index ? (
+                              <div className="flex-1 space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    value={queue.name}
+                                    onChange={(e) => updateQueue(index, 'name', e.target.value)}
+                                    placeholder="queue-name"
+                                    className={`flex-1 ${queueNameErrors[index] ? 'border-red-500' : ''}`}
+                                    onBlur={() => {
+                                      if (!queueNameErrors[index]) {
+                                        setEditingQueueIndex(null);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && !queueNameErrors[index]) {
+                                        setEditingQueueIndex(null);
+                                      }
+                                      if (e.key === 'Escape') {
+                                        setEditingQueueIndex(null);
+                                        const newErrors = { ...queueNameErrors };
+                                        delete newErrors[index];
+                                        setQueueNameErrors(newErrors);
+                                      }
+                                    }}
+                                    autoFocus
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      if (!queueNameErrors[index]) {
+                                        setEditingQueueIndex(null);
+                                      }
+                                    }}
+                                    disabled={!!queueNameErrors[index]}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                                {queueNameErrors[index] && (
+                                  <p className="text-xs text-red-500">{queueNameErrors[index]}</p>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <CardTitle className="text-base">
+                                  {queue.name}
+                                </CardTitle>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6"
+                                  onClick={() => setEditingQueueIndex(index)}
+                                >
+                                  <Edit2 className="h-3 w-3" />
+                                </Button>
+                              </>
+                            )}
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeQueue(index)}
-                            disabled={queues.length === 1}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {editingQueueIndex !== index && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeQueue(index)}
+                              disabled={queues.length === 1}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </CardHeader>
                       <CardContent>
@@ -563,19 +692,76 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                     <Card key={index} className="border-l-4 border-l-green-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-1">
                             <Database className="h-5 w-5 text-green-500" />
-                            <CardTitle className="text-base">
-                              {topic.name}
-                            </CardTitle>
+                            {editingTopicIndex === index ? (
+                              <div className="flex-1 space-y-1">
+                                <div className="flex items-center gap-2">
+                                  <Input
+                                    value={topic.name}
+                                    onChange={(e) => updateTopic(index, 'name', e.target.value)}
+                                    placeholder="topic-name"
+                                    className={`flex-1 ${topicNameErrors[index] ? 'border-red-500' : ''}`}
+                                    onBlur={() => {
+                                      if (!topicNameErrors[index]) {
+                                        setEditingTopicIndex(null);
+                                      }
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' && !topicNameErrors[index]) {
+                                        setEditingTopicIndex(null);
+                                      }
+                                      if (e.key === 'Escape') {
+                                        setEditingTopicIndex(null);
+                                        const newErrors = { ...topicNameErrors };
+                                        delete newErrors[index];
+                                        setTopicNameErrors(newErrors);
+                                      }
+                                    }}
+                                    autoFocus
+                                  />
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      if (!topicNameErrors[index]) {
+                                        setEditingTopicIndex(null);
+                                      }
+                                    }}
+                                    disabled={!!topicNameErrors[index]}
+                                  >
+                                    <X className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                                {topicNameErrors[index] && (
+                                  <p className="text-xs text-red-500">{topicNameErrors[index]}</p>
+                                )}
+                              </div>
+                            ) : (
+                              <>
+                                <CardTitle className="text-base">
+                                  {topic.name}
+                                </CardTitle>
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-6 w-6"
+                                  onClick={() => setEditingTopicIndex(index)}
+                                >
+                                  <Edit2 className="h-3 w-3" />
+                                </Button>
+                              </>
+                            )}
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeTopic(index)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          {editingTopicIndex !== index && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeTopic(index)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          )}
                         </div>
                       </CardHeader>
                       <CardContent>

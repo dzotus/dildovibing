@@ -21,6 +21,7 @@ import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
+import { LokiEmulationEngine } from './LokiEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -173,6 +174,9 @@ export class EmulationEngine {
   
   // Grafana emulation engines per node
   private grafanaEngines: Map<string, GrafanaEmulationEngine> = new Map();
+
+  // Loki emulation engines per node
+  private lokiEngines: Map<string, LokiEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -596,8 +600,17 @@ export class EmulationEngine {
       const grafanaNode = this.nodes.find(n => n.id === nodeId);
       if (grafanaNode) {
         const prometheusAvailable = this.isPrometheusAvailableForGrafana(grafanaNode);
-        grafanaEngine.performUpdate(now, prometheusAvailable);
+        
+        // Создаем функцию для выполнения LogQL queries через Loki
+        const lokiQueryExecutor = this.createLokiQueryExecutor(grafanaNode);
+        
+        grafanaEngine.performUpdate(now, prometheusAvailable, lokiQueryExecutor);
       }
+    }
+    
+    // Perform Loki retention (cleanup old logs)
+    for (const [nodeId, lokiEngine] of this.lokiEngines.entries()) {
+      lokiEngine.performRetention(now);
     }
     
     // Update connection metrics based on source/target throughput
@@ -686,6 +699,9 @@ export class EmulationEngine {
           break;
         case 'grafana':
           this.simulateGrafana(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'loki':
+          this.simulateLoki(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3963,6 +3979,173 @@ export class EmulationEngine {
   }
 
   /**
+   * Loki emulation
+   */
+  private simulateLoki(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize Loki engine if not exists
+    if (!this.lokiEngines.has(node.id)) {
+      const lokiEngine = new LokiEmulationEngine();
+      lokiEngine.initializeConfig(node);
+      this.lokiEngines.set(node.id, lokiEngine);
+    }
+
+    const lokiEngine = this.lokiEngines.get(node.id)!;
+    
+    // Process ingestion from incoming connections
+    if (hasIncomingConnections) {
+      this.processLokiIngestion(node, lokiEngine);
+    }
+
+    // Get Loki metrics (ingestion load, query load, etc.)
+    const lokiMetrics = lokiEngine.getLokiMetrics();
+    const load = lokiEngine.calculateLoad();
+    
+    // Loki throughput = ingestion lines per second + query requests per second
+    metrics.throughput = load.ingestionLinesPerSecond + load.queriesPerSecond;
+    
+    // Loki latency = average ingestion latency + average query latency (weighted)
+    const ingestionWeight = load.ingestionLinesPerSecond / (load.ingestionLinesPerSecond + load.queriesPerSecond || 1);
+    const queryWeight = 1 - ingestionWeight;
+    metrics.latency = load.averageIngestionLatency * ingestionWeight + load.averageQueryLatency * queryWeight;
+    
+    // Error rate from ingestion and queries
+    metrics.errorRate = (load.ingestionErrorRate * ingestionWeight) + (load.queryErrorRate * queryWeight);
+    
+    // Utilization based on storage and stream count
+    const streamUtilization = Math.min(1, load.streamCount / (config.maxStreams as number || 10000));
+    metrics.utilization = Math.max(load.storageUtilization, streamUtilization);
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'ingestion_lines_per_second': load.ingestionLinesPerSecond,
+      'ingestion_bytes_per_second': load.ingestionBytesPerSecond,
+      'ingestion_requests_total': lokiMetrics.ingestionRequestsTotal,
+      'ingestion_errors_total': lokiMetrics.ingestionErrorsTotal,
+      'ingestion_lines_total': lokiMetrics.ingestionLinesTotal,
+      'ingestion_bytes_total': lokiMetrics.ingestionBytesTotal,
+      'queries_per_second': load.queriesPerSecond,
+      'query_requests_total': lokiMetrics.queryRequestsTotal,
+      'query_errors_total': lokiMetrics.queryErrorsTotal,
+      'average_query_latency': load.averageQueryLatency,
+      'average_ingestion_latency': load.averageIngestionLatency,
+      'active_streams': load.streamCount,
+      'total_storage_size': lokiMetrics.totalStorageSize,
+      'storage_utilization': load.storageUtilization,
+      'retention_deletions': lokiMetrics.retentionDeletions,
+    };
+  }
+
+  /**
+   * Process ingestion logs from incoming connections to Loki
+   */
+  private processLokiIngestion(node: CanvasNode, lokiEngine: LokiEmulationEngine): void {
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    
+    for (const conn of incomingConnections) {
+      const sourceNode = this.nodes.find(n => n.id === conn.source);
+      if (!sourceNode) continue;
+
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      if (!connMetrics || connMetrics.traffic === 0) continue;
+
+      // Estimate log lines per second from connection traffic
+      // Assume average log line size of 200 bytes
+      const avgLogLineSize = 200;
+      const estimatedLinesPerSecond = connMetrics.traffic / avgLogLineSize;
+      
+      // Generate log entries based on source component type
+      const logs = this.generateLogsFromComponent(sourceNode, estimatedLinesPerSecond);
+      
+      if (logs.length > 0) {
+        lokiEngine.processIngestion(logs, sourceNode.id);
+      }
+    }
+  }
+
+  /**
+   * Generate log entries from component (simulates log generation)
+   */
+  private generateLogsFromComponent(
+    node: CanvasNode,
+    linesPerSecond: number
+  ): Array<{ stream: Record<string, string>; values: Array<[string, string]> }> {
+    const logs: Array<{ stream: Record<string, string>; values: Array<[string, string]> }> = [];
+    
+    // Generate logs based on component type
+    const componentType = node.type;
+    const componentLabel = node.data.label || node.id;
+    
+    // Create stream labels based on component
+    const streamLabels: Record<string, string> = {
+      app: componentLabel.toLowerCase().replace(/\s+/g, '-'),
+      component: componentType,
+      source: node.id.slice(0, 8),
+    };
+
+    // Get component metrics to generate realistic logs
+    const metrics = this.metrics.get(node.id);
+    
+    // Generate log entries (simplified - in real system would be more sophisticated)
+    const numBatches = Math.ceil(linesPerSecond / 100); // Batch size of 100 lines
+    const linesPerBatch = Math.floor(linesPerSecond / numBatches) || 1;
+    
+    for (let i = 0; i < numBatches && i < 10; i++) { // Limit to 10 batches per cycle
+      const values: Array<[string, string]> = [];
+      
+      for (let j = 0; j < linesPerBatch; j++) {
+        const timestamp = Date.now() * 1000000 + j; // nanoseconds
+        const logLevel = this.getLogLevel(metrics);
+        const logMessage = this.generateLogMessage(componentType, componentLabel, logLevel, metrics);
+        
+        values.push([timestamp.toString(), logMessage]);
+      }
+      
+      if (values.length > 0) {
+        logs.push({
+          stream: { ...streamLabels, level: this.getLogLevel(metrics) },
+          values,
+        });
+      }
+    }
+    
+    return logs;
+  }
+
+  /**
+   * Get log level based on component metrics
+   */
+  private getLogLevel(metrics?: ComponentMetrics): string {
+    if (!metrics) return 'info';
+    
+    if (metrics.errorRate > 0.1) return 'error';
+    if (metrics.errorRate > 0.05) return 'warn';
+    if (metrics.utilization > 0.9) return 'warn';
+    return 'info';
+  }
+
+  /**
+   * Generate log message based on component
+   */
+  private generateLogMessage(
+    componentType: string,
+    componentLabel: string,
+    level: string,
+    metrics?: ComponentMetrics
+  ): string {
+    const timestamp = new Date().toISOString();
+    
+    if (level === 'error' && metrics) {
+      return `[${timestamp}] ERROR ${componentType}: Request failed, error rate: ${(metrics.errorRate * 100).toFixed(2)}%`;
+    }
+    
+    if (level === 'warn' && metrics) {
+      return `[${timestamp}] WARN ${componentType}: High utilization: ${(metrics.utilization * 100).toFixed(2)}%`;
+    }
+    
+    return `[${timestamp}] INFO ${componentType}: ${componentLabel} processing requests, throughput: ${metrics?.throughput.toFixed(2) || 0}/s`;
+  }
+
+  /**
    * BFF Service emulation
    */
   private simulateBFF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -4426,6 +4609,53 @@ export class EmulationEngine {
   /**
    * Проверяет доступность Prometheus для Grafana
    */
+  /**
+   * Создает функцию для выполнения LogQL queries через Loki
+   */
+  private createLokiQueryExecutor(grafanaNode: CanvasNode): ((query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }) | undefined {
+    const grafanaConfig = (grafanaNode.data.config as any) || {};
+    const datasources = grafanaConfig.datasources || [];
+    
+    // Находим Loki datasource
+    const lokiDatasource = datasources.find((ds: any) => {
+      if (typeof ds === 'string') return false;
+      return ds.type === 'loki';
+    });
+    
+    if (!lokiDatasource || typeof lokiDatasource === 'string') {
+      return undefined; // No Loki datasource configured
+    }
+    
+    // Находим Loki node по URL
+    const lokiUrl = lokiDatasource.url || '';
+    const lokiNode = this.nodes.find(n => {
+      if (n.type !== 'loki') return false;
+      const config = (n.data.config as any) || {};
+      const nodeUrl = config.serverUrl || 'http://loki:3100';
+      return nodeUrl === lokiUrl || lokiUrl.includes(n.id) || lokiUrl.includes(n.data.label || '');
+    });
+    
+    if (!lokiNode) {
+      return undefined; // Loki node not found
+    }
+    
+    const lokiEngine = this.lokiEngines.get(lokiNode.id);
+    if (!lokiEngine) {
+      return undefined; // Loki engine not initialized
+    }
+    
+    // Возвращаем функцию для выполнения queries
+    return (query: string, startTime?: number, endTime?: number, limit?: number) => {
+      const result = lokiEngine.executeQuery(query, startTime, endTime, limit);
+      return {
+        success: result.success,
+        latency: result.latency,
+        resultsCount: result.resultsCount,
+        error: result.error,
+      };
+    };
+  }
+
   private isPrometheusAvailableForGrafana(grafanaNode: CanvasNode): boolean {
     // Ищем связь Grafana -> Prometheus
     const grafanaToPrometheus = this.connections.find(
@@ -4764,6 +4994,13 @@ export class EmulationEngine {
    */
   public getWebhookRelayRoutingEngine(nodeId: string): WebhookRelayRoutingEngine | undefined {
     return this.webhookRelayRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Loki emulation engine for a node
+   */
+  public getLokiEmulationEngine(nodeId: string): LokiEmulationEngine | undefined {
+    return this.lokiEngines.get(nodeId);
   }
 
   /**
