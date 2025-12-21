@@ -1,0 +1,713 @@
+{
+  "version": 1,
+  "name": "Grafana Simulation Test",
+  "createdAt": "2024-01-15T10:00:00.000Z",
+  "updatedAt": "2024-01-15T10:00:00.000Z",
+  "nodes": [
+    {
+      "id": "prometheus-1",
+      "type": "prometheus",
+      "position": { "x": 100, "y": 100 },
+      "data": {
+        "label": "Prometheus Server",
+        "config": {
+          "enabled": true,
+          "scrapeInterval": "15s",
+          "evaluationInterval": "15s",
+          "enableAlertmanager": true,
+          "alertmanagerUrl": "http://localhost:9093",
+          "scrapeConfigs": [
+            {
+              "job_name": "kafka",
+              "scrape_interval": "10s",
+              "targets": ["kafka-1:9090"]
+            },
+            {
+              "job_name": "rabbitmq",
+              "scrape_interval": "15s",
+              "targets": ["rabbitmq-1:15692"]
+            },
+            {
+              "job_name": "postgres",
+              "scrape_interval": "30s",
+              "targets": ["postgres-1:9187"]
+            },
+            {
+              "job_name": "redis",
+              "scrape_interval": "15s",
+              "targets": ["redis-1:9121"]
+            }
+          ],
+          "externalLabels": {
+            "environment": "production",
+            "region": "us-east-1"
+          }
+        }
+      }
+    },
+    {
+      "id": "grafana-1",
+      "type": "grafana",
+      "position": { "x": 400, "y": 100 },
+      "data": {
+        "label": "Grafana Dashboard",
+        "config": {
+          "enabled": true,
+          "adminUser": "admin",
+          "adminPassword": "admin",
+          "enableAuth": true,
+          "authProvider": "ldap",
+          "enableAlerting": true,
+          "theme": "dark",
+          "defaultDashboard": "system-overview",
+          "alertNotificationChannels": ["email", "slack", "pagerduty"],
+          "datasources": [
+            {
+              "name": "Prometheus",
+              "type": "prometheus",
+              "url": "http://prometheus:9090",
+              "access": "proxy",
+              "isDefault": true,
+              "basicAuth": false
+            },
+            {
+              "name": "Loki",
+              "type": "loki",
+              "url": "http://loki:3100",
+              "access": "proxy",
+              "isDefault": false
+            },
+            {
+              "name": "PostgreSQL",
+              "type": "postgres",
+              "url": "postgres://localhost:5432/metrics",
+              "access": "direct",
+              "isDefault": false
+            }
+          ],
+          "dashboards": [
+            {
+              "id": "system-overview",
+              "name": "System Overview",
+              "tags": ["system", "overview", "production"],
+              "refresh": "30s",
+              "timeRange": {
+                "from": "now-1h",
+                "to": "now"
+              },
+              "panels": [
+                {
+                  "id": "cpu-usage-graph",
+                  "title": "CPU Usage Over Time",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "rate(process_cpu_seconds_total[5m]) * 100",
+                      "legendFormat": "CPU Usage %"
+                    },
+                    {
+                      "refId": "B",
+                      "expr": "100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+                      "legendFormat": "System CPU"
+                    }
+                  ]
+                },
+                {
+                  "id": "memory-usage-stat",
+                  "title": "Memory Usage",
+                  "type": "stat",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "node_memory_MemTotal_bytes - node_memory_MemFree_bytes",
+                      "legendFormat": "Used Memory"
+                    }
+                  ]
+                },
+                {
+                  "id": "disk-usage-gauge",
+                  "title": "Disk Usage",
+                  "type": "gauge",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "(node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes * 100",
+                      "legendFormat": "Disk %"
+                    }
+                  ]
+                },
+                {
+                  "id": "throughput-table",
+                  "title": "Component Throughput",
+                  "type": "table",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_throughput_total",
+                      "legendFormat": "{{component_type}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "latency-bargraph",
+                  "title": "Component Latency by Type",
+                  "type": "bargraph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_latency_ms",
+                      "legendFormat": "{{component_type}}"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "messaging-metrics",
+              "name": "Messaging Metrics",
+              "tags": ["messaging", "kafka", "rabbitmq"],
+              "refresh": "10s",
+              "panels": [
+                {
+                  "id": "kafka-throughput",
+                  "title": "Kafka Message Throughput",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "kafka_server_brokertopicmetrics_messagesinpersec{topic=~\"$topic\"}",
+                      "legendFormat": "{{topic}}"
+                    },
+                    {
+                      "refId": "B",
+                      "expr": "rate(kafka_topic_partition_current_offset[5m])",
+                      "legendFormat": "Offset Rate"
+                    }
+                  ]
+                },
+                {
+                  "id": "rabbitmq-queue-depth",
+                  "title": "RabbitMQ Queue Depth",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "rabbitmq_queue_messages",
+                      "legendFormat": "{{queue}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "messaging-error-rate",
+                  "title": "Error Rate",
+                  "type": "piechart",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_error_rate",
+                      "legendFormat": "{{component_type}}"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "database-performance",
+              "name": "Database Performance",
+              "tags": ["database", "postgres", "performance"],
+              "refresh": "15s",
+              "panels": [
+                {
+                  "id": "db-connections",
+                  "title": "Active Connections",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "pg_stat_database_numbackends",
+                      "legendFormat": "{{datname}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "db-query-latency",
+                  "title": "Query Latency P99",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "histogram_quantile(0.99, rate(pg_stat_statements_mean_exec_time_bucket[5m]))",
+                      "legendFormat": "P99 Latency"
+                    }
+                  ]
+                },
+                {
+                  "id": "db-cache-hit-rate",
+                  "title": "Cache Hit Rate",
+                  "type": "gauge",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "sum(rate(pg_stat_database_blks_hit[5m])) / sum(rate(pg_stat_database_blks_hit[5m] + pg_stat_database_blks_read[5m])) * 100",
+                      "legendFormat": "Hit Rate %"
+                    }
+                  ]
+                },
+                {
+                  "id": "db-tps",
+                  "title": "Transactions Per Second",
+                  "type": "stat",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "rate(pg_stat_database_xact_commit[5m]) + rate(pg_stat_database_xact_rollback[5m])",
+                      "legendFormat": "TPS"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "application-metrics",
+              "name": "Application Metrics",
+              "tags": ["application", "custom"],
+              "refresh": "5s",
+              "panels": [
+                {
+                  "id": "app-requests",
+                  "title": "Request Rate",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "rate(http_requests_total[5m])",
+                      "legendFormat": "{{method}} {{status}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "app-latency-p50-p99",
+                  "title": "Request Latency (P50/P99)",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))",
+                      "legendFormat": "P50"
+                    },
+                    {
+                      "refId": "B",
+                      "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m]))",
+                      "legendFormat": "P99"
+                    }
+                  ]
+                },
+                {
+                  "id": "app-error-rate",
+                  "title": "Error Rate by Endpoint",
+                  "type": "bargraph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "rate(http_requests_total{status=~\"5..\"}[5m]) / rate(http_requests_total[5m])",
+                      "legendFormat": "{{endpoint}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "app-active-users",
+                  "title": "Active Users",
+                  "type": "stat",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 8, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "sum(active_users)",
+                      "legendFormat": "Users"
+                    }
+                  ]
+                },
+                {
+                  "id": "app-health-status",
+                  "title": "Health Status",
+                  "type": "gauge",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 6, "y": 8, "w": 6, "h": 4 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "up",
+                      "legendFormat": "Health"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "complex-queries-dashboard",
+              "name": "Complex Queries Dashboard",
+              "tags": ["complex", "advanced"],
+              "refresh": "1m",
+              "panels": [
+                {
+                  "id": "complex-aggregation",
+                  "title": "Complex Aggregation Query",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "sum(rate(component_throughput_total[5m])) by (component_type) / count(component_throughput_total) by (component_type)",
+                      "legendFormat": "Avg {{component_type}}"
+                    },
+                    {
+                      "refId": "B",
+                      "expr": "max(component_latency_ms) by (component_type)",
+                      "legendFormat": "Max {{component_type}}"
+                    },
+                    {
+                      "refId": "C",
+                      "expr": "quantile(0.95, component_latency_ms) by (component_type)",
+                      "legendFormat": "P95 {{component_type}}"
+                    }
+                  ]
+                },
+                {
+                  "id": "range-query",
+                  "title": "Range Query Example",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "avg_over_time(component_utilization[10m])",
+                      "legendFormat": "Avg Utilization 10m"
+                    },
+                    {
+                      "refId": "B",
+                      "expr": "increase(component_throughput_total[5m])",
+                      "legendFormat": "Increase"
+                    }
+                  ]
+                },
+                {
+                  "id": "multi-pipe-query",
+                  "title": "Multiple Pipeline Operations",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "sum(rate(component_throughput_total[5m])) by (component_type) | topk(5, component_latency_ms) | label_replace(component_utilization, \"service\", \"$1\", \"component_type\", \"(.+)\")",
+                      "legendFormat": "Complex Pipeline"
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "alerts": [
+            {
+              "id": "high-cpu-alert",
+              "name": "High CPU Usage",
+              "condition": {
+                "query": "100 - (avg(irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [80]
+                },
+                "reducer": {
+                  "type": "avg",
+                  "params": []
+                }
+              },
+              "for": "5m",
+              "annotations": {
+                "summary": "CPU usage is above 80%",
+                "description": "CPU usage has been above 80% for more than 5 minutes"
+              },
+              "labels": {
+                "severity": "warning",
+                "team": "platform"
+              },
+              "notificationChannels": ["email", "slack"]
+            },
+            {
+              "id": "high-memory-alert",
+              "name": "High Memory Usage",
+              "condition": {
+                "query": "(node_memory_MemTotal_bytes - node_memory_MemFree_bytes) / node_memory_MemTotal_bytes * 100",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [90]
+                },
+                "reducer": {
+                  "type": "avg",
+                  "params": []
+                }
+              },
+              "for": "3m",
+              "annotations": {
+                "summary": "Memory usage is above 90%",
+                "description": "Memory usage has exceeded 90% threshold"
+              },
+              "labels": {
+                "severity": "critical",
+                "team": "platform"
+              },
+              "notificationChannels": ["email", "slack", "pagerduty"]
+            },
+            {
+              "id": "high-latency-alert",
+              "name": "High Component Latency",
+              "condition": {
+                "query": "component_latency_ms",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [1000]
+                },
+                "reducer": {
+                  "type": "max",
+                  "params": []
+                }
+              },
+              "for": "2m",
+              "annotations": {
+                "summary": "Component latency exceeds 1000ms",
+                "description": "One or more components have latency above 1000ms"
+              },
+              "labels": {
+                "severity": "warning",
+                "team": "backend"
+              },
+              "notificationChannels": ["slack"]
+            },
+            {
+              "id": "high-error-rate-alert",
+              "name": "High Error Rate",
+              "condition": {
+                "query": "component_error_rate",
+                "evaluator": {
+                  "type": "gt",
+                  "params": [0.1]
+                },
+                "reducer": {
+                  "type": "avg",
+                  "params": []
+                }
+              },
+              "for": "1m",
+              "annotations": {
+                "summary": "Error rate exceeds 10%",
+                "description": "Component error rate is above 10%"
+              },
+              "labels": {
+                "severity": "critical",
+                "team": "backend"
+              },
+              "notificationChannels": ["email", "pagerduty"]
+            },
+            {
+              "id": "low-throughput-alert",
+              "name": "Low Throughput",
+              "condition": {
+                "query": "component_throughput_total",
+                "evaluator": {
+                  "type": "lt",
+                  "params": [10]
+                },
+                "reducer": {
+                  "type": "min",
+                  "params": []
+                }
+              },
+              "for": "10m",
+              "annotations": {
+                "summary": "Throughput below expected threshold",
+                "description": "Component throughput is below 10 ops/sec for more than 10 minutes"
+              },
+              "labels": {
+                "severity": "warning",
+                "team": "backend"
+              },
+              "notificationChannels": ["slack"]
+            },
+            {
+              "id": "datasource-down-alert",
+              "name": "Datasource Down",
+              "condition": {
+                "query": "up{job=\"prometheus\"}",
+                "evaluator": {
+                  "type": "eq",
+                  "params": [0]
+                },
+                "reducer": {
+                  "type": "last",
+                  "params": []
+                }
+              },
+              "for": "30s",
+              "annotations": {
+                "summary": "Prometheus datasource is down",
+                "description": "Prometheus datasource is not responding"
+              },
+              "labels": {
+                "severity": "critical",
+                "team": "platform"
+              },
+              "notificationChannels": ["email", "slack", "pagerduty"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "kafka-1",
+      "type": "kafka",
+      "position": { "x": 100, "y": 300 },
+      "data": {
+        "label": "Kafka Broker",
+        "config": {
+          "enabled": true,
+          "topicCount": 5,
+          "partitions": 3,
+          "replicationFactor": 2,
+          "throughputMsgs": 1000
+        }
+      }
+    },
+    {
+      "id": "rabbitmq-1",
+      "type": "rabbitmq",
+      "position": { "x": 300, "y": 300 },
+      "data": {
+        "label": "RabbitMQ",
+        "config": {
+          "enabled": true,
+          "throughputMsgs": 500
+        }
+      }
+    },
+    {
+      "id": "postgres-1",
+      "type": "postgres",
+      "position": { "x": 500, "y": 300 },
+      "data": {
+        "label": "PostgreSQL",
+        "config": {
+          "enabled": true,
+          "maxConnections": 100,
+          "queryLatency": 50
+        }
+      }
+    },
+    {
+      "id": "redis-1",
+      "type": "redis",
+      "position": { "x": 700, "y": 300 },
+      "data": {
+        "label": "Redis Cache",
+        "config": {
+          "enabled": true
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "grafana-to-prometheus",
+      "source": "grafana-1",
+      "target": "prometheus-1",
+      "type": "http",
+      "label": "Grafana → Prometheus",
+      "data": {
+        "latencyMs": 10,
+        "bandwidthMbps": 1000,
+        "enableMonitoring": true
+      }
+    },
+    {
+      "id": "prometheus-to-kafka",
+      "source": "prometheus-1",
+      "target": "kafka-1",
+      "type": "http",
+      "label": "Prometheus → Kafka Scrape",
+      "data": {
+        "latencyMs": 5,
+        "enableMonitoring": true
+      }
+    },
+    {
+      "id": "prometheus-to-rabbitmq",
+      "source": "prometheus-1",
+      "target": "rabbitmq-1",
+      "type": "http",
+      "label": "Prometheus → RabbitMQ Scrape",
+      "data": {
+        "latencyMs": 5,
+        "enableMonitoring": true
+      }
+    },
+    {
+      "id": "prometheus-to-postgres",
+      "source": "prometheus-1",
+      "target": "postgres-1",
+      "type": "http",
+      "label": "Prometheus → PostgreSQL Scrape",
+      "data": {
+        "latencyMs": 5,
+        "enableMonitoring": true
+      }
+    },
+    {
+      "id": "prometheus-to-redis",
+      "source": "prometheus-1",
+      "target": "redis-1",
+      "type": "http",
+      "label": "Prometheus → Redis Scrape",
+      "data": {
+        "latencyMs": 5,
+        "enableMonitoring": true
+      }
+    }
+  ],
+  "groups": [],
+  "zoom": 1,
+  "pan": { "x": 0, "y": 0 }
+}
+

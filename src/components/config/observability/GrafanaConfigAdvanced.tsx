@@ -2,6 +2,14 @@ import { useState } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
 import { logError } from '@/utils/logger';
+import { GrafanaDashboardViewer } from './GrafanaDashboardViewer';
+import { GrafanaDashboardPreview } from './GrafanaDashboardPreview';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -132,6 +140,8 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
   const [showCreateDashboard, setShowCreateDashboard] = useState(false);
   const [showCreateAlert, setShowCreateAlert] = useState(false);
   const [showCreateDatasource, setShowCreateDatasource] = useState(false);
+  const [showDashboardViewer, setShowDashboardViewer] = useState(false);
+  const [selectedDashboardId, setSelectedDashboardId] = useState<string | undefined>(undefined);
 
   try {
     const { nodes, updateNode } = useCanvasStore();
@@ -408,7 +418,14 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
               <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
               Running
             </Badge>
-            <Button size="sm" variant="outline">
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={() => {
+                setSelectedDashboardId(defaultDashboard === 'overview' ? dashboards[0]?.id : dashboards.find(d => d.id === defaultDashboard)?.id);
+                setShowDashboardViewer(true);
+              }}
+            >
               <LinkIcon className="h-4 w-4 mr-2" />
               Open Dashboard
             </Button>
@@ -420,53 +437,51 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
         {/* Live Dashboard Preview */}
         <Card>
           <CardHeader>
-            <CardTitle>Live Dashboard Preview</CardTitle>
-            <CardDescription>Snapshot of how this Grafana instance renders panels</CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Live Dashboard Preview</CardTitle>
+                <CardDescription>Real-time metrics from configured dashboards</CardDescription>
+              </div>
+              {dashboards.length > 0 && (
+                <Select
+                  value={selectedDashboardId || dashboards[0]?.id}
+                  onValueChange={(value) => setSelectedDashboardId(value)}
+                >
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {dashboards.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2 p-4 rounded-lg bg-gradient-to-br from-orange-500/20 via-orange-500/5 to-transparent border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="font-semibold">System Load</div>
-                  <Badge variant="secondary" className="gap-2">
-                    <LineChart className="h-3 w-3" /> CPU
-                  </Badge>
-                </div>
-                <div className="h-32 flex items-end gap-1">
-                  {[45, 60, 58, 62, 55, 70, 65, 80, 72, 68, 75, 78].map((value, index) => (
-                    <div
-                      key={index}
-                      className="flex-1 bg-orange-500/50 rounded-t"
-                      style={{ height: `${value}%` }}
-                    />
-                  ))}
-                </div>
+            {dashboards.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <BarChart3 className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                <p>No dashboards configured</p>
+                <p className="text-sm mt-2">Create a dashboard to see live metrics here</p>
               </div>
-              <div className="space-y-4">
-                <div className="p-4 rounded-lg border border-border bg-card">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-muted-foreground">Dashboards</span>
-                    <BarChart3 className="h-3 w-3 text-muted-foreground" />
-                  </div>
-                  <div className="text-2xl font-bold">{dashboards.length}</div>
-                  <div className="text-xs text-muted-foreground">Total dashboards</div>
-                </div>
-                <div className="p-4 rounded-lg border border-border bg-card">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-muted-foreground">Data Sources</span>
-                    <Database className="h-3 w-3 text-muted-foreground" />
-                  </div>
-                  <div className="text-2xl font-bold">{datasources.length}</div>
-                  <div className="text-xs text-muted-foreground">Connected</div>
-                </div>
-              </div>
-            </div>
+            ) : (
+              <GrafanaDashboardPreview
+                componentId={componentId}
+                dashboardId={selectedDashboardId || dashboards[0]?.id}
+              />
+            )}
           </CardContent>
         </Card>
 
         {/* Main Configuration Tabs */}
-        <Tabs defaultValue="datasources" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+        <Tabs defaultValue="dashboard" className="w-full">
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="dashboard" className="gap-2">
+              <BarChart3 className="h-4 w-4" />
+              Dashboard
+            </TabsTrigger>
             <TabsTrigger value="datasources" className="gap-2">
               <Database className="h-4 w-4" />
               Data Sources
@@ -484,6 +499,51 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
               Settings
             </TabsTrigger>
           </TabsList>
+
+          {/* Dashboard Tab - Full Dashboard View */}
+          <TabsContent value="dashboard" className="space-y-4 mt-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Live Dashboard</CardTitle>
+                    <CardDescription>Real-time metrics visualization</CardDescription>
+                  </div>
+                  {dashboards.length > 0 && (
+                    <Select
+                      value={selectedDashboardId || dashboards[0]?.id}
+                      onValueChange={(value) => setSelectedDashboardId(value)}
+                    >
+                      <SelectTrigger className="w-48">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {dashboards.map((d) => (
+                          <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent>
+                {dashboards.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <BarChart3 className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                    <p>No dashboards configured</p>
+                    <p className="text-sm mt-2">Create a dashboard in the "Dashboards" tab</p>
+                  </div>
+                ) : (
+                  <div className="h-[600px] border rounded-lg overflow-hidden">
+                    <GrafanaDashboardViewer
+                      componentId={componentId}
+                      dashboardId={selectedDashboardId || dashboards[0]?.id}
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
 
           {/* Data Sources Tab */}
           <TabsContent value="datasources" className="space-y-4 mt-4">
@@ -689,15 +749,29 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
                               </Badge>
                             ))}
                           </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="w-full mt-2"
-                            onClick={() => setEditingDashboard(editingDashboard === dashboard.id ? null : dashboard.id)}
-                          >
-                            <Edit className="h-3 w-3 mr-2" />
-                            {editingDashboard === dashboard.id ? 'Hide Panels' : 'Edit Panels'}
-                          </Button>
+                          <div className="flex gap-2 mt-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="flex-1"
+                              onClick={() => setEditingDashboard(editingDashboard === dashboard.id ? null : dashboard.id)}
+                            >
+                              <Edit className="h-3 w-3 mr-2" />
+                              {editingDashboard === dashboard.id ? 'Hide' : 'Edit'}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="default"
+                              className="flex-1"
+                              onClick={() => {
+                                setSelectedDashboardId(dashboard.id);
+                                setShowDashboardViewer(true);
+                              }}
+                            >
+                              <Eye className="h-3 w-3 mr-2" />
+                              View
+                            </Button>
+                          </div>
                         </div>
                       </CardContent>
                       {editingDashboard === dashboard.id && (
@@ -1041,6 +1115,22 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Dashboard Viewer Dialog */}
+      <Dialog open={showDashboardViewer} onOpenChange={setShowDashboardViewer}>
+        <DialogContent className="max-w-[95vw] max-h-[95vh] w-full h-full p-0">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Grafana Dashboard</DialogTitle>
+          </DialogHeader>
+          <div className="h-full">
+            <GrafanaDashboardViewer
+              componentId={componentId}
+              dashboardId={selectedDashboardId}
+              onClose={() => setShowDashboardViewer(false)}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
   } catch (error) {

@@ -8,6 +8,7 @@ import { createNginxRule, createHAProxyRule, createTraefikRule } from './loadBal
 import { createDatabaseClientRule } from './databaseRules';
 import { createMessagingProducerRule } from './messagingRules';
 import { createPrometheusRule } from './prometheusRules';
+import { createGrafanaRule } from './grafanaRules';
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
@@ -37,6 +38,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     
     // Observability
     createPrometheusRule(discovery),
+    createGrafanaRule(discovery),
     
     // Integration - MuleSoft
     createMuleSoftTargetRule(discovery),

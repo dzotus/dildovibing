@@ -20,6 +20,7 @@ import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
+import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -169,6 +170,9 @@ export class EmulationEngine {
   
   // Prometheus emulation engines per node
   private prometheusEngines: Map<string, PrometheusEmulationEngine> = new Map();
+  
+  // Grafana emulation engines per node
+  private grafanaEngines: Map<string, GrafanaEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -312,6 +316,9 @@ export class EmulationEngine {
         }
         if (node.type === 'prometheus') {
           this.initializePrometheusEngine(node);
+        }
+        if (node.type === 'grafana') {
+          this.initializeGrafanaEngine(node);
         }
       }
       
@@ -583,6 +590,16 @@ export class EmulationEngine {
       prometheusEngine.performScraping(now, this.nodes, this.metrics);
     }
     
+    // Perform Grafana updates (queries, dashboard refreshes, alert evaluations)
+    for (const [nodeId, grafanaEngine] of this.grafanaEngines.entries()) {
+      // Проверяем доступность Prometheus для этого Grafana
+      const grafanaNode = this.nodes.find(n => n.id === nodeId);
+      if (grafanaNode) {
+        const prometheusAvailable = this.isPrometheusAvailableForGrafana(grafanaNode);
+        grafanaEngine.performUpdate(now, prometheusAvailable);
+      }
+    }
+    
     // Update connection metrics based on source/target throughput
     for (const connection of this.connections) {
       this.updateConnectionMetrics(connection);
@@ -666,6 +683,9 @@ export class EmulationEngine {
           break;
         case 'prometheus':
           this.simulatePrometheus(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'grafana':
+          this.simulateGrafana(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3847,6 +3867,55 @@ export class EmulationEngine {
   }
 
   /**
+   * Grafana emulation
+   */
+  private simulateGrafana(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Get Grafana emulation engine
+    const grafanaEngine = this.grafanaEngines.get(node.id);
+    
+    if (!grafanaEngine) {
+      // No engine initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1; // Minimal utilization when idle
+      return;
+    }
+
+    // Get Grafana metrics (query load, etc.)
+    const grafanaMetrics = grafanaEngine.getGrafanaMetrics();
+    const load = grafanaEngine.calculateLoad();
+    
+    // Grafana throughput = queries per second + alert evaluations per second
+    metrics.throughput = load.queriesPerSecond + load.alertEvaluationsPerSecond;
+    
+    // Grafana latency = average query latency + rendering latency
+    metrics.latency = load.averageQueryLatency + load.averageRenderingLatency;
+    
+    // Error rate from datasource errors
+    metrics.errorRate = load.errorRate;
+    
+    // Utilization based on CPU and memory utilization
+    // Используем среднее между CPU и memory utilization
+    metrics.utilization = (load.cpuUtilization + load.memoryUtilization) / 2;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'queries_per_second': load.queriesPerSecond,
+      'dashboard_refreshes_per_second': load.dashboardRefreshesPerSecond,
+      'alert_evaluations_per_second': load.alertEvaluationsPerSecond,
+      'average_query_latency': load.averageQueryLatency,
+      'average_rendering_latency': load.averageRenderingLatency,
+      'datasource_errors': grafanaMetrics.datasourceErrors,
+      'active_dashboards': grafanaMetrics.activeDashboards,
+      'active_panels': grafanaMetrics.activePanels,
+      'total_queries': grafanaMetrics.totalQueries,
+      'cpu_utilization': load.cpuUtilization,
+      'memory_utilization': load.memoryUtilization,
+    };
+  }
+
+  /**
    * Prometheus emulation
    */
   private simulatePrometheus(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -4343,6 +4412,50 @@ export class EmulationEngine {
     const prometheusEngine = new PrometheusEmulationEngine();
     prometheusEngine.initializeConfig(node);
     this.prometheusEngines.set(node.id, prometheusEngine);
+  }
+
+  /**
+   * Initialize Grafana Emulation Engine for Grafana node
+   */
+  private initializeGrafanaEngine(node: CanvasNode): void {
+    const grafanaEngine = new GrafanaEmulationEngine();
+    grafanaEngine.initializeConfig(node);
+    this.grafanaEngines.set(node.id, grafanaEngine);
+  }
+
+  /**
+   * Проверяет доступность Prometheus для Grafana
+   */
+  private isPrometheusAvailableForGrafana(grafanaNode: CanvasNode): boolean {
+    // Ищем связь Grafana -> Prometheus
+    const grafanaToPrometheus = this.connections.find(
+      conn => conn.source === grafanaNode.id && 
+      this.nodes.find(n => n.id === conn.target)?.type === 'prometheus'
+    );
+    
+    if (!grafanaToPrometheus) {
+      return false;
+    }
+    
+    // Проверяем, что Prometheus node существует и имеет метрики
+    const prometheusNode = this.nodes.find(n => n.id === grafanaToPrometheus.target);
+    if (!prometheusNode) {
+      return false;
+    }
+    
+    // Проверяем, что Prometheus имеет engine и работает
+    const prometheusEngine = this.prometheusEngines.get(prometheusNode.id);
+    if (!prometheusEngine) {
+      return false;
+    }
+    
+    // Проверяем метрики Prometheus (если error rate высокий, считаем недоступным)
+    const prometheusMetrics = this.metrics.get(prometheusNode.id);
+    if (prometheusMetrics && prometheusMetrics.errorRate > 0.5) {
+      return false;
+    }
+    
+    return true;
   }
 
   private initializePostgreSQLConnectionPool(node: CanvasNode): void {

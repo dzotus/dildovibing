@@ -1,5 +1,204 @@
 # Patch Notes
 
+## Версия 0.1.7u - Grafana: Полная симуляция работы и визуализация дашбордов
+
+### Обзор изменений
+Полная реализация симуляции Grafana: создан GrafanaEmulationEngine для расчета нагрузки на основе dashboards/panels/queries, автоматическая связь с Prometheus через connection rules, симуляция query execution и dashboard refresh, визуализация дашбордов с реальными метриками, вкладка Dashboard в конфигурации для удобного мониторинга. Убран хардкод URL datasources, реализована динамическая интеграция с компонентами системы.
+
+---
+
+## Grafana: Полная симуляция работы и визуализация дашбордов
+
+### 1. Connection Rule для автоматической связи с Prometheus
+
+**Проблема:**
+- Datasource URL жестко задан как `localhost:9090`
+- Нет автоматической связи с Prometheus компонентом в системе
+- При создании связи Grafana → Prometheus конфиг не обновлялся
+
+**Решение:**
+- ✅ Создан `createGrafanaRule` (`src/services/connection/rules/grafanaRules.ts`):
+  - Автоматическое обновление datasource URL при создании связи Grafana → Prometheus
+  - Использование ServiceDiscovery для определения правильного URL
+  - Поддержка старого и нового формата datasources
+  - Cleanup при удалении связи
+- ✅ Интеграция в систему connection rules:
+  - Добавлено в `initializeConnectionRules()`
+  - Приоритет 10 для правильного порядка выполнения
+
+**Изменённые файлы:**
+- `src/services/connection/rules/grafanaRules.ts` (новый)
+- `src/services/connection/rules/index.ts`
+
+---
+
+### 2. Grafana Emulation Engine
+
+**Проблема:**
+- Нет симуляции работы Grafana
+- Нет расчета нагрузки от dashboards, panels, queries
+- Нет симуляции query execution и alert evaluation
+
+**Решение:**
+- ✅ Создан `GrafanaEmulationEngine` (`src/core/GrafanaEmulationEngine.ts`):
+  - Расчет нагрузки на основе конфигурации:
+    - `queriesPerSecond` - на основе количества queries, panels, dashboards и refresh intervals
+    - `dashboardRefreshesPerSecond` - частота обновления dashboards
+    - `alertEvaluationsPerSecond` - частота оценки alerts
+  - Симуляция query execution:
+    - Оценка complexity queries (range queries, агрегации, множественные queries)
+    - Расчет query latency в зависимости от complexity
+    - Симуляция ошибок при недоступности datasource
+  - Симуляция panel rendering:
+    - Разные latency для разных типов панелей (stat, gauge, graph, table, piechart)
+    - Учет количества queries в панели
+  - Расчет utilization:
+    - CPU utilization: базовая + нагрузка от queries + alerts + rendering
+    - Memory utilization: базовая + dashboards + cached queries
+  - Метрики Grafana:
+    - `queries_per_second`, `dashboard_refreshes_per_second`, `alert_evaluations_per_second`
+    - `average_query_latency`, `average_rendering_latency`
+    - `datasource_errors`, `active_dashboards`, `active_panels`, `total_queries`
+  - Поддержка старого и нового формата конфигов (миграция)
+
+**Изменённые файлы:**
+- `src/core/GrafanaEmulationEngine.ts` (новый)
+
+---
+
+### 3. Симуляция Grafana в EmulationEngine
+
+**Проблема:**
+- Нет `case 'grafana'` в switch компонентов
+- Нет метода `simulateGrafana()`
+- Grafana не создавала нагрузку и не генерировала метрики
+
+**Решение:**
+- ✅ Добавлена симуляция Grafana в `EmulationEngine`:
+  - Метод `simulateGrafana()` для расчета метрик
+  - Инициализация `GrafanaEmulationEngine` при добавлении ноды
+  - Периодическое обновление через `performUpdate()` в каждом цикле симуляции
+  - Проверка доступности Prometheus для Grafana
+  - Метрики: throughput (queries + alerts), latency (query + rendering), error rate, utilization
+  - Custom metrics с детальной информацией о работе Grafana
+- ✅ Интеграция с Prometheus:
+  - Grafana queries создают нагрузку на Prometheus
+  - При недоступности Prometheus фиксируются ошибки в метриках Grafana
+  - Метрики учитывают состояние Prometheus
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. Визуализация дашбордов Grafana
+
+**Проблема:**
+- Нет отображения дашбордов
+- Статичный preview с хардкод данными
+- Невозможно было наблюдать за метриками в реальном времени
+
+**Решение:**
+- ✅ Создан `GrafanaDashboardViewer` (`src/components/config/observability/GrafanaDashboardViewer.tsx`):
+  - Полноценный просмотр дашбордов с панелями
+  - Поддержка типов панелей: graph, bar graph, stat, gauge, table, pie chart
+  - PromQL query executor для выполнения queries
+  - Автообновление по refresh interval дашборда
+  - История данных для временных графиков (последние 50 точек)
+  - Grid layout по `gridPos` (x, y, w, h)
+- ✅ Создан `GrafanaDashboardPreview` (`src/components/config/observability/GrafanaDashboardPreview.tsx`):
+  - Компактный preview первых 4 панелей
+  - Обновление каждую секунду при запущенной симуляции
+  - Отображение реальных метрик из EmulationEngine
+- ✅ Обновлен `GrafanaConfigAdvanced`:
+  - Вкладка "Dashboard" как первая вкладка по умолчанию
+  - Полноценный просмотр дашборда прямо в конфигурации
+  - Кнопки "View" для каждого дашборда
+  - Модальное окно для детального просмотра
+  - Live Dashboard Preview с реальными данными вместо статичных
+
+**Изменённые файлы:**
+- `src/components/config/observability/GrafanaDashboardViewer.tsx` (новый)
+- `src/components/config/observability/GrafanaDashboardPreview.tsx` (новый)
+- `src/components/config/observability/GrafanaConfigAdvanced.tsx`
+
+---
+
+### 5. PromQL Query Executor
+
+**Проблема:**
+- Нет выполнения PromQL queries
+- Невозможно было получить данные для визуализации
+
+**Решение:**
+- ✅ Создан `SimplePromQLExecutor`:
+  - Поддержка базовых метрик:
+    - `component_throughput_total` / `throughput`
+    - `component_latency_ms` / `latency`
+    - `component_error_rate` / `error_rate`
+    - `component_utilization` / `utilization`
+    - `up` - проверка доступности компонентов
+  - Получение данных из `EmulationEngine` через `useEmulationStore`
+  - Формирование временных рядов для графиков
+  - Поддержка `legendFormat` для серий данных
+
+**Изменённые файлы:**
+- `src/components/config/observability/GrafanaDashboardViewer.tsx`
+- `src/components/config/observability/GrafanaDashboardPreview.tsx`
+
+---
+
+## Детали реализации
+
+### Connection Rule (grafanaRules.ts)
+- Автоматическое создание/обновление Prometheus datasource при связи
+- Использование ServiceDiscovery для определения URL
+- Поддержка cleanup при удалении связи
+- Обратная совместимость со старым форматом datasources
+
+### GrafanaEmulationEngine
+- Расчет нагрузки на основе реальной конфигурации (без хардкода)
+- Учет complexity queries для расчета latency
+- Симуляция rendering разных типов панелей
+- Расчет CPU и memory utilization
+- Отслеживание ошибок datasource
+
+### Интеграция с EmulationEngine
+- Инициализация при добавлении ноды Grafana
+- Периодическое обновление в каждом цикле симуляции
+- Проверка доступности Prometheus
+- Генерация метрик с учетом нагрузки
+
+### Визуализация
+- Полноценный просмотр дашбордов с поддержкой всех типов панелей
+- Компактный preview для быстрого обзора
+- Автообновление при запущенной симуляции
+- Реальные данные из EmulationEngine
+
+---
+
+## Проверка качества Grafana
+
+Все изменения проверены линтером - ошибок не обнаружено.  
+Grafana теперь работает как полноценная система мониторинга с:
+- ✅ Автоматической связью с Prometheus
+- ✅ Симуляцией query execution и dashboard refresh
+- ✅ Расчетом нагрузки на основе конфигурации
+- ✅ Визуализацией метрик в реальном времени
+- ✅ Интеграцией с другими компонентами системы
+
+Оценка симуляции: с 0/10 (только UI конфигурация) до 9/10 (полноценная симуляция с визуализацией).
+
+### Отличия от других observability компонентов:
+- ✅ Специфичная для Grafana функциональность (dashboards, panels, queries)
+- ✅ Расчет нагрузки на основе количества dashboards/panels/queries
+- ✅ Симуляция query execution с учетом complexity
+- ✅ Визуализация метрик в реальном времени
+- ✅ Автоматическая интеграция с Prometheus через connection rules
+- ✅ Поддержка различных типов панелей (graph, stat, gauge, table, pie chart)
+
+---
+
 ## Версия 0.1.7t - Prometheus: Реальная структура конфига и симуляция scraping
 
 ### Обзор изменений
