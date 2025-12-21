@@ -14,6 +14,7 @@ import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
+import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -146,6 +147,9 @@ export class EmulationEngine {
   
   // Cassandra routing engines per node
   private cassandraRoutingEngines: Map<string, CassandraRoutingEngine> = new Map();
+  
+  // ClickHouse routing engines per node
+  private clickHouseRoutingEngines: Map<string, ClickHouseRoutingEngine> = new Map();
   
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
@@ -3006,6 +3010,80 @@ export class EmulationEngine {
       return; // Early return for Cassandra
     }
     
+    // Для ClickHouse используем ClickHouseRoutingEngine
+    if (node.type === 'clickhouse') {
+      if (!this.clickHouseRoutingEngines.has(node.id)) {
+        this.initializeClickHouseRoutingEngine(node);
+      }
+      
+      const routingEngine = this.clickHouseRoutingEngines.get(node.id)!;
+      const clickHouseConfig = node.data.config as any;
+      
+      // Sync configuration from UI with runtime state
+      if (clickHouseConfig) {
+        routingEngine.syncFromConfig({
+          cluster: clickHouseConfig.cluster,
+          replication: clickHouseConfig.replication,
+          tables: clickHouseConfig.tables?.map((t: any) => ({
+            name: t.name,
+            database: clickHouseConfig.database || 'default',
+            engine: t.engine || 'MergeTree',
+            rows: t.rows || 0,
+            size: t.size || 0,
+            partitions: t.partitions || 0,
+            columns: t.columns || [],
+          })),
+          maxMemoryUsage: clickHouseConfig.maxMemoryUsage,
+          compression: clickHouseConfig.compression,
+        });
+      }
+      
+      const clickHouseMetrics = routingEngine.getMetrics();
+      
+      // Throughput based on incoming connections
+      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+        const sourceMetrics = this.metrics.get(conn.source);
+        return sum + (sourceMetrics?.throughput || 0);
+      }, 0);
+      
+      // ClickHouse throughput is queries per second
+      metrics.throughput = Math.max(clickHouseMetrics.queriesPerSecond, totalIncomingThroughput);
+      
+      // Latency from routing engine
+      metrics.latency = clickHouseMetrics.avgQueryTime;
+      
+      // Error rate is very low for ClickHouse (analytical database is optimized)
+      // Increase slightly with memory pressure
+      const memoryPressure = clickHouseMetrics.memoryUsagePercent / 100;
+      metrics.errorRate = memoryPressure > 0.95 ? 0.01 : 0.001;
+      
+      // Utilization based on memory usage and active queries
+      const queryUtilization = Math.min(1, clickHouseMetrics.activeQueries / 10); // Max 10 concurrent queries
+      const memoryUtilization = memoryPressure;
+      metrics.utilization = Math.max(queryUtilization, memoryUtilization);
+      
+      metrics.customMetrics = {
+        'total_tables': clickHouseMetrics.totalTables,
+        'total_rows': clickHouseMetrics.totalRows,
+        'total_size_gb': clickHouseMetrics.totalSize / (1024 * 1024 * 1024),
+        'queries_per_sec': clickHouseMetrics.queriesPerSecond,
+        'read_rows_per_sec': clickHouseMetrics.readRowsPerSecond,
+        'written_rows_per_sec': clickHouseMetrics.writtenRowsPerSecond,
+        'avg_query_time_ms': clickHouseMetrics.avgQueryTime,
+        'active_queries': clickHouseMetrics.activeQueries,
+        'memory_usage_bytes': clickHouseMetrics.memoryUsage,
+        'memory_usage_percent': clickHouseMetrics.memoryUsagePercent,
+        'parts_count': clickHouseMetrics.partsCount,
+        'pending_merges': clickHouseMetrics.pendingMerges,
+        'compression_ratio': clickHouseMetrics.compressionRatio,
+        'cluster_nodes': clickHouseMetrics.clusterNodes,
+        'healthy_nodes': clickHouseMetrics.healthyNodes,
+      };
+      
+      return; // Early return for ClickHouse
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -3788,6 +3866,32 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize ClickHouse routing engine for a node
+   */
+  private initializeClickHouseRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new ClickHouseRoutingEngine();
+
+    routingEngine.initialize({
+      cluster: config.cluster || 'archiphoenix-cluster',
+      replication: config.replication || false,
+      tables: config.tables?.map((t: any) => ({
+        name: t.name,
+        database: config.database || 'default',
+        engine: t.engine || 'MergeTree',
+        rows: t.rows || 0,
+        size: t.size || 0,
+        partitions: t.partitions || 0,
+        columns: t.columns || [],
+      })) || [],
+      maxMemoryUsage: config.maxMemoryUsage || 10 * 1024 * 1024 * 1024,
+      compression: config.compression || 'LZ4',
+    });
+
+    this.clickHouseRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
   private calculateConnectionLatency(
@@ -3913,6 +4017,13 @@ export class EmulationEngine {
    */
   public getCassandraRoutingEngine(nodeId: string): CassandraRoutingEngine | undefined {
     return this.cassandraRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get ClickHouse routing engine for a node
+   */
+  public getClickHouseRoutingEngine(nodeId: string): ClickHouseRoutingEngine | undefined {
+    return this.clickHouseRoutingEngines.get(nodeId);
   }
 
   /**

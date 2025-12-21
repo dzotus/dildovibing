@@ -1,5 +1,160 @@
 # Patch Notes
 
+## Версия 0.1.7p - ClickHouse Full Simulation System
+
+### Обзор изменений
+Полная реализация ClickHouse симуляции: создан ClickHouseRoutingEngine с поддержкой SQL запросов, колоночного хранения, MergeTree движков и метрик. Интеграция с DataFlowEngine, EmulationEngine и UI. Система теперь реалистично симулирует аналитическую природу ClickHouse с учетом колоночного хранения, MergeTree частей таблиц, compression и расчета метрик на основе реальных параметров.
+
+---
+
+## ClickHouse: Полная реализация симуляции
+
+### 1. ClickHouseRoutingEngine - Core Engine
+
+**Проблема:**
+- ClickHouse не обрабатывалась в EmulationEngine (отсутствовал case 'clickhouse')
+- Нет обработки SQL запросов
+- Нет учета колоночного хранения и MergeTree особенностей
+- Метрики жестко закодированы (queryThroughput: 1250, avgQueryTime: 45ms)
+- UI конфигурация не связана с runtime логикой
+
+**Решение:**
+- ✅ Создан `ClickHouseRoutingEngine` (`src/core/ClickHouseRoutingEngine.ts`):
+  - **SQL запросы**: SELECT, INSERT, CREATE TABLE, DROP TABLE, ALTER TABLE
+  - **Колоночное хранение**: эмуляция эффективности чтения только нужных колонок
+  - **MergeTree симуляция**: части таблиц (parts), background merges
+  - **Latency расчет**: реалистичный расчет с учетом:
+    - Размера данных и количества сканируемых строк
+    - Сложности запроса (JOIN, GROUP BY, ORDER BY)
+    - Количества частей таблицы (parts) в MergeTree
+    - Колоночного хранения (читаем только нужные колонки)
+  - **Метрики**: query throughput, avg query time, read/write rows per second, memory usage, compression ratio, parts count, pending merges
+  - **Синхронизация конфигурации**: `syncFromConfig()` для связи UI ↔ Runtime
+
+**Изменённые файлы:**
+- `src/core/ClickHouseRoutingEngine.ts` (новый)
+
+---
+
+### 2. Интеграция в DataFlowEngine
+
+**Проблема:**
+- ClickHouse обрабатывалась через общий `createDatabaseHandler()` без специфики
+- Нет обработки SQL запросов в payload
+- Нет связи между UI Query Console и runtime
+
+**Решение:**
+- ✅ Добавлен метод `processClickHouseQuery()` в DataFlowEngine
+- ✅ Поддержка форматов: `{sql: "SELECT ..."}`, `{query: "SELECT ..."}`, строковый формат
+- ✅ Автоматическое определение операции (select/insert/query)
+- ✅ Реальное выполнение SQL запросов через ClickHouseRoutingEngine
+- ✅ Возврат результатов с метаданными (rows, rowCount, columns, dataRead, dataWritten, latency)
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 3. Интеграция в EmulationEngine
+
+**Проблема:**
+- ClickHouse не обрабатывалась в switch-case (`simulateDatabase()`)
+- Нет реальных метрик ClickHouse
+- Нет синхронизации конфигурации UI с runtime
+
+**Решение:**
+- ✅ Добавлен `clickHouseRoutingEngines` Map для хранения инстансов
+- ✅ Метод `initializeClickHouseRoutingEngine()` для инициализации
+- ✅ Метод `getClickHouseRoutingEngine()` для доступа к engine
+- ✅ Добавлен case 'clickhouse' в `simulateDatabase()` с реальными метриками:
+  - Throughput на основе queries per second из routing engine
+  - Latency из avgQueryTime с учетом реальных параметров
+  - Error rate на основе memory pressure
+  - Utilization на основе active queries и memory usage
+  - Custom metrics: total_tables, total_rows, total_size_gb, queries_per_sec, read/written_rows_per_sec, avg_query_time_ms, active_queries, memory_usage, parts_count, pending_merges, compression_ratio, cluster_nodes
+- ✅ Синхронизация конфигурации из UI с runtime через `syncFromConfig()` (tables, cluster, replication, maxMemoryUsage, compression)
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. UI Improvements
+
+**Проблема:**
+- Query Console только сохранял запросы, но не выполнял их
+- Метрики отображались из конфигурации (хардкод), а не из runtime
+- Нет связи между UI и routing engine
+
+**Решение:**
+- ✅ Добавлен импорт `emulationEngine` в UI компонент
+- ✅ Улучшен `executeQuery()` для реального выполнения SQL через routing engine
+- ✅ Запросы выполняются через `emulationEngine.getClickHouseRoutingEngine()`
+- ✅ Результаты отображаются в UI (status: completed/failed, duration, ошибки)
+- ✅ Метрики берутся из routing engine в реальном времени:
+  - `totalRows`, `totalSize` - из реальных метрик
+  - `queryThroughput` - из queriesPerSecond
+  - `avgQueryTime` - из avgQueryTime с реальным расчетом
+- ✅ Показ toast уведомлений об успехе/ошибке выполнения запросов
+
+**Изменённые файлы:**
+- `src/components/config/data/ClickHouseConfigAdvanced.tsx`
+
+---
+
+## Технические детали ClickHouse
+
+### Архитектура ClickHouseRoutingEngine:
+
+1. **Колоночное хранение**: данные хранятся по колонкам, чтение только нужных колонок повышает производительность
+2. **MergeTree движки**: таблицы разбиваются на части (parts), которые периодически мерджатся в фоне
+3. **Сжатие**: эффективное сжатие колоночных данных (LZ4, ZSTD, LZ4HC)
+4. **Расчет метрик**: на основе реальных параметров:
+   - Объем данных в таблицах
+   - Количество частей таблиц
+   - Сложность запросов
+   - Использование памяти
+
+### Поддерживаемые функции:
+
+- SQL запросы: SELECT, INSERT, CREATE TABLE, DROP TABLE, ALTER TABLE
+- Колоночное хранение с оптимизацией чтения
+- MergeTree симуляция (parts, background merges)
+- Расчет latency на основе сложности запроса и объема данных
+- Реальные метрики производительности
+- Синхронизация UI ↔ Runtime конфигурации
+
+### Интеграция:
+
+- **EmulationEngine**: полная интеграция с расчетом метрик
+- **DataFlowEngine**: обработка SQL запросов в data flow
+- **UI**: Query Console с реальным выполнением запросов и метриками из runtime
+
+---
+
+## Результаты
+
+### До улучшений:
+
+- ❌ ClickHouse не обрабатывалась в EmulationEngine
+- ❌ Нет роутингового движка
+- ❌ Метрики жестко закодированы (queryThroughput: 1250, avgQueryTime: 45ms)
+- ❌ Query Console не выполняет запросы
+- ❌ Нет связи UI ↔ Runtime
+
+### После улучшений:
+
+- ✅ Полноценный ClickHouseRoutingEngine с SQL поддержкой
+- ✅ Реалистичная симуляция колоночного хранения
+- ✅ MergeTree симуляция (parts, merges)
+- ✅ Метрики рассчитываются на основе реальных параметров
+- ✅ Query Console выполняет реальные SQL запросы
+- ✅ Полная синхронизация UI ↔ Runtime
+- ✅ Интеграция с EmulationEngine и DataFlowEngine
+- ✅ Реальные метрики в UI из routing engine
+
+---
+
 ## Версия 0.1.7o - Cassandra Full Simulation System
 
 ### Обзор изменений

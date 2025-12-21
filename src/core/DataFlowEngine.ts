@@ -540,6 +540,11 @@ export class DataFlowEngine {
           return this.processCQLQuery(node, message, config);
         }
 
+        // ClickHouse specific: if payload contains SQL query, use ClickHouseRoutingEngine
+        if (type === 'clickhouse') {
+          return this.processClickHouseQuery(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -709,6 +714,101 @@ export class DataFlowEngine {
       
       getSupportedFormats: () => ['json', 'binary'],
     };
+  }
+
+  /**
+   * Process ClickHouse SQL query using ClickHouseRoutingEngine
+   */
+  private processClickHouseQuery(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get ClickHouseRoutingEngine from emulationEngine
+    const clickHouseEngine = emulationEngine.getClickHouseRoutingEngine(node.id);
+    if (!clickHouseEngine) {
+      message.status = 'failed';
+      message.error = 'ClickHouse Routing Engine not initialized';
+      return message;
+    }
+
+    // Extract SQL query from payload
+    let sqlQuery: string;
+
+    if (payload?.sql) {
+      // Explicit SQL format: { sql: "SELECT * FROM table" }
+      sqlQuery = payload.sql;
+    } else if (payload?.query) {
+      // Alternative format: { query: "SELECT * FROM table" }
+      sqlQuery = payload.query;
+    } else if (typeof payload === 'string') {
+      // String format: "SELECT * FROM table"
+      sqlQuery = payload;
+    } else {
+      // Try to infer from operation
+      const operation = payload?.operation || 'select';
+      const clickHouseConfig = node.data.config as any;
+      const database = payload?.database || clickHouseConfig?.database || 'default';
+      const table = payload?.table || 'default_table';
+      
+      switch (operation.toLowerCase()) {
+        case 'select':
+        case 'read':
+        case 'query':
+          sqlQuery = `SELECT * FROM ${database}.${table}`;
+          if (payload?.where) {
+            sqlQuery += ` WHERE ${payload.where}`;
+          }
+          if (payload?.limit) {
+            sqlQuery += ` LIMIT ${payload.limit}`;
+          }
+          break;
+        case 'insert':
+        case 'write':
+          const columns = payload?.columns ? Object.keys(payload.columns).join(', ') : 'id, data';
+          const values = payload?.columns 
+            ? Object.values(payload.columns).map((v: any) => `'${v}'`).join(', ')
+            : `${Date.now()}, 'data'`;
+          sqlQuery = `INSERT INTO ${database}.${table} (${columns}) VALUES (${values})`;
+          break;
+        default:
+          message.status = 'failed';
+          message.error = `Unknown ClickHouse operation: ${operation}`;
+          return message;
+      }
+    }
+
+    // Execute SQL query
+    const result = clickHouseEngine.executeQuery(sqlQuery);
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || 45; // ClickHouse latency
+      message.payload = {
+        ...(message.payload as any),
+        sql: sqlQuery,
+        rows: result.rows || [],
+        rowCount: result.rowCount || 0,
+        columns: result.columns || [],
+        dataRead: result.dataRead,
+        dataWritten: result.dataWritten,
+        clickHouseResult: result.rows,
+      };
+      message.metadata = {
+        ...message.metadata,
+        clickHouseQuery: sqlQuery,
+        rowsRead: result.dataRead,
+        rowsWritten: result.dataWritten,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'ClickHouse query execution failed';
+      message.latency = result.latency || 0;
+    }
+
+    return message;
   }
 
   /**

@@ -30,6 +30,7 @@ import { usePortValidation } from '@/hooks/usePortValidation';
 import { AlertCircle } from 'lucide-react';
 import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
 import { showSuccess, showError } from '@/utils/toast';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface ClickHouseConfigProps {
   componentId: string;
@@ -86,10 +87,14 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
   const [editingTableIndex, setEditingTableIndex] = useState<number | null>(null);
   const [showQueryEditor, setShowQueryEditor] = useState(false);
   const [queryText, setQueryText] = useState('');
-  const totalRows = config.totalRows || tables.reduce((sum, t) => sum + t.rows, 0);
-  const totalSize = config.totalSize || tables.reduce((sum, t) => sum + t.size, 0);
-  const queryThroughput = config.queryThroughput || 1250;
-  const avgQueryTime = config.avgQueryTime || 45;
+  // Get real-time metrics from ClickHouseRoutingEngine
+  const clickHouseEngine = emulationEngine.getClickHouseRoutingEngine(componentId);
+  const realMetrics = clickHouseEngine?.getMetrics();
+  
+  const totalRows = realMetrics?.totalRows || config.totalRows || tables.reduce((sum, t) => sum + t.rows, 0);
+  const totalSize = realMetrics?.totalSize || config.totalSize || tables.reduce((sum, t) => sum + t.size, 0);
+  const queryThroughput = realMetrics?.queryThroughput || config.queryThroughput || 1250;
+  const avgQueryTime = realMetrics?.avgQueryTime || config.avgQueryTime || 45;
 
   // Валидация портов и хостов
   const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
@@ -158,15 +163,64 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
   const executeQuery = () => {
     if (!queryText.trim()) return;
     
+    const queryId = `query-${Date.now()}`;
+    const startTime = Date.now();
+    
     const newQuery: Query = {
-      id: `query-${Date.now()}`,
+      id: queryId,
       query: queryText,
       status: 'running',
       duration: 0,
     };
-    updateConfig({ queries: [newQuery, ...queries.slice(0, 9)] });
+    
+    // Execute query through ClickHouseRoutingEngine
+    const clickHouseEngine = emulationEngine.getClickHouseRoutingEngine(componentId);
+    let resultQuery: Query = newQuery;
+    
+    if (clickHouseEngine) {
+      try {
+        const result = clickHouseEngine.executeQuery(queryText);
+        const duration = Date.now() - startTime;
+        
+        resultQuery = {
+          id: queryId,
+          query: queryText,
+          status: result.success ? 'completed' : 'failed',
+          duration: result.latency || duration,
+        };
+        
+        // If CREATE TABLE or DROP TABLE succeeded, sync tables from engine
+        if (result.success) {
+          const normalizedQuery = queryText.trim().toUpperCase();
+          if (normalizedQuery.startsWith('CREATE TABLE') || normalizedQuery.startsWith('DROP TABLE')) {
+            // Force sync from config (tables are managed in UI config)
+            // This will be handled by syncFromConfig in EmulationEngine
+          }
+        }
+      } catch (error) {
+        const duration = Date.now() - startTime;
+        resultQuery = {
+          id: queryId,
+          query: queryText,
+          status: 'failed',
+          duration,
+        };
+      }
+    } else {
+      // No engine available, just mark as completed (simulated)
+      resultQuery.status = 'completed';
+      resultQuery.duration = Date.now() - startTime;
+    }
+    
+    updateConfig({ queries: [resultQuery, ...queries.slice(0, 9)] });
     setQueryText('');
     setShowQueryEditor(false);
+    
+    if (resultQuery.status === 'failed') {
+      showError('Query execution failed');
+    } else {
+      showSuccess('Query executed successfully');
+    }
   };
 
   return (
