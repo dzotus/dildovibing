@@ -15,6 +15,7 @@ import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
+import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 
 /**
@@ -151,6 +152,9 @@ export class EmulationEngine {
   // ClickHouse routing engines per node
   private clickHouseRoutingEngines: Map<string, ClickHouseRoutingEngine> = new Map();
   
+  // Snowflake routing engines per node
+  private snowflakeRoutingEngines: Map<string, SnowflakeRoutingEngine> = new Map();
+  
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
 
@@ -282,6 +286,12 @@ export class EmulationEngine {
         if (node.type === 'cassandra') {
           this.initializeCassandraRoutingEngine(node);
         }
+        if (node.type === 'clickhouse') {
+          this.initializeClickHouseRoutingEngine(node);
+        }
+        if (node.type === 'snowflake') {
+          this.initializeSnowflakeRoutingEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -374,6 +384,16 @@ export class EmulationEngine {
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
       }
+      
+      // Initialize ClickHouse routing engine for ClickHouse nodes
+      if (node.type === 'clickhouse') {
+        this.initializeClickHouseRoutingEngine(node);
+      }
+      
+      // Initialize Snowflake routing engine for Snowflake nodes
+      if (node.type === 'snowflake') {
+        this.initializeSnowflakeRoutingEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -393,6 +413,9 @@ export class EmulationEngine {
         this.bffRoutingEngines.delete(nodeId);
         this.webhookRelayRoutingEngines.delete(nodeId);
         this.redisRoutingEngines.delete(nodeId);
+        this.cassandraRoutingEngines.delete(nodeId);
+        this.clickHouseRoutingEngines.delete(nodeId);
+        this.snowflakeRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -3084,6 +3107,70 @@ export class EmulationEngine {
       return; // Early return for ClickHouse
     }
     
+    // Для Snowflake используем SnowflakeRoutingEngine
+    if (node.type === 'snowflake') {
+      if (!this.snowflakeRoutingEngines.has(node.id)) {
+        this.initializeSnowflakeRoutingEngine(node);
+      }
+      
+      const routingEngine = this.snowflakeRoutingEngines.get(node.id)!;
+      const snowflakeConfig = node.data.config as any;
+      
+      // Sync configuration from UI with runtime state
+      if (snowflakeConfig) {
+        routingEngine.syncFromConfig({
+          account: snowflakeConfig.account,
+          region: snowflakeConfig.region,
+          warehouses: snowflakeConfig.warehouses,
+          databases: snowflakeConfig.databases,
+          role: snowflakeConfig.role,
+          enableAutoSuspend: snowflakeConfig.enableAutoSuspend,
+          autoSuspendSeconds: snowflakeConfig.autoSuspendSeconds,
+          enableAutoResume: snowflakeConfig.enableAutoResume,
+        });
+      }
+      
+      const snowflakeMetrics = routingEngine.getMetrics();
+      
+      // Throughput based on incoming connections
+      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+        const sourceMetrics = this.metrics.get(conn.source);
+        return sum + (sourceMetrics?.throughput || 0);
+      }, 0);
+      
+      // Snowflake throughput is queries per second
+      metrics.throughput = Math.max(snowflakeMetrics.queriesPerSecond, totalIncomingThroughput);
+      
+      // Latency from routing engine
+      metrics.latency = snowflakeMetrics.avgQueryTime;
+      
+      // Error rate is very low for Snowflake
+      metrics.errorRate = 0.001;
+      
+      // Utilization based on warehouse utilization
+      metrics.utilization = snowflakeMetrics.warehouseUtilization;
+      
+      metrics.customMetrics = {
+        'total_warehouses': snowflakeMetrics.totalWarehouses,
+        'running_warehouses': snowflakeMetrics.runningWarehouses,
+        'suspended_warehouses': snowflakeMetrics.suspendedWarehouses,
+        'total_queries': snowflakeMetrics.totalQueries,
+        'running_queries': snowflakeMetrics.runningQueries,
+        'queued_queries': snowflakeMetrics.queuedQueries,
+        'queries_per_sec': snowflakeMetrics.queriesPerSecond,
+        'avg_query_time_ms': snowflakeMetrics.avgQueryTime,
+        'total_compute_time_sec': snowflakeMetrics.totalComputeTime,
+        'total_data_read': snowflakeMetrics.totalDataRead,
+        'total_data_written': snowflakeMetrics.totalDataWritten,
+        'cache_hit_rate': snowflakeMetrics.cacheHitRate,
+        'warehouse_utilization': snowflakeMetrics.warehouseUtilization,
+        'total_cost_credits': snowflakeMetrics.totalCost,
+      };
+      
+      return; // Early return for Snowflake
+    }
+    
     // Для MongoDB считаем реальное количество индексов из коллекций
     let indexCount = config.indexCount || 5;
     if (node.type === 'mongodb') {
@@ -3891,6 +3978,48 @@ export class EmulationEngine {
     this.clickHouseRoutingEngines.set(node.id, routingEngine);
   }
 
+  private initializeSnowflakeRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new SnowflakeRoutingEngine();
+
+    routingEngine.initialize({
+      account: config.account || 'archiphoenix',
+      region: config.region || 'us-east-1',
+      warehouses: config.warehouses?.map((w: any) => ({
+        name: w.name,
+        size: w.size || 'Small',
+        status: w.status || 'suspended',
+        autoSuspend: w.autoSuspend || (config.enableAutoSuspend ? config.autoSuspendSeconds : undefined),
+        autoResume: w.autoResume !== undefined ? w.autoResume : (config.enableAutoResume !== false),
+        minClusterCount: w.minClusterCount || 1,
+        maxClusterCount: w.maxClusterCount || 1,
+        currentClusterCount: w.minClusterCount || 1,
+        runningQueries: 0,
+        queuedQueries: 0,
+        totalQueriesExecuted: 0,
+        totalComputeTime: 0,
+      })) || [],
+      databases: config.databases?.map((db: any) => ({
+        name: db.name,
+        comment: db.comment,
+        retentionTime: db.retentionTime,
+        size: db.size,
+        schemas: db.schemas?.map((s: any) => ({
+          name: s.name,
+          tables: s.tables || [],
+          views: s.views || 0,
+          functions: s.functions || 0,
+        })) || [],
+      })) || [],
+      role: config.role || 'ACCOUNTADMIN',
+      enableAutoSuspend: config.enableAutoSuspend,
+      autoSuspendSeconds: config.autoSuspendSeconds,
+      enableAutoResume: config.enableAutoResume,
+    });
+
+    this.snowflakeRoutingEngines.set(node.id, routingEngine);
+  }
+
   /**
    * Calculate connection latency based on type, network characteristics, and component metrics
    */
@@ -4024,6 +4153,13 @@ export class EmulationEngine {
    */
   public getClickHouseRoutingEngine(nodeId: string): ClickHouseRoutingEngine | undefined {
     return this.clickHouseRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Snowflake routing engine for a node
+   */
+  public getSnowflakeRoutingEngine(nodeId: string): SnowflakeRoutingEngine | undefined {
+    return this.snowflakeRoutingEngines.get(nodeId);
   }
 
   /**

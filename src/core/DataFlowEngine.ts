@@ -86,6 +86,9 @@ export class DataFlowEngine {
     this.registerHandler('postgres', this.createDatabaseHandler('postgres'));
     this.registerHandler('mongodb', this.createDatabaseHandler('mongodb'));
     this.registerHandler('redis', this.createDatabaseHandler('redis'));
+    this.registerHandler('cassandra', this.createDatabaseHandler('cassandra'));
+    this.registerHandler('clickhouse', this.createDatabaseHandler('clickhouse'));
+    this.registerHandler('snowflake', this.createDatabaseHandler('snowflake'));
     
     // Message brokers - pass through messages
     this.registerHandler('kafka', this.createMessageBrokerHandler('kafka'));
@@ -545,6 +548,11 @@ export class DataFlowEngine {
           return this.processClickHouseQuery(node, message, config);
         }
 
+        // Snowflake specific: if payload contains SQL query, use SnowflakeRoutingEngine
+        if (type === 'snowflake') {
+          return this.processSnowflakeQuery(node, message, config);
+        }
+
         // Simulate database operations
         const operation = message.payload?.operation || 'insert';
         
@@ -805,6 +813,118 @@ export class DataFlowEngine {
     } else {
       message.status = 'failed';
       message.error = result.error || 'ClickHouse query execution failed';
+      message.latency = result.latency || 0;
+    }
+
+    return message;
+  }
+
+  /**
+   * Process Snowflake SQL query using SnowflakeRoutingEngine
+   */
+  private processSnowflakeQuery(
+    node: CanvasNode,
+    message: DataMessage,
+    config: ComponentConfig
+  ): DataMessage {
+    const payload = message.payload as any;
+    
+    // Get SnowflakeRoutingEngine from emulationEngine
+    const snowflakeEngine = emulationEngine.getSnowflakeRoutingEngine(node.id);
+    if (!snowflakeEngine) {
+      message.status = 'failed';
+      message.error = 'Snowflake Routing Engine not initialized';
+      return message;
+    }
+
+    // Extract SQL query from payload
+    let sqlQuery: string;
+    let warehouseName: string | undefined;
+    let database: string | undefined;
+    let schema: string | undefined;
+
+    if (payload?.sql) {
+      // Explicit SQL format: { sql: "SELECT * FROM table" }
+      sqlQuery = payload.sql;
+      warehouseName = payload.warehouse;
+      database = payload.database;
+      schema = payload.schema;
+    } else if (payload?.query) {
+      // Alternative format: { query: "SELECT * FROM table" }
+      sqlQuery = payload.query;
+      warehouseName = payload.warehouse;
+      database = payload.database;
+      schema = payload.schema;
+    } else if (typeof payload === 'string') {
+      // String format: "SELECT * FROM table"
+      sqlQuery = payload;
+    } else {
+      // Try to infer from operation
+      const operation = payload?.operation || 'select';
+      const snowflakeConfig = node.data.config as any;
+      database = payload?.database || snowflakeConfig?.database || 'PUBLIC';
+      schema = payload?.schema || snowflakeConfig?.schema || 'PUBLIC';
+      warehouseName = payload?.warehouse || snowflakeConfig?.warehouse;
+      const table = payload?.table || 'default_table';
+      
+      switch (operation.toLowerCase()) {
+        case 'select':
+        case 'read':
+        case 'query':
+          sqlQuery = `SELECT * FROM ${database}.${schema}.${table}`;
+          if (payload?.where) {
+            sqlQuery += ` WHERE ${payload.where}`;
+          }
+          if (payload?.limit) {
+            sqlQuery += ` LIMIT ${payload.limit}`;
+          }
+          break;
+        case 'insert':
+        case 'write':
+          const columns = payload?.columns ? Object.keys(payload.columns).join(', ') : 'id, data';
+          const values = payload?.columns 
+            ? Object.values(payload.columns).map((v: any) => `'${v}'`).join(', ')
+            : `${Date.now()}, 'data'`;
+          sqlQuery = `INSERT INTO ${database}.${schema}.${table} (${columns}) VALUES (${values})`;
+          break;
+        default:
+          message.status = 'failed';
+          message.error = `Unknown Snowflake operation: ${operation}`;
+          return message;
+      }
+    }
+
+    // Execute SQL query through warehouse
+    const result = snowflakeEngine.executeQuery(sqlQuery, warehouseName, database, schema);
+
+    if (result.success) {
+      message.status = 'delivered';
+      message.latency = result.latency || 50; // Snowflake latency
+      message.payload = {
+        ...(message.payload as any),
+        sql: sqlQuery,
+        rows: result.rows || [],
+        rowCount: result.rowCount || 0,
+        columns: result.columns || [],
+        dataRead: result.dataRead,
+        dataWritten: result.dataWritten,
+        snowflakeResult: result.rows,
+        queryId: result.queryId,
+        warehouse: result.warehouse,
+        resultCacheUsed: result.resultCacheUsed,
+      };
+      message.metadata = {
+        ...message.metadata,
+        snowflakeQuery: sqlQuery,
+        rowsRead: result.dataRead,
+        rowsWritten: result.dataWritten,
+        warehouse: result.warehouse,
+        queryId: result.queryId,
+        cacheHit: result.resultCacheUsed || false,
+      };
+    } else {
+      message.status = 'failed';
+      message.error = result.error || 'Snowflake query execution failed';
       message.latency = result.latency || 0;
     }
 

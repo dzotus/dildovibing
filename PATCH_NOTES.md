@@ -1,5 +1,192 @@
 # Patch Notes
 
+## Версия 0.1.7q - Snowflake Full Simulation System
+
+### Обзор изменений
+Полная реализация Snowflake симуляции: создан SnowflakeRoutingEngine с поддержкой warehouse management, query execution, auto-suspend/resume, multi-cluster scaling и метрик. Интеграция с DataFlowEngine, EmulationEngine и UI. Система теперь реалистично симулирует облачную платформу Snowflake с разделением storage и compute, виртуальными warehouses, query queuing и расчетом стоимости на основе credits.
+
+---
+
+## Snowflake: Полная реализация симуляции
+
+### 1. SnowflakeRoutingEngine - Core Engine
+
+**Проблема:**
+- Snowflake не обрабатывалась в EmulationEngine (отсутствовал case 'snowflake')
+- Нет обработки SQL запросов через warehouses
+- Нет управления lifecycle warehouses (suspend/resume)
+- Нет симуляции auto-suspend/resume
+- Нет query queuing и routing через warehouses
+- Метрики отсутствуют
+- UI конфигурация не связана с runtime логикой
+
+**Решение:**
+- ✅ Создан `SnowflakeRoutingEngine` (`src/core/SnowflakeRoutingEngine.ts`):
+  - **Warehouse Management**: 
+    - Размеры warehouses (X-Small → 4X-Large) с соответствующими compute capacity
+    - Multi-cluster scaling (min/max clusters)
+    - Lifecycle management (running, suspended, resuming, suspending)
+    - Auto-suspend при простое (настраиваемый delay)
+    - Auto-resume при запросах
+  - **Query Execution**:
+    - SQL parsing (SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP TABLE)
+    - Query routing через warehouses
+    - Query queuing при недоступности warehouse
+    - Расчет latency на основе warehouse size и query complexity
+    - Result caching (TTL 5 минут)
+  - **Метрики**: 
+    - Queries per second, average query time
+    - Warehouse utilization
+    - Running/queued queries
+    - Cache hit rate
+    - Total cost (credits) на основе warehouse size и времени работы
+  - **Синхронизация конфигурации**: `syncFromConfig()` для связи UI ↔ Runtime
+
+**Изменённые файлы:**
+- `src/core/SnowflakeRoutingEngine.ts` (новый)
+
+---
+
+### 2. Интеграция в DataFlowEngine
+
+**Проблема:**
+- Snowflake обрабатывалась через общий `createDatabaseHandler()` без специфики
+- Нет обработки SQL запросов в payload
+- Нет связи между UI Query Console и runtime
+
+**Решение:**
+- ✅ Добавлен метод `processSnowflakeQuery()` в DataFlowEngine
+- ✅ Поддержка форматов: `{sql: "SELECT ..."}`, `{query: "SELECT ..."}`, строковый формат
+- ✅ Автоматическое определение операции (select/insert/query)
+- ✅ Реальное выполнение SQL запросов через SnowflakeRoutingEngine с routing через warehouses
+- ✅ Возврат результатов с метаданными (rows, rowCount, columns, dataRead, dataWritten, latency, queryId, warehouse, resultCacheUsed)
+- ✅ Регистрация handler'а для типа 'snowflake'
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 3. Интеграция в EmulationEngine
+
+**Проблема:**
+- Snowflake не обрабатывалась в switch-case (`simulateDatabase()`)
+- Нет реальных метрик Snowflake
+- Нет синхронизации конфигурации UI с runtime
+
+**Решение:**
+- ✅ Добавлен `snowflakeRoutingEngines` Map для хранения инстансов
+- ✅ Метод `initializeSnowflakeRoutingEngine()` для инициализации
+- ✅ Метод `getSnowflakeRoutingEngine()` для доступа к engine
+- ✅ Добавлен case 'snowflake' в `simulateDatabase()` с реальными метриками:
+  - Throughput на основе queries per second из routing engine
+  - Latency из avgQueryTime
+  - Error rate (очень низкий для Snowflake)
+  - Utilization на основе warehouse utilization
+  - Custom metrics: total_warehouses, running_warehouses, suspended_warehouses, total_queries, running_queries, queued_queries, queries_per_sec, avg_query_time_ms, total_compute_time_sec, total_data_read, total_data_written, cache_hit_rate, warehouse_utilization, total_cost_credits
+- ✅ Синхронизация конфигурации из UI с runtime через `syncFromConfig()` (warehouses, databases, account, region, role)
+- ✅ Добавлена инициализация в `initialize()` и `updateNodesAndConnections()`
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. UI Improvements
+
+**Проблема:**
+- Query Console только сохранял запросы, но не выполнял их
+- Метрики отображались из конфигурации (хардкод), а не из runtime
+- Нет связи между UI и routing engine
+- Account identifier отображался не в полном формате
+- Кнопка Refresh не работала
+- Кнопка "Snowflake Web UI" была лишней
+
+**Решение:**
+- ✅ Добавлен импорт `emulationEngine` в UI компонент
+- ✅ Улучшен формат Account identifier: отображается в формате `account.region.cloud` (например: `archiphoenix.us-east-1.aws`)
+- ✅ Добавлен обработчик `handleRefresh()` для обновления метрик из routing engine:
+  - Обновляет warehouses состояние (running/suspended, queries count)
+  - Обновляет список queries (последние 100)
+  - Обновляет метрики (running queries, queued queries)
+  - Сохраняет настройки из конфига (autoSuspend, autoResume, cluster counts)
+- ✅ Удалена кнопка "Snowflake Web UI"
+- ✅ Метрики берутся из routing engine в реальном времени:
+  - `totalRunningQueries`, `totalQueuedQueries` - из реальных метрик
+  - `warehouses` - из runtime состояния с merge конфига
+  - `queries` - из query history
+- ✅ Улучшено отображение Account карточки: компактный layout с корректным переносом длинных идентификаторов
+
+**Изменённые файлы:**
+- `src/components/config/data/SnowflakeConfigAdvanced.tsx`
+
+---
+
+## Технические детали Snowflake
+
+### Архитектура SnowflakeRoutingEngine:
+
+1. **Warehouse Management**:
+   - Размеры: X-Small (1 server) → 4X-Large (128 servers)
+   - Multi-cluster: min/max clusters для масштабирования
+   - Auto-suspend: автоматическая остановка при простое
+   - Auto-resume: автоматический запуск при запросах
+   - Query queuing: очереди запросов при недоступности warehouse
+
+2. **Query Execution**:
+   - SQL parsing и execution
+   - Routing через warehouses
+   - Расчет latency на основе warehouse capacity и query complexity
+   - Result caching для оптимизации
+
+3. **Метрики и Cost Calculation**:
+   - Warehouse utilization
+   - Query throughput и latency
+   - Cache hit rate
+   - Total cost в credits (на основе warehouse size × время работы)
+
+### Поддерживаемые функции:
+
+- ✅ Warehouse lifecycle (suspend/resume)
+- ✅ Auto-suspend/resume
+- ✅ Multi-cluster scaling
+- ✅ Query queuing
+- ✅ SQL query execution (SELECT, INSERT, UPDATE, DELETE, CREATE TABLE, DROP TABLE)
+- ✅ Result caching
+- ✅ Real-time metrics
+- ✅ Cost calculation (credits)
+
+### Интеграция:
+
+- ✅ DataFlowEngine: обработка SQL запросов через warehouses
+- ✅ EmulationEngine: метрики и синхронизация конфигурации
+- ✅ UI: реальное выполнение запросов и обновление метрик
+
+---
+
+## Результаты
+
+### До улучшений:
+
+- ❌ Snowflake только UI конфигурация без логики
+- ❌ Нет обработки запросов
+- ❌ Нет warehouse management
+- ❌ Нет метрик
+- ❌ Нет симуляции реального поведения
+
+### После улучшений:
+
+- ✅ Полноценная симуляция Snowflake с warehouse management
+- ✅ Реальное выполнение SQL запросов через warehouses
+- ✅ Auto-suspend/resume симуляция
+- ✅ Query queuing и routing
+- ✅ Реальные метрики из routing engine
+- ✅ Расчет стоимости (credits)
+- ✅ Интеграция с DataFlowEngine и EmulationEngine
+- ✅ UI обновляется в реальном времени
+
+---
+
 ## Версия 0.1.7p - ClickHouse Full Simulation System
 
 ### Обзор изменений

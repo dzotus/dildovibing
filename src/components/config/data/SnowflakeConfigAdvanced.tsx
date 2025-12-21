@@ -18,13 +18,13 @@ import {
   Plus,
   Trash2,
   RefreshCcw,
-  Cloud,
   Snowflake,
   TrendingUp,
   Users,
   Key
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface SnowflakeConfigProps {
   componentId: string;
@@ -88,7 +88,11 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as SnowflakeConfig;
-  const account = config.account || 'archiphoenix.us-east-1';
+  const accountBase = config.account || 'archiphoenix';
+  const region = config.region || 'us-east-1';
+  const cloud = 'aws'; // Default to AWS, could be configurable
+  // Format: account.region.cloud (e.g., archiphoenix.us-east-1.aws)
+  const account = accountBase.includes('.') ? accountBase : `${accountBase}.${region}.${cloud}`;
   const username = config.username || 'admin';
   const password = config.password || '';
   const warehouse = config.warehouse || 'COMPUTE_WH';
@@ -112,6 +116,9 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
   const [editingDatabaseIndex, setEditingDatabaseIndex] = useState<number | null>(null);
   const [showCreateQuery, setShowCreateQuery] = useState(false);
   const [queryText, setQueryText] = useState('');
+  
+  // Get SnowflakeRoutingEngine for real-time metrics
+  const snowflakeEngine = emulationEngine.getSnowflakeRoutingEngine(componentId);
 
   const updateConfig = (updates: Partial<SnowflakeConfig>) => {
     updateNode(componentId, {
@@ -185,8 +192,60 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
     setShowCreateQuery(false);
   };
 
-  const totalRunningQueries = warehouses.reduce((sum, w) => sum + (w.runningQueries || 0), 0);
-  const totalQueuedQueries = warehouses.reduce((sum, w) => sum + (w.queuedQueries || 0), 0);
+  // Get real-time metrics from engine if available
+  const engineMetrics = snowflakeEngine?.getMetrics();
+  const engineWarehouses = snowflakeEngine?.getWarehouses() || [];
+  const engineQueries = snowflakeEngine?.getRecentQueries(10) || [];
+  
+  // Use engine metrics if available, otherwise fall back to config
+  const totalRunningQueries = engineMetrics?.runningQueries ?? warehouses.reduce((sum, w) => sum + (w.runningQueries || 0), 0);
+  const totalQueuedQueries = engineMetrics?.queuedQueries ?? warehouses.reduce((sum, w) => sum + (w.queuedQueries || 0), 0);
+  
+  // Merge engine warehouses with config warehouses (engine takes precedence for runtime state)
+  const mergedWarehouses = engineWarehouses.length > 0 
+    ? engineWarehouses.map(engineWh => {
+        const configWh = warehouses.find(w => w.name === engineWh.name);
+        return {
+          ...engineWh,
+          // Keep config settings like autoSuspend, autoResume from config if not in engine
+          autoSuspend: engineWh.autoSuspend ?? configWh?.autoSuspend,
+          autoResume: engineWh.autoResume ?? configWh?.autoResume,
+          minClusterCount: engineWh.minClusterCount ?? configWh?.minClusterCount ?? 1,
+          maxClusterCount: engineWh.maxClusterCount ?? configWh?.maxClusterCount ?? 1,
+        };
+      })
+    : warehouses;
+  
+  // Use engine queries if available
+  const displayQueries = engineQueries.length > 0 ? engineQueries : queries;
+  
+  const handleRefresh = () => {
+    if (!snowflakeEngine) return;
+    
+    // Get latest metrics and state from engine
+    const metrics = snowflakeEngine.getMetrics();
+    const engineWarehouses = snowflakeEngine.getWarehouses();
+    const recentQueries = snowflakeEngine.getRecentQueries(100);
+    
+    // Update warehouses in config with runtime state
+    const updatedWarehouses = engineWarehouses.map(engineWh => {
+      const configWh = warehouses.find(w => w.name === engineWh.name);
+      return {
+        ...engineWh,
+        // Preserve config settings
+        autoSuspend: configWh?.autoSuspend ?? engineWh.autoSuspend,
+        autoResume: configWh?.autoResume ?? engineWh.autoResume,
+        minClusterCount: configWh?.minClusterCount ?? engineWh.minClusterCount,
+        maxClusterCount: configWh?.maxClusterCount ?? engineWh.maxClusterCount,
+      };
+    });
+    
+    // Update config with refreshed data
+    updateConfig({
+      warehouses: updatedWarehouses.length > 0 ? updatedWarehouses : warehouses,
+      queries: recentQueries.slice(0, 100), // Keep last 100 queries
+    });
+  };
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -200,13 +259,9 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
-            </Button>
-            <Button variant="outline" size="sm">
-              <Cloud className="h-4 w-4 mr-2" />
-              Snowflake Web UI
             </Button>
           </div>
         </div>
@@ -219,7 +274,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
               <CardTitle className="text-sm font-medium">Account</CardTitle>
             </CardHeader>
             <CardContent>
-              <Badge variant="outline" className="truncate max-w-full">{account}</Badge>
+              <p className="text-sm break-words leading-tight">{account}</p>
             </CardContent>
           </Card>
           <Card>
@@ -227,7 +282,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
               <CardTitle className="text-sm font-medium">Warehouses</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold">{warehouses.length}</span>
+              <span className="text-2xl font-bold">{mergedWarehouses.length}</span>
             </CardContent>
           </Card>
           <Card>
@@ -252,7 +307,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
           <TabsList>
             <TabsTrigger value="warehouses">
               <Snowflake className="h-4 w-4 mr-2" />
-              Warehouses ({warehouses.length})
+              Warehouses ({mergedWarehouses.length})
             </TabsTrigger>
             <TabsTrigger value="databases">
               <Database className="h-4 w-4 mr-2" />
@@ -260,7 +315,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
             </TabsTrigger>
             <TabsTrigger value="queries">
               <Activity className="h-4 w-4 mr-2" />
-              Queries ({queries.length})
+              Queries ({displayQueries.length})
             </TabsTrigger>
             <TabsTrigger value="connection">
               <Key className="h-4 w-4 mr-2" />
@@ -284,7 +339,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {warehouses.map((wh, index) => (
+                  {mergedWarehouses.map((wh, index) => (
                     <Card key={index} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -542,11 +597,11 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
                     </CardContent>
                   </Card>
                 )}
-                {queries.length === 0 ? (
+                {displayQueries.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No queries executed</p>
                 ) : (
                   <div className="space-y-2">
-                    {queries.map((query) => (
+                    {displayQueries.map((query) => (
                       <Card key={query.id} className="border-l-4 border-l-purple-500">
                         <CardContent className="pt-4">
                           <div className="flex items-start justify-between">
@@ -632,7 +687,7 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {warehouses.map((wh) => (
+                        {mergedWarehouses.map((wh) => (
                           <SelectItem key={wh.name} value={wh.name}>{wh.name}</SelectItem>
                         ))}
                       </SelectContent>
