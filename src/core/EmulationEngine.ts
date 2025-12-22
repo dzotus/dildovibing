@@ -29,6 +29,7 @@ import { alertSystem } from './AlertSystem';
 import { KeycloakEmulationEngine } from './KeycloakEmulationEngine';
 import { WAFEmulationEngine } from './WAFEmulationEngine';
 import { FirewallEmulationEngine } from './FirewallEmulationEngine';
+import { VaultEmulationEngine } from './VaultEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -197,6 +198,9 @@ export class EmulationEngine {
   // Keycloak emulation engines per node
   private keycloakEngines: Map<string, KeycloakEmulationEngine> = new Map();
 
+  // Vault emulation engines per node
+  private vaultEngines: Map<string, VaultEmulationEngine> = new Map();
+
   // WAF emulation engines per node
   private wafEngines: Map<string, WAFEmulationEngine> = new Map();
 
@@ -361,6 +365,9 @@ export class EmulationEngine {
         if (node.type === 'keycloak') {
           this.initializeKeycloakEngine(node);
         }
+        if (node.type === 'secrets-vault') {
+          this.initializeVaultEngine(node);
+        }
         if (node.type === 'waf') {
           this.initializeWAFEngine(node);
         }
@@ -495,6 +502,7 @@ export class EmulationEngine {
         this.s3RoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.keycloakEngines.delete(nodeId);
+        this.vaultEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -775,6 +783,9 @@ export class EmulationEngine {
           break;
         case 'keycloak':
           this.simulateKeycloak(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'secrets-vault':
+          this.simulateVault(node, config, metrics, hasIncomingConnections);
           break;
         case 'pagerduty':
           this.simulatePagerDuty(node, config, metrics, hasIncomingConnections);
@@ -4069,6 +4080,63 @@ export class EmulationEngine {
   }
 
   /**
+   * Vault emulation
+   * Использует VaultEmulationEngine для преобразования конфигурации Vault
+   * и статистики операций с секретами в общие метрики компонента.
+   */
+  private simulateVault(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.vaultEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что Vault простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const vMetrics = engine.getMetrics();
+    const cfg = engine.getConfig();
+
+    // Throughput = все операции в секунду (read, write, auth, encrypt, decrypt)
+    metrics.throughput = load.requestsPerSecond;
+
+    // Latency = средняя латентность операций
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных запросов
+    metrics.errorRate = load.errorRate;
+
+    // Utilization — функция от количества секретов, активных токенов, RPS и включенных движков
+    const secretsFactor = Math.min(0.4, (load.secretsCount || 0) / 1000);
+    const tokensFactor = Math.min(0.3, (load.activeTokens || 0) / 500);
+    const rpsFactor = Math.min(0.2, load.requestsPerSecond / 300);
+    const enginesFactor = Math.min(0.1, (load.enginesEnabled || 0) / 10);
+
+    metrics.utilization = Math.min(0.95, 0.1 + secretsFactor + tokensFactor + rpsFactor + enginesFactor);
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      vault_read_requests_total: vMetrics.readRequestsTotal,
+      vault_write_requests_total: vMetrics.writeRequestsTotal,
+      vault_delete_requests_total: vMetrics.deleteRequestsTotal,
+      vault_list_requests_total: vMetrics.listRequestsTotal,
+      vault_auth_requests_total: vMetrics.authRequestsTotal,
+      vault_auth_errors_total: vMetrics.authErrorsTotal,
+      vault_token_issued_total: vMetrics.tokenIssuedTotal,
+      vault_token_renewed_total: vMetrics.tokenRenewedTotal,
+      vault_token_revoked_total: vMetrics.tokenRevokedTotal,
+      vault_tokens_active: vMetrics.activeTokens,
+      vault_secrets_total: vMetrics.secretsTotal,
+      vault_encryption_operations_total: vMetrics.encryptionOperationsTotal,
+      vault_decryption_operations_total: vMetrics.decryptionOperationsTotal,
+      vault_engines_enabled: load.enginesEnabled,
+    };
+  }
+
+  /**
    * Оценка «сложности» password policy Keycloak
    * (используется только для расчёта utilization).
    */
@@ -5003,6 +5071,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Vault Emulation Engine for Vault node
+   */
+  private initializeVaultEngine(node: CanvasNode): void {
+    const engine = new VaultEmulationEngine();
+    engine.initializeConfig(node);
+    this.vaultEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize WAF emulation engine for a node
    */
   private initializeWAFEngine(node: CanvasNode): void {
@@ -5413,6 +5490,13 @@ export class EmulationEngine {
    */
   public getKeycloakEmulationEngine(nodeId: string): KeycloakEmulationEngine | undefined {
     return this.keycloakEngines.get(nodeId);
+  }
+
+  /**
+   * Get Vault emulation engine for a node
+   */
+  public getVaultEmulationEngine(nodeId: string): VaultEmulationEngine | undefined {
+    return this.vaultEngines.get(nodeId);
   }
 
   /**

@@ -126,6 +126,7 @@ export class DataFlowEngine {
 
     // Security & IAM
     this.registerHandler('keycloak', this.createKeycloakHandler());
+    this.registerHandler('secrets-vault', this.createVaultHandler());
     this.registerHandler('waf', this.createWAFHandler());
     this.registerHandler('firewall', this.createFirewallHandler());
   }
@@ -2762,6 +2763,106 @@ export class DataFlowEngine {
             authSubject: result.subject,
             authResult: 'success',
           };
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Vault (Secrets Management)
+   * Обрабатывает запросы к секретам и делегирует расчёт нагрузки VaultEmulationEngine.
+   */
+  private createVaultHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getVaultEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что Vault недоступен
+          message.status = 'failed';
+          message.error = 'Vault engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+
+        // Определяем тип операции Vault
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'read';
+
+        const path = payload?.path || message.metadata?.path || 'secret/default';
+        const token = payload?.token || message.metadata?.token;
+
+        let result;
+
+        if (typeof operation === 'string') {
+          const opLower = operation.toLowerCase();
+
+          if (opLower.includes('write') || opLower === 'create' || opLower === 'update') {
+            // Write operation
+            const data = payload?.data || payload?.value || {};
+            result = engine.processWriteRequest(path, data, token);
+          } else if (opLower.includes('delete') || opLower === 'remove') {
+            // Delete operation
+            result = engine.processDeleteRequest(path, token);
+          } else if (opLower.includes('encrypt')) {
+            // Encryption operation (Transit engine)
+            const plaintext = payload?.plaintext || payload?.data || '';
+            const keyName = payload?.key || payload?.keyName || 'default';
+            result = engine.processEncryptRequest(plaintext, keyName, token);
+          } else if (opLower.includes('decrypt')) {
+            // Decryption operation (Transit engine)
+            const ciphertext = payload?.ciphertext || payload?.data || '';
+            const keyName = payload?.key || payload?.keyName || 'default';
+            result = engine.processDecryptRequest(ciphertext, keyName, token);
+          } else if (opLower.includes('auth') || opLower === 'login' || opLower === 'authenticate') {
+            // Authentication operation
+            const authMethod = payload?.method || payload?.authMethod || 'token';
+            result = engine.processAuthRequest(
+              authMethod as 'token' | 'approle' | 'ldap' | 'aws',
+              payload
+            );
+          } else {
+            // Default: read operation
+            const key = payload?.key;
+            result = engine.processReadRequest(path, key, token);
+          }
+        } else {
+          // Default: read operation
+          const key = payload?.key;
+          result = engine.processReadRequest(path, key, token);
+        }
+
+        message.latency = (message.latency || 0) + result.latency;
+
+        if (!result.success) {
+          message.status = 'failed';
+          message.error = result.error || 'Vault operation failed';
+        } else {
+          message.status = 'delivered';
+          // Обновляем payload с результатом операции
+          message.payload = {
+            ...(payload || {}),
+            vault: {
+              path,
+              data: result.data,
+              token: result.token,
+              policies: result.policies,
+            },
+          };
+
+          // Обновляем metadata для дальнейших хопов
+          if (result.token) {
+            message.metadata = {
+              ...message.metadata,
+              vaultToken: result.token,
+              vaultPolicies: result.policies,
+            };
+          }
         }
 
         return message;
