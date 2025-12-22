@@ -31,6 +31,7 @@ import { WAFEmulationEngine } from './WAFEmulationEngine';
 import { FirewallEmulationEngine } from './FirewallEmulationEngine';
 import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
+import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -211,6 +212,9 @@ export class EmulationEngine {
   // IDS/IPS emulation engines per node
   private idsIpsEngines: Map<string, IDSIPSEmulationEngine> = new Map();
 
+  // Jenkins emulation engines per node
+  private jenkinsEngines: Map<string, JenkinsEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -381,6 +385,9 @@ export class EmulationEngine {
         if (node.type === 'ids-ips') {
           this.initializeIDSIPSEngine(node);
         }
+        if (node.type === 'jenkins') {
+          this.initializeJenkinsEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -498,6 +505,17 @@ export class EmulationEngine {
       if (node.type === 'ids-ips') {
         this.initializeIDSIPSEngine(node);
       }
+      
+      // Initialize Jenkins emulation engine for Jenkins nodes
+      if (node.type === 'jenkins') {
+        if (!this.jenkinsEngines.has(node.id)) {
+          this.initializeJenkinsEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.jenkinsEngines.get(node.id)!;
+          engine.updateConfig(node);
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -560,18 +578,39 @@ export class EmulationEngine {
    * Start the emulation simulation
    */
   public start() {
-    if (this.isRunning) return;
+    console.log('EmulationEngine.start() called', { isRunning: this.isRunning, hasInterval: !!this.intervalId });
     
+    // If already running but interval is missing, stop first to fix inconsistent state
+    if (this.isRunning && !this.intervalId) {
+      console.log('Inconsistent state detected: isRunning=true but no interval, stopping first...');
+      this.stop();
+    }
+    
+    if (this.isRunning) {
+      console.log('Already running, returning early');
+      return;
+    }
+    
+    console.log('Setting isRunning to true and creating interval...');
     this.isRunning = true;
     // Continue from where we paused, not from 0
     this.baseTime = Date.now() - this.pausedTime;
     
     // Start data flow engine
+    console.log('Starting data flow engine...');
     dataFlowEngine.start();
     
+    console.log('Creating simulation interval...');
     this.intervalId = setInterval(() => {
-      this.simulate();
+      try {
+        this.simulate();
+      } catch (error) {
+        console.error('Error in simulation step:', error);
+        // Don't stop simulation on error, just log it
+      }
     }, this.updateInterval);
+    
+    console.log('EmulationEngine.start() complete', { intervalId: !!this.intervalId });
   }
 
   /**
@@ -709,6 +748,22 @@ export class EmulationEngine {
     // Perform Jaeger cleanup (TTL and trace limits)
     for (const [nodeId, jaegerEngine] of this.jaegerEngines.entries()) {
       jaegerEngine.performCleanup(now);
+    }
+    
+    // Perform Jenkins updates (builds, pipelines, executors)
+    for (const [nodeId, jenkinsEngine] of this.jenkinsEngines.entries()) {
+      jenkinsEngine.performUpdate(now);
+      
+      // Update component metrics based on Jenkins metrics
+      const jenkinsMetrics = jenkinsEngine.calculateComponentMetrics();
+      const componentMetrics = this.metrics.get(nodeId);
+      if (componentMetrics && jenkinsMetrics) {
+        componentMetrics.throughput = jenkinsMetrics.throughput || componentMetrics.throughput;
+        componentMetrics.latency = jenkinsMetrics.latency || componentMetrics.latency;
+        componentMetrics.utilization = (jenkinsMetrics.utilization || 0) / 100; // Convert to 0-1
+        componentMetrics.errorRate = (jenkinsMetrics.errorRate || 0) / 100; // Convert to 0-1
+        componentMetrics.timestamp = now;
+      }
     }
     
     // Process OpenTelemetry Collector batch flush
@@ -5209,6 +5264,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Jenkins Emulation Engine for Jenkins node
+   */
+  private initializeJenkinsEngine(node: CanvasNode): void {
+    const engine = new JenkinsEmulationEngine();
+    engine.initializeConfig(node);
+    this.jenkinsEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5610,6 +5674,13 @@ export class EmulationEngine {
    */
   public getKeycloakEmulationEngine(nodeId: string): KeycloakEmulationEngine | undefined {
     return this.keycloakEngines.get(nodeId);
+  }
+
+  /**
+   * Get Jenkins emulation engine for a node
+   */
+  public getJenkinsEmulationEngine(nodeId: string): JenkinsEmulationEngine | undefined {
+    return this.jenkinsEngines.get(nodeId);
   }
 
   /**

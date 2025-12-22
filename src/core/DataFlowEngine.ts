@@ -130,6 +130,9 @@ export class DataFlowEngine {
     this.registerHandler('waf', this.createWAFHandler());
     this.registerHandler('firewall', this.createFirewallHandler());
     this.registerHandler('ids-ips', this.createIDSIPSHandler());
+    
+    // CI/CD
+    this.registerHandler('jenkins', this.createJenkinsHandler());
   }
 
   /**
@@ -2765,6 +2768,113 @@ export class DataFlowEngine {
             authResult: 'success',
           };
         }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Jenkins (CI/CD)
+   * Обрабатывает webhook триггеры и API запросы, делегирует расчёт нагрузки JenkinsEmulationEngine.
+   */
+  private createJenkinsHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getJenkinsEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что Jenkins недоступен
+          message.status = 'failed';
+          message.error = 'Jenkins engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'webhook';
+
+        // Определяем тип операции
+        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit) {
+          // Webhook trigger - реально запускаем build через engine
+          const pipelineId = payload.pipelineId || payload.pipeline || payload.job;
+          const branch = payload.branch || payload.ref?.replace('refs/heads/', '') || 'main';
+          const commit = payload.commit || payload.sha || undefined;
+
+          if (pipelineId) {
+            // Реально триггерим build через engine
+            const result = engine.triggerWebhook(pipelineId, branch, commit);
+            if (result.success) {
+              message.status = 'delivered';
+              message.latency = 50; // Webhook processing latency
+              message.payload = {
+                ...(payload || {}),
+                jenkins: {
+                  webhookReceived: true,
+                  pipelineId,
+                  branch,
+                  commit,
+                  triggered: true,
+                },
+              };
+            } else {
+              message.status = 'failed';
+              message.error = result.reason || 'Failed to trigger build';
+              message.latency = 50;
+            }
+          } else {
+            // Если pipelineId не указан, просто отмечаем получение webhook
+            message.status = 'delivered';
+            message.latency = 50;
+            message.payload = {
+              ...(payload || {}),
+              jenkins: {
+                webhookReceived: true,
+                branch,
+                commit,
+                triggered: false,
+                reason: 'No pipeline ID specified',
+              },
+            };
+          }
+        } else if (operation === 'getBuildStatus' || payload.buildId || payload.buildNumber) {
+          // API запрос для получения статуса build
+          const buildId = payload.buildId || payload.buildNumber;
+          const pipelineId = payload.pipelineId || payload.pipeline;
+
+          // Получаем реальный статус build из engine
+          const build = engine.getBuildById(buildId || `${pipelineId}-${payload.buildNumber}`);
+          const buildStatus = build?.status || 'unknown';
+          
+          message.status = 'delivered';
+          message.latency = 20; // API latency
+          message.payload = {
+            ...(payload || {}),
+            jenkins: {
+              buildId,
+              pipelineId,
+              status: buildStatus,
+              progress: build?.progress,
+              duration: build?.duration,
+            },
+          };
+        } else {
+          // Общий API запрос
+          message.status = 'delivered';
+          message.latency = 30;
+          message.payload = {
+            ...(payload || {}),
+            jenkins: {
+              processed: true,
+              operation,
+            },
+          };
+        }
+
+        // Обновляем метрики Jenkins (requests)
+        engine.processRequest(message.status === 'delivered');
 
         return message;
       },

@@ -45,19 +45,38 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
   },
 
   start: () => {
-    emulationEngine.start();
-    set({ isRunning: true });
-    
-    // Start data flow
-    useDataFlowStore.getState().start();
-    
-    // Setup polling for metrics updates
-    const pollInterval = setInterval(() => {
-      get().updateMetrics();
-    }, get().updateInterval);
-    
-    // Store interval ID for cleanup (we'll need to handle this in stop)
-    (emulationEngine as any)._pollInterval = pollInterval;
+    console.log('useEmulationStore.start() called');
+    try {
+      // Ensure engine is stopped before starting (in case of state mismatch)
+      const engineRunning = emulationEngine.getIsRunning();
+      console.log('Engine running state:', engineRunning);
+      if (engineRunning) {
+        console.log('Stopping engine first...');
+        emulationEngine.stop();
+      }
+      
+      console.log('Calling emulationEngine.start()...');
+      emulationEngine.start();
+      console.log('Engine started, setting store isRunning to true');
+      set({ isRunning: true });
+      
+      // Start data flow
+      console.log('Starting data flow...');
+      useDataFlowStore.getState().start();
+      
+      // Setup polling for metrics updates
+      console.log('Setting up polling interval...');
+      const pollInterval = setInterval(() => {
+        get().updateMetrics();
+      }, get().updateInterval);
+      
+      // Store interval ID for cleanup (we'll need to handle this in stop)
+      (emulationEngine as any)._pollInterval = pollInterval;
+      console.log('Start complete, polling interval set');
+    } catch (error) {
+      console.error('Error in useEmulationStore.start():', error);
+      throw error;
+    }
   },
 
   stop: () => {
