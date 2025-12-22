@@ -123,6 +123,10 @@ export class DataFlowEngine {
     // Observability - logs and metrics
     this.registerHandler('loki', this.createLokiHandler());
     this.registerHandler('otel-collector', this.createOpenTelemetryCollectorHandler());
+
+    // Security & IAM
+    this.registerHandler('keycloak', this.createKeycloakHandler());
+    this.registerHandler('waf', this.createWAFHandler());
   }
 
   /**
@@ -2673,6 +2677,184 @@ export class DataFlowEngine {
       },
       
       getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Keycloak (IAM)
+   * Обрабатывает auth-запросы и делегирует расчёт нагрузки KeycloakEmulationEngine.
+   */
+  private createKeycloakHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getKeycloakEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что Keycloak недоступен
+          message.status = 'failed';
+          message.error = 'Keycloak engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+
+        // Определяем тип auth-запроса
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || payload.grant_type;
+
+        let type: 'login' | 'refresh' | 'introspect' | 'userinfo' = 'login';
+
+        if (typeof operation === 'string') {
+          const opLower = operation.toLowerCase();
+          if (opLower.includes('refresh') || opLower === 'refresh_token') {
+            type = 'refresh';
+          } else if (opLower.includes('introspect')) {
+            type = 'introspect';
+          } else if (opLower.includes('userinfo') || opLower.includes('user_info')) {
+            type = 'userinfo';
+          } else {
+            type = 'login';
+          }
+        }
+
+        const clientId: string | undefined =
+          payload.clientId || payload.client_id || (message.metadata as any)?.clientId;
+
+        const username: string | undefined =
+          payload.username || payload.user || (message.metadata as any)?.username;
+
+        const subject: string | undefined =
+          payload.sub || payload.subject || (message.metadata as any)?.subject || username;
+
+        const result = engine.processAuthRequest(type, {
+          clientId,
+          username,
+          subject,
+          grantType: typeof operation === 'string' ? operation : undefined,
+        });
+
+        message.latency = result.latency;
+
+        if (!result.success) {
+          message.status = 'failed';
+          message.error = result.error || 'Keycloak auth failed';
+        } else {
+          message.status = 'delivered';
+
+          // Обогащаем payload "токеноподобным" ответом (для downstream-компонентов)
+          message.payload = {
+            ...(payload || {}),
+            keycloak: {
+              realm: result.realm,
+              clientId: result.clientId,
+              subject: result.subject,
+              tokenType: result.tokenType,
+              expiresIn: result.expiresIn,
+            },
+          };
+
+          // Обновляем metadata для дальнейших хопов (трассировка auth-контекста)
+          message.metadata = {
+            ...message.metadata,
+            authRealm: result.realm,
+            authClientId: result.clientId,
+            authSubject: result.subject,
+            authResult: 'success',
+          };
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for WAF
+   */
+  private createWAFHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getWAFEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, пропускаем запрос
+          message.status = 'delivered';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+
+        // Извлекаем информацию о запросе из сообщения
+        const path = payload?.path || message.metadata?.path || '/';
+        const method = payload?.method || message.metadata?.method || 'GET';
+        const headers = payload?.headers || message.metadata?.headers || {};
+        const query = payload?.query || message.metadata?.query || {};
+        const body = payload?.body || payload;
+        const sourceIP = payload?.sourceIP || message.metadata?.sourceIP || headers['x-forwarded-for'] || headers['x-real-ip'];
+        const country = payload?.country || message.metadata?.country || headers['cf-ipcountry'];
+        const userAgent = payload?.userAgent || message.metadata?.userAgent || headers['user-agent'];
+
+        // Обрабатываем запрос через WAF
+        const result = engine.processRequest({
+          path,
+          method,
+          headers,
+          query,
+          body,
+          sourceIP,
+          country,
+          userAgent,
+        });
+
+        message.latency = (message.latency || 0) + result.latency;
+
+        if (result.blocked) {
+          // Запрос заблокирован
+          message.status = 'failed';
+          message.error = result.error || `Request blocked by WAF: ${result.threatDetected ? 'Threat detected' : 'Rule matched'}`;
+          
+          // Добавляем информацию об угрозе в metadata
+          if (result.threatDetected) {
+            message.metadata = {
+              ...message.metadata,
+              wafBlocked: true,
+              wafThreatDetected: true,
+              wafAction: 'block',
+            };
+          }
+        } else if (!result.success && result.action === 'challenge') {
+          // Challenge (например, CAPTCHA)
+          message.status = 'pending';
+          message.metadata = {
+            ...message.metadata,
+            wafChallenge: true,
+            wafAction: 'challenge',
+          };
+        } else {
+          // Запрос разрешен
+          message.status = 'delivered';
+          
+          // Добавляем информацию о проверке в metadata
+          message.metadata = {
+            ...message.metadata,
+            wafChecked: true,
+            wafAllowed: true,
+            wafLatency: result.latency,
+          };
+
+          // Если была обнаружена угроза, но запрос не заблокирован (режим detection)
+          if (result.threatDetected) {
+            message.metadata.wafThreatDetected = true;
+            message.metadata.wafAction = 'log';
+          }
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text', 'xml'],
     };
   }
 

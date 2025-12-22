@@ -1,4 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Settings, 
   Activity,
@@ -23,9 +25,15 @@ import {
   Ban,
   CheckCircle,
   XCircle,
-  FileText
+  FileText,
+  Search,
+  Edit,
+  Save,
+  X,
+  Filter
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { useToast } from '@/hooks/use-toast';
 
 interface WAFConfigProps {
   componentId: string;
@@ -39,20 +47,23 @@ interface WAFRule {
   action: 'allow' | 'block' | 'log' | 'challenge';
   priority: number;
   conditions?: Array<{
-    type: 'ip' | 'uri' | 'header' | 'body' | 'method';
-    operator: 'equals' | 'contains' | 'startsWith' | 'regex';
+    type: 'ip' | 'uri' | 'header' | 'body' | 'method' | 'country' | 'user-agent';
+    operator: 'equals' | 'contains' | 'startsWith' | 'endsWith' | 'regex' | 'in' | 'not-in';
     value: string;
   }>;
 }
 
 interface WAFThreat {
   id: string;
-  type: 'sql-injection' | 'xss' | 'csrf' | 'path-traversal' | 'rce' | 'ddos';
+  type: 'sql-injection' | 'xss' | 'csrf' | 'path-traversal' | 'rce' | 'ddos' | 'rate-limit' | 'geo-block' | 'ip-block' | 'custom';
   sourceIP: string;
   target: string;
   timestamp: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
   blocked: boolean;
+  ruleId?: string;
+  ruleName?: string;
+  details?: Record<string, unknown>;
 }
 
 interface WAFConfig {
@@ -76,6 +87,8 @@ interface WAFConfig {
 
 export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { getComponentMetrics } = useEmulationStore();
+  const { toast } = useToast();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -116,31 +129,97 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
       ],
     },
   ];
-  const threats = config.threats || [
-    {
-      id: '1',
-      type: 'sql-injection',
-      sourceIP: '192.168.1.100',
-      target: '/api/users',
-      timestamp: new Date().toISOString(),
-      severity: 'critical',
-      blocked: true,
-    },
-  ];
-  const requestsBlocked = config.requestsBlocked || 0;
-  const requestsAllowed = config.requestsAllowed || 0;
-  const threatsDetected = config.threatsDetected || threats.length;
+
+  // Получаем реальные метрики из эмуляции
+  const metrics = getComponentMetrics(componentId);
+  const wafEngine = emulationEngine.getWAFEmulationEngine(componentId);
+  
+  // Реальные метрики из эмуляции
+  const [realMetrics, setRealMetrics] = useState<{
+    requestsBlocked: number;
+    requestsAllowed: number;
+    threatsDetected: number;
+    activeRules: number;
+  }>({
+    requestsBlocked: 0,
+    requestsAllowed: 0,
+    threatsDetected: 0,
+    activeRules: rules.filter((r) => r.enabled).length,
+  });
+
+  // Угрозы из эмуляции
+  const [realThreats, setRealThreats] = useState<WAFThreat[]>([]);
+
+  // Обновление метрик из эмуляции
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (wafEngine) {
+        const stats = wafEngine.getStats();
+        const threats = wafEngine.getThreats(100);
+        
+        setRealMetrics({
+          requestsBlocked: stats.blockedRequests,
+          requestsAllowed: stats.allowedRequests,
+          threatsDetected: stats.threatsDetected,
+          activeRules: stats.activeRules,
+        });
+
+        // Преобразуем угрозы из эмуляции в формат UI
+        const formattedThreats: WAFThreat[] = threats.map((threat) => ({
+          id: threat.id,
+          type: threat.type,
+          sourceIP: threat.sourceIP,
+          target: threat.target,
+          timestamp: new Date(threat.timestamp).toISOString(),
+          severity: threat.severity,
+          blocked: threat.blocked,
+          ruleId: threat.ruleId,
+          ruleName: threat.ruleName,
+          details: threat.details,
+        }));
+
+        setRealThreats(formattedThreats);
+      } else {
+        // Используем метрики из конфига, если эмуляция не запущена
+        setRealMetrics({
+          requestsBlocked: config.requestsBlocked || 0,
+          requestsAllowed: config.requestsAllowed || 0,
+          threatsDetected: config.threatsDetected || 0,
+          activeRules: rules.filter((r) => r.enabled).length,
+        });
+        setRealThreats(config.threats || []);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [wafEngine, config, rules]);
+
+  // Используем реальные метрики, если доступны
+  const requestsBlocked = realMetrics.requestsBlocked;
+  const requestsAllowed = realMetrics.requestsAllowed;
+  const threatsDetected = realMetrics.threatsDetected;
+  const threats = realThreats.length > 0 ? realThreats : (config.threats || []);
 
   const [editingRuleIndex, setEditingRuleIndex] = useState<number | null>(null);
   const [showCreateRule, setShowCreateRule] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [threatFilter, setThreatFilter] = useState<'all' | 'blocked' | 'not-blocked'>('all');
+  const [editingConditionIndex, setEditingConditionIndex] = useState<{ ruleId: string; conditionIndex: number } | null>(null);
 
   const updateConfig = (updates: Partial<WAFConfig>) => {
+    const newConfig = { ...config, ...updates };
     updateNode(componentId, {
       data: {
         ...node.data,
-        config: { ...config, ...updates },
+        config: newConfig,
       },
     });
+    
+    // Обновляем конфигурацию WAF engine, если он существует
+    if (wafEngine) {
+      const updatedNode = { ...node, data: { ...node.data, config: newConfig } };
+      wafEngine.initializeConfig(updatedNode);
+    }
   };
 
   const addRule = () => {
@@ -186,7 +265,88 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
 
   const removeWhitelistedIP = (ip: string) => {
     updateConfig({ whitelistedIPs: whitelistedIPs.filter((ipAddr) => ipAddr !== ip) });
+    toast({
+      title: 'IP removed',
+      description: `IP ${ip} removed from whitelist`,
+    });
   };
+
+  const addCondition = (ruleId: string) => {
+    const newCondition = {
+      type: 'body' as const,
+      operator: 'contains' as const,
+      value: '',
+    };
+    const newRules = rules.map((r) =>
+      r.id === ruleId
+        ? { ...r, conditions: [...(r.conditions || []), newCondition] }
+        : r
+    );
+    updateConfig({ rules: newRules });
+    toast({
+      title: 'Condition added',
+      description: 'New condition added to rule',
+    });
+  };
+
+  const removeCondition = (ruleId: string, conditionIndex: number) => {
+    const newRules = rules.map((r) =>
+      r.id === ruleId
+        ? {
+            ...r,
+            conditions: (r.conditions || []).filter((_, i) => i !== conditionIndex),
+          }
+        : r
+    );
+    updateConfig({ rules: newRules });
+    toast({
+      title: 'Condition removed',
+      description: 'Condition removed from rule',
+    });
+  };
+
+  const updateCondition = (
+    ruleId: string,
+    conditionIndex: number,
+    field: 'type' | 'operator' | 'value',
+    value: string
+  ) => {
+    const newRules = rules.map((r) => {
+      if (r.id === ruleId && r.conditions) {
+        const newConditions = [...r.conditions];
+        newConditions[conditionIndex] = {
+          ...newConditions[conditionIndex],
+          [field]: value,
+        };
+        return { ...r, conditions: newConditions };
+      }
+      return r;
+    });
+    updateConfig({ rules: newRules });
+  };
+
+  const handleRefresh = () => {
+    if (wafEngine) {
+      wafEngine.resetMetrics();
+      toast({
+        title: 'Metrics reset',
+        description: 'WAF metrics have been reset',
+      });
+    }
+  };
+
+  // Фильтрация правил по поисковому запросу
+  const filteredRules = rules.filter((rule) =>
+    rule.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    rule.description.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  // Фильтрация угроз
+  const filteredThreats = threats.filter((threat) => {
+    if (threatFilter === 'blocked' && !threat.blocked) return false;
+    if (threatFilter === 'not-blocked' && threat.blocked) return false;
+    return true;
+  });
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -200,7 +360,7 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -210,38 +370,56 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
         <Separator />
 
         <div className="grid grid-cols-4 gap-4">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Requests Blocked</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-red-500">{requestsBlocked.toLocaleString()}</span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Requests Allowed</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-green-500">{requestsAllowed.toLocaleString()}</span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Threats Detected</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold text-orange-500">{threatsDetected.toLocaleString()}</span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Active Rules</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold">{rules.filter((r) => r.enabled).length}</span>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Requests Blocked</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <span className="text-2xl font-bold text-red-500">{requestsBlocked.toLocaleString()}</span>
+                {metrics && metrics.customMetrics && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Block Rate: {((metrics.customMetrics.waf_block_rate || 0) * 100).toFixed(2)}%
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Requests Allowed</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <span className="text-2xl font-bold text-green-500">{requestsAllowed.toLocaleString()}</span>
+                {metrics && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Throughput: {Math.round(metrics.throughput || 0)} req/s
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Threats Detected</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <span className="text-2xl font-bold text-orange-500">{threatsDetected.toLocaleString()}</span>
+                {metrics && metrics.customMetrics && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Detection Rate: {((metrics.customMetrics.waf_threat_detection_rate || 0) * 100).toFixed(2)}%
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm font-medium">Active Rules</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <span className="text-2xl font-bold">{realMetrics.activeRules}</span>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Total: {rules.length} rules
+                </p>
+              </CardContent>
+            </Card>
         </div>
 
         <Tabs defaultValue="rules" className="space-y-4">
@@ -287,8 +465,19 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search rules..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                </div>
                 <div className="space-y-4">
-                  {rules.map((rule) => (
+                  {filteredRules.map((rule) => (
                     <Card key={rule.id} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -361,9 +550,91 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
                             />
                           </div>
                         </div>
+                        <Separator />
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label>Conditions</Label>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => addCondition(rule.id)}
+                            >
+                              <Plus className="h-4 w-4 mr-2" />
+                              Add Condition
+                            </Button>
+                          </div>
+                          {rule.conditions && rule.conditions.length > 0 ? (
+                            <div className="space-y-2">
+                              {rule.conditions.map((condition, idx) => (
+                                <div key={idx} className="flex items-center gap-2 p-2 border rounded">
+                                  <Select
+                                    value={condition.type}
+                                    onValueChange={(value) =>
+                                      updateCondition(rule.id, idx, 'type', value)
+                                    }
+                                  >
+                                    <SelectTrigger className="w-32">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="ip">IP</SelectItem>
+                                      <SelectItem value="uri">URI</SelectItem>
+                                      <SelectItem value="header">Header</SelectItem>
+                                      <SelectItem value="body">Body</SelectItem>
+                                      <SelectItem value="method">Method</SelectItem>
+                                      <SelectItem value="country">Country</SelectItem>
+                                      <SelectItem value="user-agent">User-Agent</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Select
+                                    value={condition.operator}
+                                    onValueChange={(value) =>
+                                      updateCondition(rule.id, idx, 'operator', value)
+                                    }
+                                  >
+                                    <SelectTrigger className="w-40">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="equals">Equals</SelectItem>
+                                      <SelectItem value="contains">Contains</SelectItem>
+                                      <SelectItem value="startsWith">Starts With</SelectItem>
+                                      <SelectItem value="endsWith">Ends With</SelectItem>
+                                      <SelectItem value="regex">Regex</SelectItem>
+                                      <SelectItem value="in">In</SelectItem>
+                                      <SelectItem value="not-in">Not In</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  <Input
+                                    value={condition.value}
+                                    onChange={(e) =>
+                                      updateCondition(rule.id, idx, 'value', e.target.value)
+                                    }
+                                    placeholder="Value"
+                                    className="flex-1"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => removeCondition(rule.id, idx)}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">No conditions. Add at least one condition for the rule to work.</p>
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
                   ))}
+                  {filteredRules.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-8">
+                      {searchQuery ? 'No rules found matching your search' : 'No rules configured'}
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -372,15 +643,32 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
           <TabsContent value="threats" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Detected Threats</CardTitle>
-                <CardDescription>Recent security threats and attacks</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Detected Threats</CardTitle>
+                    <CardDescription>Recent security threats and attacks</CardDescription>
+                  </div>
+                  <Select value={threatFilter} onValueChange={(value: 'all' | 'blocked' | 'not-blocked') => setThreatFilter(value)}>
+                    <SelectTrigger className="w-40">
+                      <Filter className="h-4 w-4 mr-2" />
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Threats</SelectItem>
+                      <SelectItem value="blocked">Blocked</SelectItem>
+                      <SelectItem value="not-blocked">Not Blocked</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </CardHeader>
               <CardContent>
-                {threats.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">No threats detected</p>
+                {filteredThreats.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    {threats.length === 0 ? 'No threats detected' : 'No threats match the filter'}
+                  </p>
                 ) : (
                   <div className="space-y-2">
-                    {threats.map((threat) => (
+                    {filteredThreats.map((threat) => (
                       <Card
                         key={threat.id}
                         className={`border-l-4 ${
@@ -416,6 +704,19 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
                                 <p>Source IP: {threat.sourceIP}</p>
                                 <p>Target: {threat.target}</p>
                                 <p>Time: {new Date(threat.timestamp).toLocaleString()}</p>
+                                {threat.ruleName && (
+                                  <p className="mt-1">
+                                    <Badge variant="outline" className="mr-2">Rule: {threat.ruleName}</Badge>
+                                  </p>
+                                )}
+                                {threat.details && Object.keys(threat.details).length > 0 && (
+                                  <details className="mt-2">
+                                    <summary className="cursor-pointer text-xs">Details</summary>
+                                    <pre className="mt-1 text-xs bg-muted p-2 rounded overflow-auto">
+                                      {JSON.stringify(threat.details, null, 2)}
+                                    </pre>
+                                  </details>
+                                )}
                               </div>
                             </div>
                           </div>

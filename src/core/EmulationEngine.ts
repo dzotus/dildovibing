@@ -26,6 +26,8 @@ import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
 import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
 import { alertSystem } from './AlertSystem';
+import { KeycloakEmulationEngine } from './KeycloakEmulationEngine';
+import { WAFEmulationEngine } from './WAFEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -191,6 +193,12 @@ export class EmulationEngine {
   // PagerDuty emulation engines per node
   private pagerDutyEngines: Map<string, PagerDutyEmulationEngine> = new Map();
 
+  // Keycloak emulation engines per node
+  private keycloakEngines: Map<string, KeycloakEmulationEngine> = new Map();
+
+  // WAF emulation engines per node
+  private wafEngines: Map<string, WAFEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -346,6 +354,12 @@ export class EmulationEngine {
         if (node.type === 'pagerduty') {
           this.initializePagerDutyEngine(node);
         }
+        if (node.type === 'keycloak') {
+          this.initializeKeycloakEngine(node);
+        }
+        if (node.type === 'waf') {
+          this.initializeWAFEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -473,6 +487,7 @@ export class EmulationEngine {
         this.elasticsearchRoutingEngines.delete(nodeId);
         this.s3RoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
+        this.keycloakEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -751,8 +766,14 @@ export class EmulationEngine {
         case 'loki':
           this.simulateLoki(node, config, metrics, hasIncomingConnections);
           break;
+        case 'keycloak':
+          this.simulateKeycloak(node, config, metrics, hasIncomingConnections);
+          break;
         case 'pagerduty':
           this.simulatePagerDuty(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'waf':
+          this.simulateWAF(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3983,6 +4004,82 @@ export class EmulationEngine {
   }
 
   /**
+   * Keycloak emulation
+   * Использует KeycloakEmulationEngine для преобразования конфигурации Keycloak
+   * и статистики auth-запросов в общие метрики компонента.
+   */
+  private simulateKeycloak(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.keycloakEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что Keycloak простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const kMetrics = engine.getMetrics();
+    const cfg = engine.getConfig();
+
+    // Throughput = все auth-запросы в секунду
+    metrics.throughput = load.requestsPerSecond;
+
+    // Latency = средняя латентность auth-запроса
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных запросов
+    metrics.errorRate = load.errorRate;
+
+    // Utilization — функция от активных сессий, RPS и сложности политики
+    const sessionsFactor = Math.min(0.6, (load.activeSessions || 0) / 500);
+    const rpsFactor = Math.min(0.3, load.requestsPerSecond / 200);
+    const policyCost =
+      cfg?.passwordPolicy ? this.estimateKeycloakPolicyComplexity(cfg.passwordPolicy) : 0;
+    const policyFactor = Math.min(0.2, policyCost / 100);
+
+    metrics.utilization = Math.min(0.95, 0.1 + sessionsFactor + rpsFactor + policyFactor);
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      keycloak_login_requests_total: kMetrics.loginRequestsTotal,
+      keycloak_login_errors_total: kMetrics.loginErrorsTotal,
+      keycloak_token_refresh_total: kMetrics.tokenRefreshTotal,
+      keycloak_introspection_requests_total: kMetrics.introspectionRequestsTotal,
+      keycloak_userinfo_requests_total: kMetrics.userInfoRequestsTotal,
+      keycloak_sessions_active: kMetrics.activeSessions,
+      keycloak_sessions_created_total: kMetrics.sessionsCreatedTotal,
+      keycloak_sessions_expired_total: kMetrics.sessionsExpiredTotal,
+      keycloak_auth_success_rate: load.authSuccessRate,
+      keycloak_clients_configured: cfg?.clients.length ?? 0,
+      keycloak_users_configured: cfg?.users.length ?? 0,
+    };
+  }
+
+  /**
+   * Оценка «сложности» password policy Keycloak
+   * (используется только для расчёта utilization).
+   */
+  private estimateKeycloakPolicyComplexity(policy: string): number {
+    if (!policy) return 0;
+    let score = 0;
+    const lower = policy.toLowerCase();
+
+    if (lower.includes('length(')) score += 20;
+    if (lower.includes('digits(')) score += 25;
+    if (lower.includes('special(')) score += 30;
+    if (lower.includes('uppercase(')) score += 15;
+    if (lower.includes('lowercase(')) score += 10;
+
+    const rules = (policy.match(/\)/g) || []).length;
+    score += rules * 5;
+
+    return score;
+  }
+
+  /**
    * Prometheus emulation
    */
   private simulatePrometheus(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -4027,6 +4124,89 @@ export class EmulationEngine {
       'scrape_requests_per_second': load.scrapeRequestsPerSecond,
       'samples_per_second': load.samplesPerSecond,
     };
+  }
+
+  /**
+   * WAF emulation
+   */
+  private simulateWAF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.wafEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что WAF простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const wafMetrics = engine.getMetrics();
+    const stats = engine.getStats();
+
+    // Throughput = все запросы в секунду
+    metrics.throughput = load.requestsPerSecond;
+
+    // Latency = средняя латентность обработки запроса
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля заблокированных запросов (в режиме prevention)
+    // В режиме detection/logging ошибок нет, только логирование
+    const wafConfig = engine.getConfig();
+    if (wafConfig?.mode === 'prevention') {
+      metrics.errorRate = load.blockRate;
+    } else {
+      // В режиме detection/logging ошибок нет, но есть метрики блокировок
+      metrics.errorRate = 0;
+    }
+
+    // Utilization — функция от количества правил, RPS и сложности проверок
+    const rulesFactor = Math.min(0.4, (wafMetrics.activeRules || 0) / 50);
+    const rpsFactor = Math.min(0.3, load.requestsPerSecond / 1000);
+    const owaspFactor = wafConfig?.enableOWASP ? 0.15 : 0;
+    const rateLimitFactor = wafConfig?.enableRateLimiting ? 0.1 : 0;
+    const geoBlockFactor = wafConfig?.enableGeoBlocking ? 0.05 : 0;
+
+    metrics.utilization = Math.min(0.95, 0.1 + rulesFactor + rpsFactor + owaspFactor + rateLimitFactor + geoBlockFactor);
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      waf_requests_total: wafMetrics.requestsTotal,
+      waf_requests_allowed: wafMetrics.requestsAllowed,
+      waf_requests_blocked: wafMetrics.requestsBlocked,
+      waf_threats_detected: wafMetrics.threatsDetected,
+      waf_threats_blocked: wafMetrics.threatsBlocked,
+      waf_rate_limit_hits: wafMetrics.rateLimitHits,
+      waf_geo_block_hits: wafMetrics.geoBlockHits,
+      waf_ip_block_hits: wafMetrics.ipBlockHits,
+      waf_owasp_hits: wafMetrics.owaspHits,
+      waf_custom_rule_hits: wafMetrics.customRuleHits,
+      waf_active_rules: wafMetrics.activeRules,
+      waf_block_rate: load.blockRate,
+      waf_threat_detection_rate: load.threatDetectionRate,
+      waf_average_latency: load.averageLatency,
+    };
+
+    // Симулируем запросы, если есть входящие соединения
+    if (hasIncomingConnections) {
+      // Оцениваем скорость запросов на основе входящих соединений
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let estimatedRPS = 0;
+
+      for (const conn of incomingConnections) {
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          estimatedRPS += sourceMetrics.throughput || 0;
+        }
+      }
+
+      // Если нет реальных запросов, симулируем их
+      if (estimatedRPS > 0) {
+        engine.setSimulatedRequestRate(estimatedRPS);
+        engine.simulateRequests(estimatedRPS);
+      }
+    }
   }
 
   /**
@@ -4729,6 +4909,24 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Keycloak Emulation Engine for Keycloak node
+   */
+  private initializeKeycloakEngine(node: CanvasNode): void {
+    const engine = new KeycloakEmulationEngine();
+    engine.initializeConfig(node);
+    this.keycloakEngines.set(node.id, engine);
+  }
+
+  /**
+   * Initialize WAF emulation engine for a node
+   */
+  private initializeWAFEngine(node: CanvasNode): void {
+    const engine = new WAFEmulationEngine();
+    engine.initializeConfig(node);
+    this.wafEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5123,6 +5321,20 @@ export class EmulationEngine {
    */
   public getLokiEmulationEngine(nodeId: string): LokiEmulationEngine | undefined {
     return this.lokiEngines.get(nodeId);
+  }
+
+  /**
+   * Get Keycloak emulation engine for a node
+   */
+  public getKeycloakEmulationEngine(nodeId: string): KeycloakEmulationEngine | undefined {
+    return this.keycloakEngines.get(nodeId);
+  }
+
+  /**
+   * Get WAF emulation engine for a node
+   */
+  public getWAFEmulationEngine(nodeId: string): WAFEmulationEngine | undefined {
+    return this.wafEngines.get(nodeId);
   }
 
   /**
