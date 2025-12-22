@@ -28,6 +28,7 @@ import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } f
 import { alertSystem } from './AlertSystem';
 import { KeycloakEmulationEngine } from './KeycloakEmulationEngine';
 import { WAFEmulationEngine } from './WAFEmulationEngine';
+import { FirewallEmulationEngine } from './FirewallEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -199,6 +200,9 @@ export class EmulationEngine {
   // WAF emulation engines per node
   private wafEngines: Map<string, WAFEmulationEngine> = new Map();
 
+  // Firewall emulation engines per node
+  private firewallEngines: Map<string, FirewallEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -359,6 +363,9 @@ export class EmulationEngine {
         }
         if (node.type === 'waf') {
           this.initializeWAFEngine(node);
+        }
+        if (node.type === 'firewall') {
+          this.initializeFirewallEngine(node);
         }
       }
       
@@ -774,6 +781,9 @@ export class EmulationEngine {
           break;
         case 'waf':
           this.simulateWAF(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'firewall':
+          this.simulateFirewall(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4210,6 +4220,81 @@ export class EmulationEngine {
   }
 
   /**
+   * Firewall emulation
+   */
+  private simulateFirewall(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.firewallEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что Firewall простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const firewallMetrics = engine.getMetrics();
+    const stats = engine.getStats();
+
+    // Throughput = все пакеты в секунду
+    metrics.throughput = load.packetsPerSecond;
+
+    // Latency = средняя латентность обработки пакета
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля заблокированных/отклоненных пакетов
+    metrics.errorRate = load.blockRate + load.rejectionRate;
+
+    // Utilization — функция от количества правил, PPS и сложности проверок
+    const rulesFactor = Math.min(0.3, (firewallMetrics.activeRules || 0) / 100);
+    const ppsFactor = Math.min(0.3, load.packetsPerSecond / 10000);
+    const statefulFactor = engine.getConfig()?.enableStatefulInspection ? 0.2 : 0;
+    const intrusionDetectionFactor = engine.getConfig()?.enableIntrusionDetection ? 0.2 : 0;
+
+    metrics.utilization = Math.min(0.95, 0.1 + rulesFactor + ppsFactor + statefulFactor + intrusionDetectionFactor);
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      firewall_packets_total: firewallMetrics.packetsTotal,
+      firewall_packets_allowed: firewallMetrics.packetsAllowed,
+      firewall_packets_blocked: firewallMetrics.packetsBlocked,
+      firewall_packets_rejected: firewallMetrics.packetsRejected,
+      firewall_active_rules: firewallMetrics.activeRules,
+      firewall_total_connections: firewallMetrics.totalConnections,
+      firewall_active_connections: firewallMetrics.activeConnections,
+      firewall_block_rate: load.blockRate,
+      firewall_rejection_rate: load.rejectionRate,
+      firewall_average_latency: load.averageLatency,
+    };
+
+    // Симулируем пакеты, если есть входящие соединения
+    if (hasIncomingConnections) {
+      // Оцениваем скорость пакетов на основе входящих соединений
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let estimatedPPS = 0;
+
+      for (const conn of incomingConnections) {
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          // Преобразуем throughput в пакеты в секунду (примерно)
+          estimatedPPS += sourceMetrics.throughput || 0;
+        }
+      }
+
+      // Если нет реальных пакетов, симулируем их
+      if (estimatedPPS > 0) {
+        engine.setSimulatedPacketRate(estimatedPPS);
+        engine.simulatePackets(estimatedPPS);
+      }
+    }
+
+    // Очистка старых соединений
+    engine.cleanup();
+  }
+
+  /**
    * PagerDuty emulation
    */
   private simulatePagerDuty(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5335,6 +5420,13 @@ export class EmulationEngine {
    */
   public getWAFEmulationEngine(nodeId: string): WAFEmulationEngine | undefined {
     return this.wafEngines.get(nodeId);
+  }
+
+  /**
+   * Get Firewall emulation engine for a node
+   */
+  public getFirewallEmulationEngine(nodeId: string): FirewallEmulationEngine | undefined {
+    return this.firewallEngines.get(nodeId);
   }
 
   /**

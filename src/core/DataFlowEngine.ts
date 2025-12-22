@@ -127,6 +127,7 @@ export class DataFlowEngine {
     // Security & IAM
     this.registerHandler('keycloak', this.createKeycloakHandler());
     this.registerHandler('waf', this.createWAFHandler());
+    this.registerHandler('firewall', this.createFirewallHandler());
   }
 
   /**
@@ -2855,6 +2856,75 @@ export class DataFlowEngine {
       },
 
       getSupportedFormats: () => ['json', 'text', 'xml'],
+    };
+  }
+
+  /**
+   * Create handler for Firewall
+   */
+  private createFirewallHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getFirewallEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, пропускаем пакет
+          message.status = 'delivered';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+
+        // Извлекаем информацию о пакете из сообщения
+        const source = payload?.source || message.metadata?.sourceIP || payload?.sourceIP || '0.0.0.0';
+        const destination = payload?.destination || message.metadata?.destinationIP || payload?.destinationIP || '10.0.0.1';
+        const protocol = payload?.protocol || message.metadata?.protocol || 'tcp';
+        const port = payload?.port || message.metadata?.port || payload?.destinationPort;
+        const sourcePort = payload?.sourcePort || message.metadata?.sourcePort;
+
+        // Обрабатываем пакет через Firewall
+        const result = engine.processPacket({
+          source,
+          destination,
+          protocol: protocol as 'tcp' | 'udp' | 'icmp' | 'all',
+          port,
+          sourcePort,
+        });
+
+        message.latency = (message.latency || 0) + result.latency;
+
+        if (result.blocked) {
+          // Пакет заблокирован
+          message.status = 'failed';
+          message.error = result.error || `Packet ${result.action} by Firewall: ${result.matchedRule?.name || 'Default policy'}`;
+          
+          // Добавляем информацию о блокировке в metadata
+          message.metadata = {
+            ...message.metadata,
+            firewallBlocked: true,
+            firewallAction: result.action,
+            firewallRuleId: result.matchedRule?.id,
+            firewallRuleName: result.matchedRule?.name,
+          };
+        } else {
+          // Пакет разрешен
+          message.status = 'delivered';
+          
+          // Добавляем информацию о проверке в metadata
+          message.metadata = {
+            ...message.metadata,
+            firewallChecked: true,
+            firewallAllowed: true,
+            firewallLatency: result.latency,
+            firewallRuleId: result.matchedRule?.id,
+            firewallRuleName: result.matchedRule?.name,
+          };
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text', 'binary'],
     };
   }
 
