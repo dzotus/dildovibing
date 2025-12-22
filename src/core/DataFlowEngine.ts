@@ -129,6 +129,7 @@ export class DataFlowEngine {
     this.registerHandler('secrets-vault', this.createVaultHandler());
     this.registerHandler('waf', this.createWAFHandler());
     this.registerHandler('firewall', this.createFirewallHandler());
+    this.registerHandler('ids-ips', this.createIDSIPSHandler());
   }
 
   /**
@@ -3020,6 +3021,85 @@ export class DataFlowEngine {
             firewallRuleId: result.matchedRule?.id,
             firewallRuleName: result.matchedRule?.name,
           };
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text', 'binary'],
+    };
+  }
+
+  /**
+   * Create handler for IDS/IPS
+   */
+  private createIDSIPSHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getIDSIPSEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, пропускаем пакет
+          message.status = 'delivered';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+
+        // Извлекаем информацию о пакете из сообщения
+        const source = payload?.source || message.metadata?.sourceIP || payload?.sourceIP || '0.0.0.0';
+        const destination = payload?.destination || message.metadata?.destinationIP || payload?.destinationIP || '10.0.0.1';
+        const protocol = payload?.protocol || message.metadata?.protocol || 'tcp';
+        const port = payload?.port || message.metadata?.port || payload?.destinationPort;
+        const sourcePort = payload?.sourcePort || message.metadata?.sourcePort;
+        const packetPayload = payload?.payload || payload?.body || (typeof payload === 'string' ? payload : JSON.stringify(payload));
+
+        // Обрабатываем пакет через IDS/IPS
+        const result = engine.processPacket({
+          source,
+          destination,
+          protocol: protocol as 'tcp' | 'udp' | 'icmp' | 'all',
+          port,
+          sourcePort,
+          payload: packetPayload,
+        });
+
+        message.latency = (message.latency || 0) + result.latency;
+
+        if (result.blocked) {
+          // Пакет заблокирован (IPS режим)
+          message.status = 'failed';
+          message.error = result.error || `Packet blocked by IDS/IPS: Intrusion detected`;
+          
+          // Добавляем информацию о блокировке в metadata
+          message.metadata = {
+            ...message.metadata,
+            idsipsBlocked: true,
+            idsipsAlertGenerated: result.alertGenerated,
+            idsipsAction: 'block',
+          };
+
+          if (result.alertGenerated) {
+            message.metadata.idsipsAlertType = 'intrusion';
+          }
+        } else {
+          // Пакет разрешен (или только обнаружен в IDS режиме)
+          message.status = 'delivered';
+          
+          // Добавляем информацию о проверке в metadata
+          message.metadata = {
+            ...message.metadata,
+            idsipsChecked: true,
+            idsipsAllowed: true,
+            idsipsLatency: result.latency,
+            idsipsAlertGenerated: result.alertGenerated,
+          };
+
+          // Если был сгенерирован алерт (IDS режим)
+          if (result.alertGenerated) {
+            message.metadata.idsipsAction = 'alert';
+            message.metadata.idsipsAlertType = 'intrusion';
+          }
         }
 
         return message;

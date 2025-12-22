@@ -29,6 +29,7 @@ import { alertSystem } from './AlertSystem';
 import { KeycloakEmulationEngine } from './KeycloakEmulationEngine';
 import { WAFEmulationEngine } from './WAFEmulationEngine';
 import { FirewallEmulationEngine } from './FirewallEmulationEngine';
+import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
 
 /**
@@ -207,6 +208,9 @@ export class EmulationEngine {
   // Firewall emulation engines per node
   private firewallEngines: Map<string, FirewallEmulationEngine> = new Map();
 
+  // IDS/IPS emulation engines per node
+  private idsIpsEngines: Map<string, IDSIPSEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -374,6 +378,9 @@ export class EmulationEngine {
         if (node.type === 'firewall') {
           this.initializeFirewallEngine(node);
         }
+        if (node.type === 'ids-ips') {
+          this.initializeIDSIPSEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -476,6 +483,21 @@ export class EmulationEngine {
       if (node.type === 'snowflake') {
         this.initializeSnowflakeRoutingEngine(node);
       }
+      
+      // Initialize WAF emulation engine for WAF nodes
+      if (node.type === 'waf') {
+        this.initializeWAFEngine(node);
+      }
+      
+      // Initialize Firewall emulation engine for Firewall nodes
+      if (node.type === 'firewall') {
+        this.initializeFirewallEngine(node);
+      }
+      
+      // Initialize IDS/IPS emulation engine for IDS/IPS nodes
+      if (node.type === 'ids-ips') {
+        this.initializeIDSIPSEngine(node);
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -503,6 +525,9 @@ export class EmulationEngine {
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.keycloakEngines.delete(nodeId);
         this.vaultEngines.delete(nodeId);
+        this.wafEngines.delete(nodeId);
+        this.firewallEngines.delete(nodeId);
+        this.idsIpsEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -795,6 +820,9 @@ export class EmulationEngine {
           break;
         case 'firewall':
           this.simulateFirewall(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'ids-ips':
+          this.simulateIDSIPS(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4363,6 +4391,89 @@ export class EmulationEngine {
   }
 
   /**
+   * IDS/IPS emulation
+   */
+  private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.idsIpsEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что IDS/IPS простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const idsIpsMetrics = engine.getMetrics();
+    const stats = engine.getStats();
+
+    // Throughput = все пакеты в секунду
+    metrics.throughput = load.packetsPerSecond;
+
+    // Latency = средняя латентность обработки пакета
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля заблокированных пакетов (в IPS режиме)
+    // В IDS режиме ошибок нет, только обнаружение
+    const idsIpsConfig = engine.getConfig();
+    if (idsIpsConfig?.mode === 'ips') {
+      metrics.errorRate = load.blockRate;
+    } else {
+      // В IDS режиме ошибок нет, только метрики обнаружения
+      metrics.errorRate = 0;
+    }
+
+    // Utilization — функция от количества сигнатур, PPS и сложности проверок
+    const signaturesFactor = Math.min(0.3, (idsIpsMetrics.activeSignatures || 0) / 100);
+    const ppsFactor = Math.min(0.3, load.packetsPerSecond / 10000);
+    const signatureDetectionFactor = idsIpsConfig?.enableSignatureDetection ? 0.15 : 0;
+    const anomalyDetectionFactor = idsIpsConfig?.enableAnomalyDetection ? 0.15 : 0;
+    const behavioralAnalysisFactor = idsIpsConfig?.enableBehavioralAnalysis ? 0.1 : 0;
+
+    metrics.utilization = Math.min(0.95, 0.1 + signaturesFactor + ppsFactor + signatureDetectionFactor + anomalyDetectionFactor + behavioralAnalysisFactor);
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      idsips_packets_total: idsIpsMetrics.packetsTotal,
+      idsips_packets_analyzed: idsIpsMetrics.packetsAnalyzed,
+      idsips_alerts_generated: idsIpsMetrics.alertsGenerated,
+      idsips_alerts_blocked: idsIpsMetrics.alertsBlocked,
+      idsips_signature_matches: idsIpsMetrics.signatureMatches,
+      idsips_anomaly_detections: idsIpsMetrics.anomalyDetections,
+      idsips_behavioral_detections: idsIpsMetrics.behavioralDetections,
+      idsips_active_signatures: idsIpsMetrics.activeSignatures,
+      idsips_blocked_ips: idsIpsMetrics.blockedIPs,
+      idsips_alert_rate: load.alertRate,
+      idsips_block_rate: load.blockRate,
+    };
+
+    // Обновляем percentiles
+    this.updateLatencyPercentiles(node.id, metrics.latency, metrics);
+
+    // Симуляция входящих пакетов, если нет реальных соединений
+    if (!hasIncomingConnections) {
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let estimatedPPS = 0;
+
+      for (const conn of incomingConnections) {
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          // Преобразуем throughput в пакеты в секунду (примерно)
+          estimatedPPS += sourceMetrics.throughput || 0;
+        }
+      }
+
+      // Если нет реальных пакетов, симулируем их
+      if (estimatedPPS > 0) {
+        engine.setSimulatedPacketRate(estimatedPPS);
+        engine.simulatePackets(estimatedPPS);
+      }
+    }
+  }
+
+  /**
    * PagerDuty emulation
    */
   private simulatePagerDuty(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5089,6 +5200,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize IDS/IPS emulation engine for a node
+   */
+  private initializeIDSIPSEngine(node: CanvasNode): void {
+    const engine = new IDSIPSEmulationEngine();
+    engine.initializeConfig(node);
+    this.idsIpsEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5511,6 +5631,13 @@ export class EmulationEngine {
    */
   public getFirewallEmulationEngine(nodeId: string): FirewallEmulationEngine | undefined {
     return this.firewallEngines.get(nodeId);
+  }
+
+  /**
+   * Get IDS/IPS emulation engine for a node
+   */
+  public getIDSIPSEmulationEngine(nodeId: string): IDSIPSEmulationEngine | undefined {
+    return this.idsIpsEngines.get(nodeId);
   }
 
   /**

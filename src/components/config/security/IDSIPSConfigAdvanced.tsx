@@ -1,4 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Settings, 
   Activity,
@@ -23,8 +25,10 @@ import {
   CheckCircle,
   XCircle,
   FileText,
-  Network
+  Network,
+  Search
 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
 
 interface IDSIPSConfigProps {
   componentId: string;
@@ -82,6 +86,8 @@ interface IDSIPSConfig {
 
 export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { getComponentMetrics } = useEmulationStore();
+  const { toast } = useToast();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -96,21 +102,59 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
   const blockDuration = config.blockDuration || 3600;
   const enableLogging = config.enableLogging ?? true;
   const logRetention = config.logRetention || 30;
-  const alerts = config.alerts || [
-    {
-      id: '1',
-      type: 'signature',
-      sourceIP: '192.168.1.100',
-      destinationIP: '10.0.0.50',
-      protocol: 'TCP',
-      port: 22,
-      severity: 'high',
-      timestamp: new Date().toISOString(),
-      description: 'SSH brute force attempt detected',
-      blocked: true,
-      signature: 'SSH_BRUTE_FORCE',
-    },
-  ];
+  
+  // Получаем реальные метрики из эмуляции
+  const metrics = getComponentMetrics(componentId);
+  const idsIpsEngine = emulationEngine.getIDSIPSEmulationEngine(componentId);
+  
+  // Реальные данные из эмуляции
+  const [realAlerts, setRealAlerts] = useState<any[]>([]);
+  const [realBlockedIPs, setRealBlockedIPs] = useState<any[]>([]);
+  const [realStats, setRealStats] = useState({
+    totalAlerts: 0,
+    alertsBlocked: 0,
+    signaturesActive: 0,
+    blockedIPs: 0,
+  });
+
+  // Обновляем данные из эмуляции
+  useEffect(() => {
+    if (idsIpsEngine) {
+      const alerts = idsIpsEngine.getAlerts(100);
+      const blockedIPs = idsIpsEngine.getBlockedIPs();
+      const stats = idsIpsEngine.getStats();
+      
+      setRealAlerts(alerts.map(a => ({
+        id: a.id,
+        type: a.type,
+        sourceIP: a.sourceIP,
+        destinationIP: a.destinationIP,
+        protocol: a.protocol,
+        port: a.port,
+        severity: a.severity,
+        timestamp: new Date(a.timestamp).toISOString(),
+        description: a.description,
+        blocked: a.blocked,
+        signature: a.signature,
+      })));
+      
+      setRealBlockedIPs(blockedIPs.map(b => ({
+        ip: b.ip,
+        reason: b.reason,
+        blockedAt: new Date(b.blockedAt).toISOString(),
+        expiresAt: b.expiresAt ? new Date(b.expiresAt).toISOString() : undefined,
+        duration: b.expiresAt ? Math.floor((b.expiresAt - b.blockedAt) / 1000) : undefined,
+      })));
+      
+      setRealStats({
+        totalAlerts: stats.alertsGenerated,
+        alertsBlocked: stats.alertsBlocked,
+        signaturesActive: stats.activeSignatures,
+        blockedIPs: stats.blockedIPs,
+      });
+    }
+  }, [idsIpsEngine, metrics?.timestamp]);
+
   const signatures = config.signatures || [
     {
       id: '1',
@@ -131,28 +175,85 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
       action: 'block',
     },
   ];
-  const blockedIPs = config.blockedIPs || [
-    {
-      ip: '192.168.1.100',
-      reason: 'SSH brute force',
-      blockedAt: new Date().toISOString(),
-      duration: 3600,
-    },
-  ];
-  const totalAlerts = config.totalAlerts || alerts.length;
-  const alertsBlocked = config.alertsBlocked || alerts.filter((a) => a.blocked).length;
-  const signaturesActive = config.signaturesActive || signatures.filter((s) => s.enabled).length;
+
+  // Используем реальные данные из эмуляции, если доступны
+  const alerts = realAlerts.length > 0 ? realAlerts : config.alerts || [];
+  const blockedIPs = realBlockedIPs.length > 0 ? realBlockedIPs : config.blockedIPs || [];
+  const totalAlerts = realStats.totalAlerts || config.totalAlerts || alerts.length;
+  const alertsBlocked = realStats.alertsBlocked || config.alertsBlocked || alerts.filter((a) => a.blocked).length;
+  const signaturesActive = realStats.signaturesActive || config.signaturesActive || signatures.filter((s) => s.enabled).length;
 
   const [editingSignatureIndex, setEditingSignatureIndex] = useState<number | null>(null);
   const [showCreateSignature, setShowCreateSignature] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [alertFilter, setAlertFilter] = useState<'all' | 'signature' | 'anomaly' | 'behavioral'>('all');
 
   const updateConfig = (updates: Partial<IDSIPSConfig>) => {
+    const newConfig = { ...config, ...updates };
     updateNode(componentId, {
       data: {
         ...node.data,
-        config: { ...config, ...updates },
+        config: newConfig,
       },
     });
+    
+    // Обновляем эмуляцию при изменении конфигурации
+    try {
+      const engine = emulationEngine.getIDSIPSEmulationEngine(componentId);
+      if (engine) {
+        engine.initializeConfig({
+          ...node,
+          data: {
+            ...node.data,
+            config: newConfig,
+          },
+        });
+      }
+    } catch (e) {
+      // Silently fail - emulation will sync on next updateMetrics call
+    }
+  };
+
+  const handleRefresh = () => {
+    if (idsIpsEngine) {
+      const alerts = idsIpsEngine.getAlerts(100);
+      const blockedIPs = idsIpsEngine.getBlockedIPs();
+      const stats = idsIpsEngine.getStats();
+      
+      setRealAlerts(alerts.map(a => ({
+        id: a.id,
+        type: a.type,
+        sourceIP: a.sourceIP,
+        destinationIP: a.destinationIP,
+        protocol: a.protocol,
+        port: a.port,
+        severity: a.severity,
+        timestamp: new Date(a.timestamp).toISOString(),
+        description: a.description,
+        blocked: a.blocked,
+        signature: a.signature,
+      })));
+      
+      setRealBlockedIPs(blockedIPs.map(b => ({
+        ip: b.ip,
+        reason: b.reason,
+        blockedAt: new Date(b.blockedAt).toISOString(),
+        expiresAt: b.expiresAt ? new Date(b.expiresAt).toISOString() : undefined,
+        duration: b.expiresAt ? Math.floor((b.expiresAt - b.blockedAt) / 1000) : undefined,
+      })));
+      
+      setRealStats({
+        totalAlerts: stats.alertsGenerated,
+        alertsBlocked: stats.alertsBlocked,
+        signaturesActive: stats.activeSignatures,
+        blockedIPs: stats.blockedIPs,
+      });
+      
+      toast({
+        title: 'Refreshed',
+        description: 'IDS/IPS data has been refreshed',
+      });
+    }
   };
 
   const addSignature = () => {
@@ -167,10 +268,19 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
     };
     updateConfig({ signatures: [...signatures, newSignature] });
     setShowCreateSignature(false);
+    toast({
+      title: 'Signature created',
+      description: 'New signature has been created',
+    });
   };
 
   const removeSignature = (id: string) => {
+    const signature = signatures.find(s => s.id === id);
     updateConfig({ signatures: signatures.filter((s) => s.id !== id) });
+    toast({
+      title: 'Signature deleted',
+      description: signature ? `Signature "${signature.name}" has been deleted` : 'Signature has been deleted',
+    });
   };
 
   const updateSignature = (id: string, field: string, value: any) => {
@@ -181,8 +291,30 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
   };
 
   const unblockIP = (ip: string) => {
+    if (idsIpsEngine) {
+      idsIpsEngine.unblockIP(ip);
+    }
     updateConfig({ blockedIPs: blockedIPs.filter((b) => b.ip !== ip) });
+    toast({
+      title: 'IP unblocked',
+      description: `IP address ${ip} has been unblocked`,
+    });
   };
+
+  // Фильтрация алертов
+  const filteredAlerts = alerts.filter(alert => {
+    if (alertFilter !== 'all' && alert.type !== alertFilter) return false;
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      return (
+        alert.sourceIP.toLowerCase().includes(query) ||
+        alert.destinationIP.toLowerCase().includes(query) ||
+        alert.description.toLowerCase().includes(query) ||
+        (alert.signature && alert.signature.toLowerCase().includes(query))
+      );
+    }
+    return true;
+  });
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -196,7 +328,7 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button variant="outline" size="sm" onClick={handleRefresh}>
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -263,15 +395,43 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
           <TabsContent value="alerts" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Security Alerts</CardTitle>
-                <CardDescription>Recent intrusion detection alerts</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Security Alerts</CardTitle>
+                    <CardDescription>Recent intrusion detection alerts</CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search alerts..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-8 w-64"
+                      />
+                    </div>
+                    <Select value={alertFilter} onValueChange={(value: any) => setAlertFilter(value)}>
+                      <SelectTrigger className="w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Types</SelectItem>
+                        <SelectItem value="signature">Signature</SelectItem>
+                        <SelectItem value="anomaly">Anomaly</SelectItem>
+                        <SelectItem value="behavioral">Behavioral</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
-                {alerts.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">No alerts detected</p>
+                {filteredAlerts.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    {alerts.length === 0 ? 'No alerts detected' : 'No alerts match the filter'}
+                  </p>
                 ) : (
                   <div className="space-y-2">
-                    {alerts.map((alert) => (
+                    {filteredAlerts.map((alert) => (
                       <Card
                         key={alert.id}
                         className={`border-l-4 ${
