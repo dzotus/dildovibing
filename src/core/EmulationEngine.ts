@@ -24,6 +24,8 @@ import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
+import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
+import { alertSystem } from './AlertSystem';
 
 /**
  * Component runtime state with real-time metrics
@@ -186,6 +188,9 @@ export class EmulationEngine {
   // OpenTelemetry Collector routing engines per node
   private otelCollectorEngines: Map<string, OpenTelemetryCollectorRoutingEngine> = new Map();
 
+  // PagerDuty emulation engines per node
+  private pagerDutyEngines: Map<string, PagerDutyEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -337,6 +342,9 @@ export class EmulationEngine {
         }
         if (node.type === 'otel-collector') {
           this.initializeOpenTelemetryCollectorEngine(node);
+        }
+        if (node.type === 'pagerduty') {
+          this.initializePagerDutyEngine(node);
         }
       }
       
@@ -602,6 +610,22 @@ export class EmulationEngine {
     for (const node of this.nodes) {
       this.updateComponentMetrics(node);
     }
+
+    // Analyze system alerts based on fresh metrics
+    alertSystem.analyze(
+      this.nodes,
+      this.metrics,
+      this.connectionMetrics,
+      [] // dependency statuses are provided from DependencyGraphEngine in UI layer
+    );
+
+    const currentAlerts = alertSystem.getAlerts();
+
+    // Feed alerts into PagerDuty engines and advance incident lifecycle
+    for (const [nodeId, pagerDutyEngine] of this.pagerDutyEngines.entries()) {
+      pagerDutyEngine.processAlerts(now, currentAlerts);
+      pagerDutyEngine.advanceTime(now);
+    }
     
     // Perform Prometheus scraping (after metrics are updated)
     for (const [nodeId, prometheusEngine] of this.prometheusEngines.entries()) {
@@ -726,6 +750,9 @@ export class EmulationEngine {
           break;
         case 'loki':
           this.simulateLoki(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'pagerduty':
+          this.simulatePagerDuty(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4003,6 +4030,44 @@ export class EmulationEngine {
   }
 
   /**
+   * PagerDuty emulation
+   */
+  private simulatePagerDuty(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const pagerDutyEngine = this.pagerDutyEngines.get(node.id);
+
+    if (!pagerDutyEngine) {
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = pagerDutyEngine.calculateLoad();
+    const engineMetrics = pagerDutyEngine.getMetrics();
+
+    metrics.throughput = load.throughput;
+    metrics.latency = load.latency;
+    metrics.errorRate = load.errorRate;
+    metrics.utilization = load.utilization;
+
+    metrics.customMetrics = {
+      'incidents_total': engineMetrics.incidentsTotal,
+      'incidents_active': engineMetrics.incidentsActive,
+      'incidents_resolved': engineMetrics.incidentsResolved,
+      'notifications_sent': engineMetrics.notificationsSent,
+      'escalations_triggered': engineMetrics.escalationsTriggered,
+      'acknowledgements': engineMetrics.acknowledgements,
+      'average_ack_latency_ms': engineMetrics.averageAckLatency,
+      'average_resolve_latency_ms': engineMetrics.averageResolveLatency,
+      'api_requests_per_second': engineMetrics.apiRequestsPerSecond,
+      'webhooks_per_second': engineMetrics.webhooksPerSecond,
+      'cpu_utilization': engineMetrics.cpuUtilization,
+      'memory_utilization': engineMetrics.memoryUtilization,
+    };
+  }
+
+  /**
    * Loki emulation
    */
   private simulateLoki(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -4655,6 +4720,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize PagerDuty Emulation Engine for PagerDuty node
+   */
+  private initializePagerDutyEngine(node: CanvasNode): void {
+    const engine = new PagerDutyEmulationEngine();
+    engine.initializeFromNode(node);
+    this.pagerDutyEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5187,6 +5261,42 @@ export class EmulationEngine {
    */
   public getAllConnectionMetrics(): ConnectionMetrics[] {
     return Array.from(this.connectionMetrics.values());
+  }
+
+  /**
+   * Get PagerDuty incidents for a specific PagerDuty node
+   */
+  public getPagerDutyIncidents(nodeId: string): PagerDutyIncident[] {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return [];
+    return engine.getIncidents();
+  }
+
+  /**
+   * Get PagerDuty engine metrics for a specific PagerDuty node
+   */
+  public getPagerDutyMetrics(nodeId: string): PagerDutyEngineMetrics | null {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return null;
+    return engine.getMetrics();
+  }
+
+  /**
+   * Manually acknowledge a PagerDuty incident
+   */
+  public acknowledgePagerDutyIncident(nodeId: string, incidentId: string): void {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return;
+    engine.acknowledgeIncident(Date.now(), incidentId);
+  }
+
+  /**
+   * Manually resolve a PagerDuty incident
+   */
+  public resolvePagerDutyIncident(nodeId: string, incidentId: string): void {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return;
+    engine.resolveIncidentManually(Date.now(), incidentId);
   }
 
   /**

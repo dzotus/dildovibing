@@ -26,6 +26,7 @@ import {
   XCircle
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface PagerDutyConfigProps {
   componentId: string;
@@ -77,6 +78,12 @@ interface PagerDutyConfig {
   totalIncidents?: number;
   activeIncidents?: number;
   resolvedIncidents?: number;
+  // Global settings (aligned with profiles.ts and PagerDutyEmulationEngine)
+  enableAutoResolve?: boolean;
+  resolveTimeout?: number;
+  enableWebhooks?: boolean;
+  webhookUrl?: string;
+  severityMapping?: 'standard' | 'error-focused' | 'warning-demoted';
 }
 
 export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
@@ -86,6 +93,11 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as PagerDutyConfig;
+  const globalEnableAutoResolve = config.enableAutoResolve ?? true;
+  const globalResolveTimeout = config.resolveTimeout ?? 300;
+  const globalEnableWebhooks = config.enableWebhooks ?? false;
+  const globalWebhookUrl = config.webhookUrl ?? '';
+  const globalSeverityMapping = config.severityMapping ?? 'standard';
   const services = config.services || [
     {
       id: '1',
@@ -98,16 +110,22 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
       incidentCount: 0,
     },
   ];
-  const incidents = config.incidents || [
-    {
-      id: '1',
-      title: 'High CPU usage detected',
-      service: 'archiphoenix-service',
-      status: 'triggered',
-      severity: 'critical',
-      createdAt: new Date().toISOString(),
-    },
-  ];
+  const pagerDutyIncidents = emulationEngine.getPagerDutyIncidents(componentId);
+  const incidents: Incident[] = pagerDutyIncidents.map((i) => {
+    const service = services.find((s) => s.id === i.serviceId);
+    return {
+      id: i.id,
+      title: i.title,
+      service: service?.name || i.serviceId,
+      status: i.status,
+      severity: i.severity,
+      createdAt: new Date(i.createdAt).toISOString(),
+      acknowledgedAt: i.acknowledgedAt
+        ? new Date(i.acknowledgedAt).toISOString()
+        : undefined,
+      resolvedAt: i.resolvedAt ? new Date(i.resolvedAt).toISOString() : undefined,
+    };
+  });
   const escalationPolicies = config.escalationPolicies || [
     {
       id: '1',
@@ -122,13 +140,15 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
     { id: '1', name: 'John Doe', email: 'john@example.com', status: 'on-call' },
     { id: '2', name: 'Jane Smith', email: 'jane@example.com', status: 'off-call' },
   ];
-  const totalIncidents = config.totalIncidents || incidents.length;
-  const activeIncidents = config.activeIncidents || incidents.filter((i) => i.status !== 'resolved').length;
-  const resolvedIncidents = config.resolvedIncidents || incidents.filter((i) => i.status === 'resolved').length;
+  const pagerDutyMetrics = emulationEngine.getPagerDutyMetrics(componentId);
+  const totalIncidents = pagerDutyMetrics?.incidentsTotal ?? incidents.length;
+  const activeIncidents = pagerDutyMetrics?.incidentsActive ?? incidents.filter((i) => i.status !== 'resolved').length;
+  const resolvedIncidents = pagerDutyMetrics?.incidentsResolved ?? incidents.filter((i) => i.status === 'resolved').length;
 
   const [editingServiceIndex, setEditingServiceIndex] = useState<number | null>(null);
   const [showCreateService, setShowCreateService] = useState(false);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
+  const [showCreateOnCall, setShowCreateOnCall] = useState(false);
 
   const updateConfig = (updates: Partial<PagerDutyConfig>) => {
     updateNode(componentId, {
@@ -165,17 +185,11 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
   };
 
   const acknowledgeIncident = (id: string) => {
-    const newIncidents = incidents.map((i) =>
-      i.id === id ? { ...i, status: 'acknowledged' as const, acknowledgedAt: new Date().toISOString() } : i
-    );
-    updateConfig({ incidents: newIncidents });
+    emulationEngine.acknowledgePagerDutyIncident(componentId, id);
   };
 
   const resolveIncident = (id: string) => {
-    const newIncidents = incidents.map((i) =>
-      i.id === id ? { ...i, status: 'resolved' as const, resolvedAt: new Date().toISOString() } : i
-    );
-    updateConfig({ incidents: newIncidents });
+    emulationEngine.resolvePagerDutyIncident(componentId, id);
   };
 
   const addEscalationPolicy = () => {
@@ -190,6 +204,100 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
 
   const removeEscalationPolicy = (id: string) => {
     updateConfig({ escalationPolicies: escalationPolicies.filter((p) => p.id !== id) });
+  };
+
+  const updateEscalationPolicyName = (id: string, name: string) => {
+    const updated = escalationPolicies.map((p) =>
+      p.id === id ? { ...p, name } : p
+    );
+    updateConfig({ escalationPolicies: updated });
+  };
+
+  const addEscalationLevel = (policyId: string) => {
+    const updated = escalationPolicies.map((p) => {
+      if (p.id !== policyId) return p;
+      const nextLevel = (p.levels[p.levels.length - 1]?.level || 0) + 1;
+      return {
+        ...p,
+        levels: [
+          ...p.levels,
+          { level: nextLevel, timeout: 5, targets: [] },
+        ],
+      };
+    });
+    updateConfig({ escalationPolicies: updated });
+  };
+
+  const removeEscalationLevel = (policyId: string, levelIndex: number) => {
+    const updated = escalationPolicies.map((p) => {
+      if (p.id !== policyId) return p;
+      const levels = p.levels.filter((_, idx) => idx !== levelIndex);
+      return { ...p, levels };
+    });
+    updateConfig({ escalationPolicies: updated });
+  };
+
+  const updateEscalationLevelTimeout = (policyId: string, levelIndex: number, timeout: number) => {
+    const updated = escalationPolicies.map((p) => {
+      if (p.id !== policyId) return p;
+      const levels = p.levels.map((lvl, idx) =>
+        idx === levelIndex ? { ...lvl, timeout } : lvl
+      );
+      return { ...p, levels };
+    });
+    updateConfig({ escalationPolicies: updated });
+  };
+
+  const toggleEscalationLevelTarget = (policyId: string, levelIndex: number, userId: string) => {
+    const updated = escalationPolicies.map((p) => {
+      if (p.id !== policyId) return p;
+      const levels = p.levels.map((lvl, idx) => {
+        if (idx !== levelIndex) return lvl;
+        const has = lvl.targets.includes(userId);
+        const targets = has
+          ? lvl.targets.filter((t) => t !== userId)
+          : [...lvl.targets, userId];
+        return { ...lvl, targets };
+      });
+      return { ...p, levels };
+    });
+    updateConfig({ escalationPolicies: updated });
+  };
+
+  const addOnCallUser = () => {
+    const newUser = {
+      id: `user-${Date.now()}`,
+      name: 'On-Call User',
+      email: 'user@example.com',
+      status: 'on-call' as const,
+    };
+    updateConfig({ onCallUsers: [...onCallUsers, newUser] });
+    setShowCreateOnCall(false);
+  };
+
+  const removeOnCallUser = (id: string) => {
+    const updatedUsers = onCallUsers.filter((u) => u.id !== id);
+
+    // Также очищаем targets в политиках, чтобы не висели "мертвые" ссылки
+    const updatedPolicies = escalationPolicies.map((p) => ({
+      ...p,
+      levels: p.levels.map((lvl) => ({
+        ...lvl,
+        targets: lvl.targets.filter((t) => t !== id),
+      })),
+    }));
+
+    updateConfig({
+      onCallUsers: updatedUsers,
+      escalationPolicies: updatedPolicies,
+    });
+  };
+
+  const updateOnCallUser = (id: string, field: 'name' | 'email' | 'status', value: string) => {
+    const updatedUsers = onCallUsers.map((u) =>
+      u.id === id ? { ...u, [field]: value } : u
+    );
+    updateConfig({ onCallUsers: updatedUsers });
   };
 
   return (
@@ -247,6 +355,84 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              Global Settings
+            </CardTitle>
+            <CardDescription>
+              Control how incidents are auto-resolved, mapped by severity and propagated via webhooks
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Auto Resolve</Label>
+                <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                  <span className="text-sm text-muted-foreground">Enable automatic incident resolution</span>
+                  <Switch
+                    checked={globalEnableAutoResolve}
+                    onCheckedChange={(checked) =>
+                      updateConfig({ enableAutoResolve: checked })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Resolve Timeout (seconds)</Label>
+                <Input
+                  type="number"
+                  value={globalResolveTimeout}
+                  onChange={(e) =>
+                    updateConfig({ resolveTimeout: Number(e.target.value) || 0 })
+                  }
+                  min={60}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Severity Mapping</Label>
+                <Select
+                  value={globalSeverityMapping}
+                  onValueChange={(value: 'standard' | 'error-focused' | 'warning-demoted') =>
+                    updateConfig({ severityMapping: value })
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="standard">Standard (critical / warning / info)</SelectItem>
+                    <SelectItem value="error-focused">Error-focused (warnings treated as errors)</SelectItem>
+                    <SelectItem value="warning-demoted">Warning demoted (warnings as info)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Enable Webhooks</Label>
+                <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                  <span className="text-sm text-muted-foreground">Send outbound incident webhooks</span>
+                  <Switch
+                    checked={globalEnableWebhooks}
+                    onCheckedChange={(checked) =>
+                      updateConfig({ enableWebhooks: checked })
+                    }
+                  />
+                </div>
+              </div>
+              <div className="space-y-2 col-span-2">
+                <Label>Webhook URL</Label>
+                <Input
+                  value={globalWebhookUrl}
+                  onChange={(e) => updateConfig({ webhookUrl: e.target.value })}
+                  placeholder="https://webhook.example.com/pagerduty"
+                  disabled={!globalEnableWebhooks}
+                />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <Tabs defaultValue="incidents" className="space-y-4">
           <TabsList>
@@ -483,8 +669,14 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
                   {escalationPolicies.map((policy) => (
                     <Card key={policy.id} className="border-l-4 border-l-green-500">
                       <CardHeader className="pb-3">
-                        <div className="flex items-center justify-between">
-                          <CardTitle className="text-base">{policy.name}</CardTitle>
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex-1 space-y-1">
+                            <Label>Policy Name</Label>
+                            <Input
+                              value={policy.name}
+                              onChange={(e) => updateEscalationPolicyName(policy.id, e.target.value)}
+                            />
+                          </div>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -495,16 +687,83 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
                           </Button>
                         </div>
                       </CardHeader>
-                      <CardContent>
+                      <CardContent className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Clock className="h-3 w-3" />
+                            <span>{policy.levels.length} levels</span>
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="xs"
+                            onClick={() => addEscalationLevel(policy.id)}
+                          >
+                            <Plus className="h-3 w-3 mr-1" />
+                            Add Level
+                          </Button>
+                        </div>
                         <div className="space-y-2">
                           {policy.levels.map((level, lIndex) => (
                             <Card key={lIndex} className="p-3">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <p className="font-medium">Level {level.level}</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    Timeout: {level.timeout} min • Targets: {level.targets.length}
-                                  </p>
+                              <div className="flex items-start justify-between gap-4">
+                                <div className="space-y-2 flex-1">
+                                  <div className="flex items-center justify-between">
+                                    <p className="font-medium">Level {level.level}</p>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => removeEscalationLevel(policy.id, lIndex)}
+                                      disabled={policy.levels.length === 1}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                  <div className="grid grid-cols-3 gap-3">
+                                    <div className="space-y-1">
+                                      <Label className="text-xs">Timeout (minutes)</Label>
+                                      <Input
+                                        type="number"
+                                        value={level.timeout}
+                                        min={1}
+                                        onChange={(e) =>
+                                          updateEscalationLevelTimeout(
+                                            policy.id,
+                                            lIndex,
+                                            Number(e.target.value) || 0
+                                          )
+                                        }
+                                      />
+                                    </div>
+                                    <div className="col-span-2 space-y-1">
+                                      <Label className="text-xs">Targets (on-call users)</Label>
+                                      <div className="flex flex-wrap gap-1">
+                                        {onCallUsers.map((user) => {
+                                          const selected = level.targets.includes(user.id);
+                                          return (
+                                            <Badge
+                                              key={user.id}
+                                              variant={selected ? 'default' : 'outline'}
+                                              className="cursor-pointer text-xs"
+                                              onClick={() =>
+                                                toggleEscalationLevelTarget(
+                                                  policy.id,
+                                                  lIndex,
+                                                  user.id
+                                                )
+                                              }
+                                            >
+                                              {user.name}
+                                            </Badge>
+                                          );
+                                        })}
+                                        {onCallUsers.length === 0 && (
+                                          <span className="text-xs text-muted-foreground">
+                                            No on-call users configured
+                                          </span>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
                                 </div>
                               </div>
                             </Card>
@@ -521,27 +780,86 @@ export function PagerDutyConfigAdvanced({ componentId }: PagerDutyConfigProps) {
           <TabsContent value="oncall" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>On-Call Schedule</CardTitle>
-                <CardDescription>Manage on-call users and schedules</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>On-Call Roster</CardTitle>
+                    <CardDescription>Manage who participates in on-call and their status</CardDescription>
+                  </div>
+                  <Button size="sm" onClick={addOnCallUser}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add User
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {onCallUsers.map((user) => (
-                    <Card key={user.id} className="border-l-4 border-l-purple-500">
-                      <CardContent className="pt-4">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <p className="font-medium">{user.name}</p>
-                            <p className="text-xs text-muted-foreground">{user.email}</p>
+                {onCallUsers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No on-call users configured. Add at least one user to use escalation policies effectively.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {onCallUsers.map((user) => (
+                      <Card key={user.id} className="border-l-4 border-l-purple-500">
+                        <CardContent className="pt-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-2 flex-1">
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Name</Label>
+                                  <Input
+                                    value={user.name}
+                                    onChange={(e) =>
+                                      updateOnCallUser(user.id, 'name', e.target.value)
+                                    }
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Email</Label>
+                                  <Input
+                                    value={user.email}
+                                    onChange={(e) =>
+                                      updateOnCallUser(user.id, 'email', e.target.value)
+                                    }
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Status</Label>
+                                  <Select
+                                    value={user.status}
+                                    onValueChange={(value: 'on-call' | 'off-call') =>
+                                      updateOnCallUser(user.id, 'status', value)
+                                    }
+                                  >
+                                    <SelectTrigger className="h-8 w-[140px]">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="on-call">On-Call</SelectItem>
+                                      <SelectItem value="off-call">Off-Call</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <Badge variant={user.status === 'on-call' ? 'default' : 'outline'}>
+                                  {user.status === 'on-call' ? 'On-Call' : 'Off-Call'}
+                                </Badge>
+                              </div>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeOnCallUser(user.id)}
+                              disabled={onCallUsers.length === 1}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
-                          <Badge variant={user.status === 'on-call' ? 'default' : 'outline'}>
-                            {user.status === 'on-call' ? 'On-Call' : 'Off-Call'}
-                          </Badge>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
