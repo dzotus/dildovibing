@@ -1,5 +1,237 @@
 # Patch Notes
 
+## Версия 0.1.7zf - GitLab CI: Полная реализация симуляции и расширенный UI/UX
+
+### Обзор изменений
+**GitLab CI**: Полная реализация симуляции CI/CD системы GitLab CI с созданием `GitLabCIEmulationEngine`. Реализована симуляция pipelines с stages и jobs, runners (docker, kubernetes, shell), variables, environments, schedules, artifacts и cache с автоматическим запуском pipelines, управлением runners и расчетом метрик. Интегрирован в `EmulationEngine` и `DataFlowEngine` для обработки webhook триггеров и API запросов. Расширен UI компонента до уровня оригинала с 7 вкладками (Pipelines, Jobs, Runners, Variables, Environments, Schedules, Settings), добавлены модальные окна для управления всеми сущностями, полноценная конфигурация pipelines с stages и jobs, синхронизация UI с эмуляцией в реальном времени. Реализована валидация полей, toast-уведомления, CRUD операции для всех сущностей.
+
+### Ключевые изменения
+
+#### Реализация симуляции GitLab CI
+- ✅ **GitLabCIEmulationEngine**: Создан полноценный движок для симуляции GitLab CI/CD
+  - Управление pipelines с stages и jobs
+  - Симуляция jobs с прогрессом, длительностью и результатами
+  - Управление runners (docker, kubernetes, shell) с concurrent jobs
+  - Система variables (CI/CD переменные) с protected и masked опциями
+  - Управление environments для развертывания
+  - Pipeline schedules с cron выражениями
+  - Хранение artifacts с expiry policy (автоматическая очистка)
+  - Симуляция cache с hit rate tracking
+  - Автоматический запуск pipelines на основе pipelineTriggerRate
+  - Поддержка триггеров: webhook (с переменными), schedule (cron), manual (ручной запуск)
+  - Управление историей pipelines и jobs (до 1000 pipelines, до 5000 jobs)
+  - Расчет метрик: pipelinesPerHour, averagePipelineDuration, averageJobDuration, runnerUtilization, success rate, cacheHitRate
+  - Генерация реалистичных логов jobs (build, test, deploy stages)
+  - Генерация artifacts для jobs (logs, JSON results)
+  - Поддержка variables для pipelines (environment scope)
+  - Поддержка stages с зависимостями (последовательное выполнение)
+  - Методы для запуска pipelines (`startPipeline`) с проверкой runners
+  - Методы для отмены pipelines (`cancelPipeline`) с корректным освобождением runners
+  - Методы для получения логов jobs в реальном времени
+  - Динамическое обновление runner capacity с проверкой busy jobs
+  - Обновление логов jobs во время выполнения (по прогрессу)
+  - Обновление stages во время выполнения pipeline
+  - Поддержка runner tags для фильтрации jobs
+  - Поддержка runner types (shared, specific)
+- ✅ **Интеграция в EmulationEngine**: Добавлена полная симуляция GitLab CI
+  - Метод `initializeGitLabCIEngine()` для инициализации
+  - Вызов `performUpdate()` в цикле симуляции для обновления pipelines и jobs
+  - Синхронизация метрик компонента с метриками GitLab CI
+  - Метод `getGitLabCIEmulationEngine()` для доступа из UI
+  - Автоматическое обновление конфигурации при изменениях
+  - Удаление engines при удалении узлов
+- ✅ **Обработчик в DataFlowEngine**: Реализована обработка запросов к GitLab CI
+  - Обработка webhook триггеров для запуска pipelines
+  - Обработка API запросов для получения статуса pipelines и jobs
+  - Обработка отмены pipelines
+  - Обновление метрик requests через `processRequest()`
+
+#### Расширение UI до уровня оригинала
+- ✅ **7 основных вкладок**: Pipelines, Jobs, Runners, Variables, Environments, Schedules, Settings
+- ✅ **Вкладка Pipelines**:
+  - Список всех pipelines с реальными статусами из эмуляции
+  - Поиск по ref и pipeline ID
+  - Фильтрация по статусу (all, running, success, failed, pending)
+  - Кнопка запуска для stopped pipelines
+  - Кнопка отмены для running pipelines
+  - Отображение stages с их статусами
+  - Отображение ref, количества stages, длительности
+  - Кнопка "New Pipeline" для создания нового pipeline
+  - Кнопка удаления для существующих pipelines
+- ✅ **Вкладка Jobs**:
+  - Отображение всех активных jobs (running и pending)
+  - Отображение статуса, stage, pipeline ID, длительности
+  - Прогресс-бар для running jobs
+  - Кнопка "View Details" для просмотра логов
+  - Модальное окно "Job Details" с:
+    - Полными логами job в реальном времени
+    - Автоматическим обновлением для running jobs
+- ✅ **Вкладка Runners**:
+  - Список всех runners с реальными метриками из эмуляции
+  - Отображение статуса (online/offline), executor type, current/max jobs
+  - Отображение tags для каждого runner
+  - Кнопка "Add Runner" для создания нового runner
+  - Модальное окно "Add Runner" с валидацией:
+    - Имя runner (обязательно)
+    - Executor type (docker, kubernetes, shell)
+    - Max jobs (1-100)
+    - Tags (comma-separated)
+    - Shared runner toggle
+  - Кнопка удаления для существующих runners
+- ✅ **Вкладка Variables**:
+  - Список всех CI/CD variables
+  - Отображение key, value (masked если настроено), environment scope
+  - Badges для protected и masked variables
+  - Кнопка "Add Variable" для создания новой variable
+  - Модальное окно "Add Variable" с валидацией:
+    - Key (обязательно)
+    - Value (обязательно)
+    - Environment scope (по умолчанию *)
+    - Protected toggle
+    - Masked toggle
+  - Кнопка удаления для существующих variables
+- ✅ **Вкладка Environments**:
+  - Список всех environments
+  - Отображение name, external URL, state, количества deployments
+  - Кнопка "Add Environment" для создания нового environment
+  - Модальное окно "Add Environment" с валидацией:
+    - Name (обязательно)
+    - External URL (опционально)
+  - Кнопка удаления для существующих environments
+- ✅ **Вкладка Schedules**:
+  - Список всех pipeline schedules
+  - Отображение description, ref, cron expression, next run time
+  - Badge для active/inactive статуса
+  - Кнопка "Add Schedule" для создания нового schedule
+  - Модальное окно "Add Schedule" с валидацией:
+    - Description (обязательно)
+    - Ref (branch или tag)
+    - Cron expression (обязательно)
+    - Active toggle
+  - Кнопка удаления для существующих schedules
+- ✅ **Вкладка Settings**:
+  - Project URL
+  - GitLab URL
+  - Enable Runners toggle
+  - Enable Cache toggle
+  - Enable Artifacts toggle
+  - Success Rate progress bar (из эмуляции)
+
+#### Улучшения UX и валидации
+- ✅ **Валидация полей в модальных окнах**:
+  - Проверка обязательных полей (name, key, value, description, cron)
+  - Toast-уведомления для успешных операций и ошибок
+  - Блокировка кнопок сохранения при ошибках
+- ✅ **Исправление багов**:
+  - Использование правильных ключей (id) вместо индексов в циклах
+  - Исправлена синхронизация конфигурации при изменениях в UI
+  - Добавлена проверка активных jobs перед удалением pipeline
+  - Исправлена обработка edge cases (пустые списки, отсутствие данных)
+  - Добавлена защита от ошибок при обновлении jobs
+- ✅ **Синхронизация с эмуляцией**:
+  - Обновление данных каждые 500ms во время симуляции, 2000ms при остановке
+  - Отображение реальных метрик из эмуляции в реальном времени
+  - Автоматическая синхронизация конфигурации при изменениях
+  - Обновление статусов pipelines и jobs в реальном времени
+  - Синхронизация логов для выбранного job
+  - Объединение данных из эмуляции и конфига для полной информации
+
+#### Технические улучшения
+- ✅ **Оптимизация производительности**:
+  - Условное обновление данных (только при запущенной симуляции)
+  - Адаптивные интервалы обновления (500ms при запуске, 2000ms при остановке)
+  - Мемоизация вычислений filtered pipelines с useMemo
+  - Ограничение истории для производительности (1000 pipelines, 5000 jobs)
+  - Условное обновление логов только для активных jobs
+  - Обработка ошибок в try-catch блоках во всех критичных местах
+  - Защита от отрицательных значений времени и некорректных состояний
+- ✅ **Расширенные методы GitLabCIEmulationEngine**:
+  - `getPipelines()`: получение всех pipelines
+  - `getPipeline(pipelineId)`: получение pipeline по ID
+  - `getActiveJobs()`: получение всех активных jobs
+  - `getJob(jobId)`: получение job по ID (активный или из истории)
+  - `getJobLogs(jobId)`: получение логов job с генерацией в реальном времени
+  - `getRunners()`: получение всех runners
+  - `getVariables()`: получение всех variables
+  - `getEnvironments()`: получение всех environments
+  - `getSchedules()`: получение всех schedules
+  - `getArtifacts()`: получение всех artifacts
+  - `startPipeline(pipelineId, currentTime, source, variables)`: запуск pipeline
+  - `cancelPipeline(pipelineId)`: отмена running pipeline
+  - `triggerWebhook(ref, variables)`: обработка webhook триггера
+  - `updateConfig(node)`: динамическое обновление конфигурации
+  - `calculateComponentMetrics()`: расчет метрик компонента
+  - `getGitLabCIMetrics()`: получение всех метрик GitLab CI
+  - `performUpdate(currentTime)`: обновление pipelines и jobs
+  - `generateJobLogs()`: генерация реалистичных логов jobs
+  - `generateJobArtifacts()`: генерация artifacts для jobs
+  - `updateJobLogs()`: обновление логов во время выполнения job
+  - `checkSchedules(currentTime)`: проверка scheduled pipelines
+  - `calculateNextRunTime(cron)`: вычисление следующего времени запуска по cron
+
+### Технические изменения
+
+#### Новые файлы
+- `src/core/GitLabCIEmulationEngine.ts`: Полноценный движок симуляции GitLab CI (1200+ строк)
+  - Управление pipelines, jobs, runners, variables, environments, schedules, artifacts
+  - Расчет метрик и синхронизация с компонентом
+  - Поддержка stages, jobs, runner tags, cache, artifacts
+  - Генерация логов и artifacts jobs
+
+#### Измененные файлы
+- `src/core/EmulationEngine.ts`:
+  - Добавлен импорт `GitLabCIEmulationEngine`
+  - Добавлен `Map<string, GitLabCIEmulationEngine>` для хранения engines
+  - Метод `initializeGitLabCIEngine()` для инициализации
+  - Метод `getGitLabCIEmulationEngine()` для доступа из UI
+  - Вызов `performUpdate()` в цикле симуляции для обновления pipelines и jobs
+  - Синхронизация метрик компонента с метриками GitLab CI
+  - Обновление конфигурации при изменениях в `updateNodesAndConnections()`
+  - Удаление engines при удалении узлов
+  
+- `src/core/DataFlowEngine.ts`:
+  - Добавлен метод `createGitLabCIHandler()` для обработки запросов
+  - Регистрация handler для типа 'gitlab-ci'
+  - Обработка webhook триггеров и API запросов
+  - Обработка отмены pipelines
+  - Обновление метрик через `processRequest()`
+
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx`: Полностью переписан (1300+ строк)
+  - Удален весь хардкод и статические данные
+  - Интеграция с `GitLabCIEmulationEngine` для получения реальных данных
+  - 7 вкладок: Pipelines, Jobs, Runners, Variables, Environments, Schedules, Settings
+  - Модальные окна для добавления всех сущностей
+  - Поиск и фильтрация pipelines
+  - Отображение реальных метрик из эмуляции
+  - Toast-уведомления для всех операций
+  - Валидация полей в формах
+  - Синхронизация с эмуляцией в реальном времени
+  - Удалены неиспользуемые импорты и состояния
+
+### Статистика изменений
+- ✅ **Новый код**: ~1200 строк (GitLabCIEmulationEngine) + ~1300 строк (UI) = **~2500 строк**
+- ✅ **Измененный код**: ~50 строк (EmulationEngine) + ~80 строк (DataFlowEngine) = **~130 строк**
+- ✅ **Удалено**: ~100 строк хардкода и статических данных
+- **Всего: ~2530 строк нового кода**
+
+### Улучшения:
+- ✅ GitLab CI теперь работает как полноценная CI/CD система с эмуляцией
+- ✅ Автоматическая регистрация pipelines и jobs при конфигурации
+- ✅ Поддержка stages с зависимостями (последовательное выполнение)
+- ✅ Расчет метрик с учетом runner utilization и cache hit rate
+- ✅ Кэширование с hit rate tracking
+- ✅ Retry logic для failed jobs (конфиг)
+- ✅ Расчет метрик с учетом stages и jobs
+- ✅ Упрощенный и функциональный UI
+- ✅ Полная синхронизация с эмуляцией
+
+### ⚠️ Известные проблемы:
+- Нет inline редактирования полей pipelines (stages и jobs)
+- Нет возможности редактировать schedules через UI (только добавление/удаление)
+- Нет возможности просматривать artifacts через UI (только в логах jobs)
+
+---
+
 ## Версия 0.1.7ze - Jenkins: Полная реализация симуляции и расширенный UI/UX
 
 ### Обзор изменений

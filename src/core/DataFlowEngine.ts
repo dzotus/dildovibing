@@ -133,6 +133,7 @@ export class DataFlowEngine {
     
     // CI/CD
     this.registerHandler('jenkins', this.createJenkinsHandler());
+    this.registerHandler('gitlab-ci', this.createGitLabCIHandler());
   }
 
   /**
@@ -2874,6 +2875,127 @@ export class DataFlowEngine {
         }
 
         // Обновляем метрики Jenkins (requests)
+        engine.processRequest(message.status === 'delivered');
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for GitLab CI (CI/CD)
+   * Обрабатывает webhook триггеры и API запросы, делегирует расчёт нагрузки GitLabCIEmulationEngine.
+   */
+  private createGitLabCIHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getGitLabCIEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что GitLab CI недоступен
+          message.status = 'failed';
+          message.error = 'GitLab CI engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'webhook';
+
+        // Определяем тип операции
+        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit) {
+          // Webhook trigger - реально запускаем pipeline через engine
+          const ref = payload.ref || payload.branch?.replace('refs/heads/', '') || 'main';
+          const variables = payload.variables || {};
+
+          // Триггерим pipeline через engine
+          const result = engine.triggerWebhook(ref, variables);
+          if (result.success) {
+            message.status = 'delivered';
+            message.latency = 50; // Webhook processing latency
+            message.payload = {
+              ...(payload || {}),
+              gitlab: {
+                webhookReceived: true,
+                pipelineId: result.pipelineId,
+                ref,
+                variables,
+                triggered: true,
+              },
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.reason || 'Failed to trigger pipeline';
+            message.latency = 50;
+          }
+        } else if (operation === 'getPipelineStatus' || payload.pipelineId || payload.pipelineIid) {
+          // API запрос для получения статуса pipeline
+          const pipelineId = payload.pipelineId || payload.pipelineIid?.toString();
+          const pipeline = engine.getPipeline(pipelineId || '');
+
+          message.status = 'delivered';
+          message.latency = 20; // API latency
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              pipelineId,
+              status: pipeline?.status || 'unknown',
+              duration: pipeline?.duration,
+              stages: pipeline?.stages.map(s => ({
+                name: s.name,
+                status: s.status,
+                duration: s.duration,
+              })),
+            },
+          };
+        } else if (operation === 'getJobStatus' || payload.jobId) {
+          // API запрос для получения статуса job
+          const jobId = payload.jobId;
+          const job = engine.getJob(jobId || '');
+
+          message.status = 'delivered';
+          message.latency = 20;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              jobId,
+              status: job?.status || 'unknown',
+              progress: job?.progress,
+              duration: job?.duration,
+              logs: job?.logs?.slice(-10), // Last 10 log lines
+            },
+          };
+        } else if (operation === 'cancelPipeline' || payload.cancel) {
+          // Отмена pipeline
+          const pipelineId = payload.pipelineId;
+          const result = engine.cancelPipeline(pipelineId || '');
+
+          message.status = result.success ? 'delivered' : 'failed';
+          message.error = result.reason;
+          message.latency = 30;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              pipelineId,
+              canceled: result.success,
+            },
+          };
+        } else {
+          // Общий API запрос
+          message.status = 'delivered';
+          message.latency = 30;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              processed: true,
+              operation,
+            },
+          };
+        }
+
+        // Обновляем метрики GitLab CI (requests)
         engine.processRequest(message.status === 'delivered');
 
         return message;

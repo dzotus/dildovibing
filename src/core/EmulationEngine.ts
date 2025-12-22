@@ -32,6 +32,7 @@ import { FirewallEmulationEngine } from './FirewallEmulationEngine';
 import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
 import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
+import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -215,6 +216,9 @@ export class EmulationEngine {
   // Jenkins emulation engines per node
   private jenkinsEngines: Map<string, JenkinsEmulationEngine> = new Map();
 
+  // GitLab CI emulation engines per node
+  private gitlabCIEngines: Map<string, GitLabCIEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -388,6 +392,9 @@ export class EmulationEngine {
         if (node.type === 'jenkins') {
           this.initializeJenkinsEngine(node);
         }
+        if (node.type === 'gitlab-ci') {
+          this.initializeGitLabCIEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -516,6 +523,17 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
+      
+      // Initialize GitLab CI emulation engine for GitLab CI nodes
+      if (node.type === 'gitlab-ci') {
+        if (!this.gitlabCIEngines.has(node.id)) {
+          this.initializeGitLabCIEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.gitlabCIEngines.get(node.id)!;
+          engine.updateConfig(node);
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -546,6 +564,8 @@ export class EmulationEngine {
         this.wafEngines.delete(nodeId);
         this.firewallEngines.delete(nodeId);
         this.idsIpsEngines.delete(nodeId);
+        this.jenkinsEngines.delete(nodeId);
+        this.gitlabCIEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -762,6 +782,22 @@ export class EmulationEngine {
         componentMetrics.latency = jenkinsMetrics.latency || componentMetrics.latency;
         componentMetrics.utilization = (jenkinsMetrics.utilization || 0) / 100; // Convert to 0-1
         componentMetrics.errorRate = (jenkinsMetrics.errorRate || 0) / 100; // Convert to 0-1
+        componentMetrics.timestamp = now;
+      }
+    }
+    
+    // Perform GitLab CI updates (pipelines, jobs, runners)
+    for (const [nodeId, gitlabCIEngine] of this.gitlabCIEngines.entries()) {
+      gitlabCIEngine.performUpdate(now);
+      
+      // Update component metrics based on GitLab CI metrics
+      const gitlabCIMetrics = gitlabCIEngine.calculateComponentMetrics();
+      const componentMetrics = this.metrics.get(nodeId);
+      if (componentMetrics && gitlabCIMetrics) {
+        componentMetrics.throughput = gitlabCIMetrics.throughput || componentMetrics.throughput;
+        componentMetrics.latency = gitlabCIMetrics.latency || componentMetrics.latency;
+        componentMetrics.utilization = gitlabCIMetrics.utilization || componentMetrics.utilization;
+        componentMetrics.errorRate = gitlabCIMetrics.errorRate || componentMetrics.errorRate;
         componentMetrics.timestamp = now;
       }
     }
@@ -5273,6 +5309,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize GitLab CI Emulation Engine for GitLab CI node
+   */
+  private initializeGitLabCIEngine(node: CanvasNode): void {
+    const engine = new GitLabCIEmulationEngine();
+    engine.initializeConfig(node);
+    this.gitlabCIEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5681,6 +5726,13 @@ export class EmulationEngine {
    */
   public getJenkinsEmulationEngine(nodeId: string): JenkinsEmulationEngine | undefined {
     return this.jenkinsEngines.get(nodeId);
+  }
+
+  /**
+   * Get GitLab CI emulation engine for a node
+   */
+  public getGitLabCIEmulationEngine(nodeId: string): GitLabCIEmulationEngine | undefined {
+    return this.gitlabCIEngines.get(nodeId);
   }
 
   /**
