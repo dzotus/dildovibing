@@ -122,6 +122,7 @@ export class DataFlowEngine {
     
     // Observability - logs and metrics
     this.registerHandler('loki', this.createLokiHandler());
+    this.registerHandler('otel-collector', this.createOpenTelemetryCollectorHandler());
   }
 
   /**
@@ -2672,6 +2673,43 @@ export class DataFlowEngine {
       },
       
       getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for OpenTelemetry Collector
+   */
+  private createOpenTelemetryCollectorHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        // Get OpenTelemetry Collector routing engine from emulation engine
+        const otelEngine = emulationEngine.getOpenTelemetryCollectorRoutingEngine(node.id);
+        
+        if (!otelEngine) {
+          // No engine, just pass through
+          message.status = 'delivered';
+          return message;
+        }
+
+        // Get source node for context
+        const sourceNode = this.nodes.find(n => n.id === message.source);
+        
+        // Process message through OpenTelemetry Collector
+        const result = otelEngine.processMessage(message, sourceNode || undefined);
+        
+        if (result.success) {
+          message.status = 'delivered';
+          message.latency = result.latency;
+        } else {
+          message.status = 'failed';
+          message.error = result.error || 'OpenTelemetry Collector processing failed';
+          message.latency = result.latency;
+        }
+        
+        return message;
+      },
+      
+      getSupportedFormats: () => ['json', 'protobuf', 'binary', 'text'],
     };
   }
 

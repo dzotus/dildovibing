@@ -1,5 +1,191 @@
 # Patch Notes
 
+## Версия 0.1.7x - OpenTelemetry Collector: Полная симуляция телеметрического pipeline
+
+### Обзор изменений
+Полная реализация симуляции OpenTelemetry Collector: создан OpenTelemetryCollectorRoutingEngine для обработки телеметрических данных через receivers → processors → exporters pipelines. Реализована поддержка всех основных типов receivers (OTLP, Prometheus, Jaeger, Zipkin, Kafka, File Log), processors (batch, memory_limiter, filter, transform, resource, attributes) и exporters (OTLP, Prometheus, Jaeger, Zipkin, Logging, File). Добавлена автоматическая конвертация форматов данных между различными протоколами телеметрии. Реализован расчет нагрузки (memory usage, latency, throughput) и поддержка batch processing с timeout и size лимитами. Интегрирован OpenTelemetry Collector в DataFlowEngine и EmulationEngine. Полностью настраиваемый UI для конфигурации всех компонентов pipeline с возможностью редактирования параметров через интуитивный интерфейс.
+
+---
+
+## OpenTelemetry Collector: Полная симуляция телеметрического pipeline
+
+### 1. OpenTelemetry Collector Routing Engine
+
+**Проблема:**
+- OpenTelemetry Collector был только UI компонентом без реальной симуляции
+- Нет обработки телеметрических данных через receivers → processors → exporters
+- Нет поддержки pipelines для traces, metrics, logs
+- Нет конвертации между различными форматами телеметрии
+- Нет расчета нагрузки на collector
+- Статические метрики в UI (не обновлялись)
+
+**Решение:**
+- ✅ Создан `OpenTelemetryCollectorRoutingEngine` (`src/core/OpenTelemetryCollectorRoutingEngine.ts`):
+  - **Receivers обработка:**
+    - Поддержка OTLP receiver (traces/metrics/logs через gRPC/HTTP)
+    - Поддержка Prometheus receiver (scraping и remote write)
+    - Поддержка Jaeger receiver (thrift/gRPC)
+    - Поддержка Zipkin receiver
+    - Поддержка Kafka receiver
+    - Поддержка File Log receiver
+    - Автоматическое определение типа данных из payload
+  - **Pipeline Processing:**
+    - Отдельные pipelines для traces, metrics, logs
+    - Динамическое создание pipelines из конфигурации
+    - Маршрутизация данных по типу pipeline
+    - Поддержка множественных receivers/processors/exporters на pipeline
+  - **Processors реализация:**
+    - **Batch Processor:** группировка данных в батчи с настраиваемыми timeout и batch size
+    - **Memory Limiter:** контроль использования памяти с лимитами и drop при превышении
+    - **Filter Processor:** фильтрация данных по условиям
+    - **Transform Processor:** трансформация данных
+    - **Resource Processor:** добавление resource attributes
+    - **Attributes Processor:** изменение атрибутов
+  - **Exporters обработка:**
+    - OTLP exporter для отправки в OTLP backend
+    - Prometheus exporter для отправки в Prometheus
+    - Jaeger exporter для отправки в Jaeger
+    - Zipkin exporter для отправки в Zipkin
+    - Logging exporter для логирования
+    - File exporter для сохранения в файлы
+  - **Конвертация форматов:**
+    - Jaeger spans → OTLP traces
+    - Prometheus metrics → OTLP metrics
+    - Loki logs → OTLP logs
+    - Универсальная конвертация между различными форматами
+  - **Расчет нагрузки:**
+    - Memory usage tracking (current usage, limit, dropped count)
+    - Pipeline latency (average processing time)
+    - Throughput метрики (received, processed, exported для traces/metrics/logs)
+    - Batch processing метрики (batches created, batch size)
+  - **Метрики:**
+    - `tracesReceivedTotal`, `metricsReceivedTotal`, `logsReceivedTotal`
+    - `tracesProcessedTotal`, `metricsProcessedTotal`, `logsProcessedTotal`
+    - `tracesExportedTotal`, `metricsExportedTotal`, `logsExportedTotal`
+    - `tracesDroppedByMemoryLimiter`, `metricsDroppedByMemoryLimiter`, `logsDroppedByMemoryLimiter`
+    - `batchesCreated`, `exportErrorsTotal`, `pipelineLatencyMs`, `currentMemoryUsage`
+
+**Изменённые файлы:**
+- `src/core/OpenTelemetryCollectorRoutingEngine.ts` (новый)
+
+---
+
+### 2. Интеграция OpenTelemetry Collector в DataFlowEngine
+
+**Проблема:**
+- Нет обработки сообщений для otel-collector компонентов
+- Компоненты не могли отправлять телеметрию в collector
+- Нет интеграции с системой передачи данных
+
+**Решение:**
+- ✅ Добавлен handler для `otel-collector` в `DataFlowEngine`:
+  - Метод `createOpenTelemetryCollectorHandler()` для обработки входящих сообщений
+  - Получение OpenTelemetryCollectorRoutingEngine из EmulationEngine
+  - Обработка сообщений через `processMessage()` с передачей source node
+  - Поддержка различных форматов данных (json, protobuf, binary, text)
+  - Обработка результатов с обновлением статуса и latency
+
+**Изменённые файлы:**
+- `src/core/DataFlowEngine.ts`
+
+---
+
+### 3. Интеграция OpenTelemetry Collector в EmulationEngine
+
+**Проблема:**
+- Нет инициализации OpenTelemetry Collector routing engines
+- Нет обработки batch flush в цикле симуляции
+- Нет методов доступа к engines
+
+**Решение:**
+- ✅ Добавлена интеграция в `EmulationEngine`:
+  - Инициализация `OpenTelemetryCollectorRoutingEngine` при добавлении ноды типа `otel-collector`
+  - Метод `initializeOpenTelemetryCollectorEngine()` для создания engine
+  - Периодический batch flush через `processBatchFlush()` в цикле симуляции
+  - Метод доступа `getOpenTelemetryCollectorRoutingEngine(nodeId)`
+  - Обновление конфигурации при изменении node config
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`
+
+---
+
+### 4. Полностью настраиваемый UI для OpenTelemetry Collector
+
+**Проблема:**
+- UI показывал только статические данные
+- Нет возможности редактировать параметры receivers, processors, exporters
+- Нет полноценной настройки pipelines (выбор receivers/processors/exporters)
+- Метрики не обновлялись из движка
+
+**Решение:**
+- ✅ Обновлен `OpenTelemetryCollectorConfigAdvanced.tsx`:
+  
+  **Receivers настройка:**
+  - Редактирование типа receiver (OTLP, Prometheus, Jaeger, Zipkin, Kafka, File Log)
+  - Редактирование endpoint
+  - Включение/выключение через Switch
+  - Добавление/удаление receivers
+  - Кнопка Settings для открытия формы редактирования
+  
+  **Processors настройка:**
+  - Редактирование типа processor (batch, memory_limiter, filter, transform, resource, attributes)
+  - Для batch processor: настройка timeout и batch size
+  - Для memory_limiter: настройка memory limit (MiB)
+  - Включение/выключение через Switch
+  - Добавление/удаление processors
+  - Кнопка Settings для открытия формы редактирования
+  
+  **Exporters настройка:**
+  - Редактирование типа exporter (OTLP, Prometheus, Jaeger, Zipkin, Logging, File)
+  - Редактирование endpoint
+  - Включение/выключение через Switch
+  - Добавление/удаление exporters
+  - Кнопка Settings для открытия формы редактирования
+  
+  **Pipelines настройка:**
+  - Редактирование имени pipeline
+  - Редактирование типа pipeline (traces, metrics, logs)
+  - Multi-select выбор receivers через кликабельные badges
+  - Multi-select выбор processors через кликабельные badges
+  - Multi-select выбор exporters через кликабельные badges
+  - Визуальная индикация выбранных элементов (default badge для выбранных)
+  - Добавление/удаление pipelines
+  - Кнопка Edit для открытия формы редактирования
+  
+  **Метрики:**
+  - Получение реальных метрик из OpenTelemetryCollectorRoutingEngine
+  - Автообновление метрик каждые 2 секунды при запущенной симуляции
+  - Отображение: metricsReceived, tracesReceived, logsReceived, metricsExported, tracesExported, logsExported
+  - Progress bars для визуализации объема данных
+
+**Изменённые файлы:**
+- `src/components/config/observability/OpenTelemetryCollectorConfigAdvanced.tsx`
+
+---
+
+### Технические детали
+
+**Конфигурация-driven подход:**
+- Все настройки берутся из конфигурации компонента
+- Динамическое создание pipelines из конфига
+- Поддержка различных receivers/processors/exporters через конфиг
+- Нет хардкода - все настраивается через UI
+
+**Реальная симуляция:**
+- Обработка данных через receivers → processors → exporters
+- Расчет нагрузки (memory, latency, throughput)
+- Batch processing с timeout и size лимитами
+- Memory limiter с реальным контролем памяти
+- Конвертация форматов между различными протоколами
+
+**Связность с другими компонентами:**
+- Прием traces/metrics/logs от любых компонентов через connections
+- Интеграция с Jaeger, Prometheus, Loki через exporters
+- Поддержка OTLP для универсального протокола телеметрии
+
+---
+
 ## Версия 0.1.7w - Jaeger: Полная симуляция распределенной трассировки
 
 ### Обзор изменений

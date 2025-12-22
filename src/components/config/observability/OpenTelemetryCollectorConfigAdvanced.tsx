@@ -10,7 +10,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { 
   Settings, 
   Activity,
@@ -21,7 +23,8 @@ import {
   ArrowRightLeft,
   Database,
   Zap,
-  Layers
+  Layers,
+  Edit
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -76,6 +79,7 @@ interface OpenTelemetryCollectorConfig {
 
 export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTelemetryCollectorConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { isRunning } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -111,16 +115,67 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
       exporters: ['2'],
     },
   ];
-  const metricsReceived = config.metricsReceived || 0;
-  const tracesReceived = config.tracesReceived || 0;
-  const logsReceived = config.logsReceived || 0;
-  const metricsExported = config.metricsExported || 0;
-  const tracesExported = config.tracesExported || 0;
-  const logsExported = config.logsExported || 0;
+
+  // Получаем OpenTelemetry Collector engine для реальных метрик
+  const otelEngine = emulationEngine.getOpenTelemetryCollectorRoutingEngine(componentId);
+  
+  // Состояние для реальных метрик
+  const [realMetrics, setRealMetrics] = useState({
+    metricsReceived: 0,
+    tracesReceived: 0,
+    logsReceived: 0,
+    metricsExported: 0,
+    tracesExported: 0,
+    logsExported: 0,
+  });
+
+  // Обновляем метрики из движка
+  useEffect(() => {
+    if (!otelEngine) {
+      setRealMetrics({
+        metricsReceived: 0,
+        tracesReceived: 0,
+        logsReceived: 0,
+        metricsExported: 0,
+        tracesExported: 0,
+        logsExported: 0,
+      });
+      return;
+    }
+
+    const updateMetrics = () => {
+      const metrics = otelEngine.getMetrics();
+      setRealMetrics({
+        metricsReceived: metrics.metricsReceivedTotal,
+        tracesReceived: metrics.tracesReceivedTotal,
+        logsReceived: metrics.logsReceivedTotal,
+        metricsExported: metrics.metricsExportedTotal,
+        tracesExported: metrics.tracesExportedTotal,
+        logsExported: metrics.logsExportedTotal,
+      });
+    };
+
+    updateMetrics();
+
+    // Обновляем метрики периодически если симуляция запущена
+    if (isRunning) {
+      const interval = setInterval(updateMetrics, 2000); // каждые 2 секунды
+      return () => clearInterval(interval);
+    }
+  }, [otelEngine, isRunning, componentId]);
+
+  // Используем реальные метрики вместо конфига
+  const metricsReceived = realMetrics.metricsReceived;
+  const tracesReceived = realMetrics.tracesReceived;
+  const logsReceived = realMetrics.logsReceived;
+  const metricsExported = realMetrics.metricsExported;
+  const tracesExported = realMetrics.tracesExported;
+  const logsExported = realMetrics.logsExported;
 
   const [editingReceiverIndex, setEditingReceiverIndex] = useState<number | null>(null);
   const [editingProcessorIndex, setEditingProcessorIndex] = useState<number | null>(null);
   const [editingExporterIndex, setEditingExporterIndex] = useState<number | null>(null);
+  const [editingPipelineIndex, setEditingPipelineIndex] = useState<number | null>(null);
   const [showCreatePipeline, setShowCreatePipeline] = useState(false);
 
   const updateConfig = (updates: Partial<OpenTelemetryCollectorConfig>) => {
@@ -210,6 +265,46 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
 
   const removePipeline = (id: string) => {
     updateConfig({ pipelines: pipelines.filter((p) => p.id !== id) });
+  };
+
+  const updatePipeline = (id: string, field: string, value: any) => {
+    const newPipelines = pipelines.map((p) =>
+      p.id === id ? { ...p, [field]: value } : p
+    );
+    updateConfig({ pipelines: newPipelines });
+  };
+
+  const togglePipelineReceiver = (pipelineId: string, receiverId: string) => {
+    const pipeline = pipelines.find(p => p.id === pipelineId);
+    if (!pipeline) return;
+    
+    const newReceivers = pipeline.receivers.includes(receiverId)
+      ? pipeline.receivers.filter(id => id !== receiverId)
+      : [...pipeline.receivers, receiverId];
+    
+    updatePipeline(pipelineId, 'receivers', newReceivers);
+  };
+
+  const togglePipelineProcessor = (pipelineId: string, processorId: string) => {
+    const pipeline = pipelines.find(p => p.id === pipelineId);
+    if (!pipeline) return;
+    
+    const newProcessors = pipeline.processors.includes(processorId)
+      ? pipeline.processors.filter(id => id !== processorId)
+      : [...pipeline.processors, processorId];
+    
+    updatePipeline(pipelineId, 'processors', newProcessors);
+  };
+
+  const togglePipelineExporter = (pipelineId: string, exporterId: string) => {
+    const pipeline = pipelines.find(p => p.id === pipelineId);
+    if (!pipeline) return;
+    
+    const newExporters = pipeline.exporters.includes(exporterId)
+      ? pipeline.exporters.filter(id => id !== exporterId)
+      : [...pipeline.exporters, exporterId];
+    
+    updatePipeline(pipelineId, 'exporters', newExporters);
   };
 
   return (
@@ -324,7 +419,7 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {pipelines.map((pipeline) => (
+                  {pipelines.map((pipeline, index) => (
                     <Card key={pipeline.id} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -343,69 +438,198 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                               </Badge>
                             </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removePipeline(pipeline.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setEditingPipelineIndex(editingPipelineIndex === index ? null : index)}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removePipeline(pipeline.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-3 gap-4">
-                          <div className="space-y-2">
-                            <Label>Pipeline Type</Label>
-                            <Select
-                              value={pipeline.type}
-                              onValueChange={(value: 'traces' | 'metrics' | 'logs') => {
-                                const newPipelines = pipelines.map((p) =>
-                                  p.id === pipeline.id ? { ...p, type: value } : p
-                                );
-                                updateConfig({ pipelines: newPipelines });
-                              }}
+                        {editingPipelineIndex === index ? (
+                          <>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>Pipeline Name</Label>
+                                <Input
+                                  value={pipeline.name}
+                                  onChange={(e) => updatePipeline(pipeline.id, 'name', e.target.value)}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Pipeline Type</Label>
+                                <Select
+                                  value={pipeline.type}
+                                  onValueChange={(value: 'traces' | 'metrics' | 'logs') => {
+                                    updatePipeline(pipeline.id, 'type', value);
+                                  }}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="traces">Traces</SelectItem>
+                                    <SelectItem value="metrics">Metrics</SelectItem>
+                                    <SelectItem value="logs">Logs</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <Label>Receivers</Label>
+                              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px]">
+                                {receivers.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No receivers available. Add receivers first.</p>
+                                ) : (
+                                  receivers.map((r) => {
+                                    const isSelected = pipeline.receivers.includes(r.id);
+                                    return (
+                                      <Badge
+                                        key={r.id}
+                                        variant={isSelected ? "default" : "outline"}
+                                        className="cursor-pointer"
+                                        onClick={() => togglePipelineReceiver(pipeline.id, r.id)}
+                                      >
+                                        {r.type}
+                                      </Badge>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <Label>Processors</Label>
+                              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px]">
+                                {processors.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No processors available. Add processors first.</p>
+                                ) : (
+                                  processors.map((p) => {
+                                    const isSelected = pipeline.processors.includes(p.id);
+                                    return (
+                                      <Badge
+                                        key={p.id}
+                                        variant={isSelected ? "default" : "outline"}
+                                        className="cursor-pointer"
+                                        onClick={() => togglePipelineProcessor(pipeline.id, p.id)}
+                                      >
+                                        {p.type}
+                                      </Badge>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <Label>Exporters</Label>
+                              <div className="flex flex-wrap gap-2 p-3 border rounded-md min-h-[60px]">
+                                {exporters.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No exporters available. Add exporters first.</p>
+                                ) : (
+                                  exporters.map((e) => {
+                                    const isSelected = pipeline.exporters.includes(e.id);
+                                    return (
+                                      <Badge
+                                        key={e.id}
+                                        variant={isSelected ? "default" : "outline"}
+                                        className="cursor-pointer"
+                                        onClick={() => togglePipelineExporter(pipeline.id, e.id)}
+                                      >
+                                        {e.type}
+                                      </Badge>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                            
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setEditingPipelineIndex(null)}
                             >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="traces">Traces</SelectItem>
-                                <SelectItem value="metrics">Metrics</SelectItem>
-                                <SelectItem value="logs">Logs</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Receivers</Label>
-                          <div className="flex flex-wrap gap-2">
-                            {receivers
-                              .filter((r) => pipeline.receivers.includes(r.id))
-                              .map((r) => (
-                                <Badge key={r.id} variant="outline">{r.type}</Badge>
-                              ))}
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Processors</Label>
-                          <div className="flex flex-wrap gap-2">
-                            {processors
-                              .filter((p) => pipeline.processors.includes(p.id))
-                              .map((p) => (
-                                <Badge key={p.id} variant="outline">{p.type}</Badge>
-                              ))}
-                          </div>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Exporters</Label>
-                          <div className="flex flex-wrap gap-2">
-                            {exporters
-                              .filter((e) => pipeline.exporters.includes(e.id))
-                              .map((e) => (
-                                <Badge key={e.id} variant="outline">{e.type}</Badge>
-                              ))}
-                          </div>
-                        </div>
+                              Done
+                            </Button>
+                          </>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-3 gap-4">
+                              <div className="space-y-2">
+                                <Label>Pipeline Type</Label>
+                                <Select
+                                  value={pipeline.type}
+                                  onValueChange={(value: 'traces' | 'metrics' | 'logs') => {
+                                    updatePipeline(pipeline.id, 'type', value);
+                                  }}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="traces">Traces</SelectItem>
+                                    <SelectItem value="metrics">Metrics</SelectItem>
+                                    <SelectItem value="logs">Logs</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Receivers</Label>
+                              <div className="flex flex-wrap gap-2">
+                                {pipeline.receivers.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No receivers selected</p>
+                                ) : (
+                                  receivers
+                                    .filter((r) => pipeline.receivers.includes(r.id))
+                                    .map((r) => (
+                                      <Badge key={r.id} variant="outline">{r.type}</Badge>
+                                    ))
+                                )}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Processors</Label>
+                              <div className="flex flex-wrap gap-2">
+                                {pipeline.processors.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No processors selected</p>
+                                ) : (
+                                  processors
+                                    .filter((p) => pipeline.processors.includes(p.id))
+                                    .map((p) => (
+                                      <Badge key={p.id} variant="outline">{p.type}</Badge>
+                                    ))
+                                )}
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Exporters</Label>
+                              <div className="flex flex-wrap gap-2">
+                                {pipeline.exporters.length === 0 ? (
+                                  <p className="text-sm text-muted-foreground">No exporters selected</p>
+                                ) : (
+                                  exporters
+                                    .filter((e) => pipeline.exporters.includes(e.id))
+                                    .map((e) => (
+                                      <Badge key={e.id} variant="outline">{e.type}</Badge>
+                                    ))
+                                )}
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
@@ -429,23 +653,18 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {receivers.map((receiver) => (
+                <div className="space-y-4">
+                  {receivers.map((receiver, index) => (
                     <Card key={receiver.id} className="border-l-4 border-l-green-500">
-                      <CardContent className="pt-4">
+                      <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{receiver.type}</Badge>
-                              {receiver.enabled ? (
-                                <Badge variant="default">Enabled</Badge>
-                              ) : (
-                                <Badge variant="outline">Disabled</Badge>
-                              )}
-                              {receiver.endpoint && (
-                                <Badge variant="outline">{receiver.endpoint}</Badge>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{receiver.type}</Badge>
+                            {receiver.enabled ? (
+                              <Badge variant="default">Enabled</Badge>
+                            ) : (
+                              <Badge variant="outline">Disabled</Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch
@@ -455,13 +674,60 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                             <Button
                               variant="ghost"
                               size="icon"
+                              onClick={() => setEditingReceiverIndex(editingReceiverIndex === index ? null : index)}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => removeReceiver(receiver.id)}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         </div>
-                      </CardContent>
+                      </CardHeader>
+                      {editingReceiverIndex === index && (
+                        <CardContent className="space-y-4 pt-0">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Type</Label>
+                              <Select
+                                value={receiver.type}
+                                onValueChange={(value: any) => updateReceiver(receiver.id, 'type', value)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="otlp">OTLP</SelectItem>
+                                  <SelectItem value="prometheus">Prometheus</SelectItem>
+                                  <SelectItem value="jaeger">Jaeger</SelectItem>
+                                  <SelectItem value="zipkin">Zipkin</SelectItem>
+                                  <SelectItem value="kafka">Kafka</SelectItem>
+                                  <SelectItem value="filelog">File Log</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Endpoint</Label>
+                              <Input
+                                value={receiver.endpoint || ''}
+                                onChange={(e) => updateReceiver(receiver.id, 'endpoint', e.target.value)}
+                                placeholder="0.0.0.0:4317"
+                              />
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setEditingReceiverIndex(null)}
+                          >
+                            Done
+                          </Button>
+                        </CardContent>
+                      )}
                     </Card>
                   ))}
                 </div>
@@ -484,20 +750,18 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {processors.map((processor) => (
+                <div className="space-y-4">
+                  {processors.map((processor, index) => (
                     <Card key={processor.id} className="border-l-4 border-l-purple-500">
-                      <CardContent className="pt-4">
+                      <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{processor.type}</Badge>
-                              {processor.enabled ? (
-                                <Badge variant="default">Enabled</Badge>
-                              ) : (
-                                <Badge variant="outline">Disabled</Badge>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{processor.type}</Badge>
+                            {processor.enabled ? (
+                              <Badge variant="default">Enabled</Badge>
+                            ) : (
+                              <Badge variant="outline">Disabled</Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch
@@ -507,13 +771,96 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                             <Button
                               variant="ghost"
                               size="icon"
+                              onClick={() => setEditingProcessorIndex(editingProcessorIndex === index ? null : index)}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => removeProcessor(processor.id)}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         </div>
-                      </CardContent>
+                      </CardHeader>
+                      {editingProcessorIndex === index && (
+                        <CardContent className="space-y-4 pt-0">
+                          <div className="space-y-2">
+                            <Label>Type</Label>
+                            <Select
+                              value={processor.type}
+                              onValueChange={(value: any) => updateProcessor(processor.id, 'type', value)}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="batch">Batch</SelectItem>
+                                <SelectItem value="memory_limiter">Memory Limiter</SelectItem>
+                                <SelectItem value="filter">Filter</SelectItem>
+                                <SelectItem value="transform">Transform</SelectItem>
+                                <SelectItem value="resource">Resource</SelectItem>
+                                <SelectItem value="attributes">Attributes</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          
+                          {processor.type === 'batch' && (
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label>Timeout (e.g., 1s, 5m)</Label>
+                                <Input
+                                  value={processor.config?.timeout || processor.config?.batchTimeout || '1s'}
+                                  onChange={(e) => {
+                                    const newConfig = { ...processor.config, timeout: e.target.value, batchTimeout: e.target.value };
+                                    updateProcessor(processor.id, 'config', newConfig);
+                                  }}
+                                  placeholder="1s"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Batch Size</Label>
+                                <Input
+                                  type="number"
+                                  value={processor.config?.send_batch_size || processor.config?.batchSize || 8192}
+                                  onChange={(e) => {
+                                    const newConfig = { ...processor.config, send_batch_size: Number(e.target.value), batchSize: Number(e.target.value) };
+                                    updateProcessor(processor.id, 'config', newConfig);
+                                  }}
+                                  min={1}
+                                  max={100000}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          
+                          {processor.type === 'memory_limiter' && (
+                            <div className="space-y-2">
+                              <Label>Memory Limit (MiB)</Label>
+                              <Input
+                                type="number"
+                                value={processor.config?.limit_mib || processor.config?.memoryLimit || 512}
+                                onChange={(e) => {
+                                  const newConfig = { ...processor.config, limit_mib: Number(e.target.value), memoryLimit: Number(e.target.value) };
+                                  updateProcessor(processor.id, 'config', newConfig);
+                                }}
+                                min={64}
+                                max={4096}
+                              />
+                            </div>
+                          )}
+                          
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setEditingProcessorIndex(null)}
+                          >
+                            Done
+                          </Button>
+                        </CardContent>
+                      )}
                     </Card>
                   ))}
                 </div>
@@ -536,23 +883,21 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-2">
-                  {exporters.map((exporter) => (
+                <div className="space-y-4">
+                  {exporters.map((exporter, index) => (
                     <Card key={exporter.id} className="border-l-4 border-l-orange-500">
-                      <CardContent className="pt-4">
+                      <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline">{exporter.type}</Badge>
-                              {exporter.enabled ? (
-                                <Badge variant="default">Enabled</Badge>
-                              ) : (
-                                <Badge variant="outline">Disabled</Badge>
-                              )}
-                              {exporter.endpoint && (
-                                <Badge variant="outline">{exporter.endpoint}</Badge>
-                              )}
-                            </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{exporter.type}</Badge>
+                            {exporter.enabled ? (
+                              <Badge variant="default">Enabled</Badge>
+                            ) : (
+                              <Badge variant="outline">Disabled</Badge>
+                            )}
+                            {exporter.endpoint && (
+                              <Badge variant="outline" className="max-w-[200px] truncate">{exporter.endpoint}</Badge>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch
@@ -562,13 +907,60 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
                             <Button
                               variant="ghost"
                               size="icon"
+                              onClick={() => setEditingExporterIndex(editingExporterIndex === index ? null : index)}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
                               onClick={() => removeExporter(exporter.id)}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
                         </div>
-                      </CardContent>
+                      </CardHeader>
+                      {editingExporterIndex === index && (
+                        <CardContent className="space-y-4 pt-0">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Type</Label>
+                              <Select
+                                value={exporter.type}
+                                onValueChange={(value: any) => updateExporter(exporter.id, 'type', value)}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="otlp">OTLP</SelectItem>
+                                  <SelectItem value="prometheus">Prometheus</SelectItem>
+                                  <SelectItem value="jaeger">Jaeger</SelectItem>
+                                  <SelectItem value="zipkin">Zipkin</SelectItem>
+                                  <SelectItem value="logging">Logging</SelectItem>
+                                  <SelectItem value="file">File</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Endpoint</Label>
+                              <Input
+                                value={exporter.endpoint || ''}
+                                onChange={(e) => updateExporter(exporter.id, 'endpoint', e.target.value)}
+                                placeholder="http://backend:4317"
+                              />
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setEditingExporterIndex(null)}
+                          >
+                            Done
+                          </Button>
+                        </CardContent>
+                      )}
                     </Card>
                   ))}
                 </div>

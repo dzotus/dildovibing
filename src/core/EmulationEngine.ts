@@ -23,6 +23,7 @@ import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
+import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -181,6 +182,9 @@ export class EmulationEngine {
   
   // Jaeger emulation engines per node
   private jaegerEngines: Map<string, JaegerEmulationEngine> = new Map();
+  
+  // OpenTelemetry Collector routing engines per node
+  private otelCollectorEngines: Map<string, OpenTelemetryCollectorRoutingEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -330,6 +334,9 @@ export class EmulationEngine {
         }
         if (node.type === 'jaeger') {
           this.initializeJaegerEngine(node);
+        }
+        if (node.type === 'otel-collector') {
+          this.initializeOpenTelemetryCollectorEngine(node);
         }
       }
       
@@ -623,6 +630,11 @@ export class EmulationEngine {
     // Perform Jaeger cleanup (TTL and trace limits)
     for (const [nodeId, jaegerEngine] of this.jaegerEngines.entries()) {
       jaegerEngine.performCleanup(now);
+    }
+    
+    // Process OpenTelemetry Collector batch flush
+    for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
+      otelEngine.processBatchFlush();
     }
     
     // Update connection metrics based on source/target throughput
@@ -4628,6 +4640,21 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize OpenTelemetry Collector Routing Engine for otel-collector node
+   */
+  private initializeOpenTelemetryCollectorEngine(node: CanvasNode): void {
+    if (!this.otelCollectorEngines.has(node.id)) {
+      const otelEngine = new OpenTelemetryCollectorRoutingEngine();
+      otelEngine.initializeConfig(node);
+      this.otelCollectorEngines.set(node.id, otelEngine);
+    } else {
+      // Update config if engine already exists
+      const otelEngine = this.otelCollectorEngines.get(node.id)!;
+      otelEngine.initializeConfig(node);
+    }
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -5036,6 +5063,13 @@ export class EmulationEngine {
    */
   public getAllJaegerEngines(): Map<string, JaegerEmulationEngine> {
     return new Map(this.jaegerEngines);
+  }
+
+  /**
+   * Get OpenTelemetry Collector routing engine for a node
+   */
+  public getOpenTelemetryCollectorRoutingEngine(nodeId: string): OpenTelemetryCollectorRoutingEngine | undefined {
+    return this.otelCollectorEngines.get(nodeId);
   }
 
   /**
