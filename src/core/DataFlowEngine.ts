@@ -134,6 +134,7 @@ export class DataFlowEngine {
     // CI/CD
     this.registerHandler('jenkins', this.createJenkinsHandler());
     this.registerHandler('gitlab-ci', this.createGitLabCIHandler());
+    this.registerHandler('argo-cd', this.createArgoCDHandler());
   }
 
   /**
@@ -2996,6 +2997,170 @@ export class DataFlowEngine {
         }
 
         // Обновляем метрики GitLab CI (requests)
+        engine.processRequest(message.status === 'delivered');
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Argo CD (GitOps)
+   * Обрабатывает webhook триггеры, API запросы и операции синхронизации, делегирует расчёт нагрузки ArgoCDEmulationEngine.
+   */
+  private createArgoCDHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getArgoCDEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что Argo CD недоступен
+          message.status = 'failed';
+          message.error = 'Argo CD engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'webhook';
+
+        // Определяем тип операции
+        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit || payload.repository) {
+          // Webhook trigger - может триггерить синхронизацию приложения
+          const repository = payload.repository || payload.repo || '';
+          const ref = payload.ref || payload.branch || payload.commit || 'main';
+          const applicationName = payload.application || payload.app || '';
+
+          // Если указано приложение, запускаем синхронизацию
+          if (applicationName) {
+            const success = engine.startSync(applicationName);
+            if (success) {
+              message.status = 'delivered';
+              message.latency = 50; // Webhook processing latency
+              message.payload = {
+                ...(payload || {}),
+                argocd: {
+                  webhookReceived: true,
+                  application: applicationName,
+                  repository,
+                  ref,
+                  syncTriggered: true,
+                },
+              };
+            } else {
+              message.status = 'failed';
+              message.error = 'Failed to trigger sync or application already syncing';
+              message.latency = 50;
+            }
+          } else {
+            // Просто отмечаем получение webhook
+            message.status = 'delivered';
+            message.latency = 30;
+            message.payload = {
+              ...(payload || {}),
+              argocd: {
+                webhookReceived: true,
+                repository,
+                ref,
+                syncTriggered: false,
+                reason: 'No application specified',
+              },
+            };
+          }
+        } else if (operation === 'sync' || operation === 'startSync') {
+          // Явный запрос на синхронизацию
+          const applicationName = payload.application || payload.app || message.metadata?.application;
+          if (!applicationName) {
+            message.status = 'failed';
+            message.error = 'Application name is required for sync operation';
+            return message;
+          }
+
+          const success = engine.startSync(applicationName);
+          if (success) {
+            message.status = 'delivered';
+            message.latency = 50;
+            message.payload = {
+              ...(payload || {}),
+              argocd: {
+                operation: 'sync',
+                application: applicationName,
+                syncStarted: true,
+              },
+            };
+          } else {
+            message.status = 'failed';
+            message.error = 'Failed to start sync or application already syncing';
+            message.latency = 50;
+          }
+        } else if (operation === 'getApplicationStatus' || operation === 'getAppStatus' || payload.application) {
+          // API запрос для получения статуса приложения
+          const applicationName = payload.application || payload.app || '';
+          const app = engine.getApplication(applicationName);
+
+          message.status = 'delivered';
+          message.latency = 20; // API latency
+          message.payload = {
+            ...(payload || {}),
+            argocd: {
+              application: applicationName,
+              status: app?.status || 'unknown',
+              health: app?.health || 'unknown',
+              lastSync: app?.lastSync,
+              lastSyncDuration: app?.lastSyncDuration,
+              revision: app?.revision,
+              sourceRevision: app?.sourceRevision,
+            },
+          };
+        } else if (operation === 'getSyncStatus' || payload.syncOperationId) {
+          // API запрос для получения статуса операции синхронизации
+          const syncOperationId = payload.syncOperationId || payload.operationId;
+          const syncOps = engine.getSyncOperations();
+          const syncOp = syncOps.find(op => op.id === syncOperationId);
+
+          message.status = 'delivered';
+          message.latency = 20;
+          message.payload = {
+            ...(payload || {}),
+            argocd: {
+              syncOperationId,
+              status: syncOp?.status || 'unknown',
+              phase: syncOp?.phase,
+              startedAt: syncOp?.startedAt,
+              finishedAt: syncOp?.finishedAt,
+              error: syncOp?.error,
+            },
+          };
+        } else if (operation === 'getMetrics' || operation === 'getStats') {
+          // API запрос для получения метрик
+          const metrics = engine.getMetrics();
+          const stats = engine.getStats();
+
+          message.status = 'delivered';
+          message.latency = 15;
+          message.payload = {
+            ...(payload || {}),
+            argocd: {
+              metrics,
+              stats,
+            },
+          };
+        } else {
+          // Общий API запрос
+          message.status = 'delivered';
+          message.latency = 30;
+          message.payload = {
+            ...(payload || {}),
+            argocd: {
+              processed: true,
+              operation,
+            },
+          };
+        }
+
+        // Обновляем метрики Argo CD (requests)
         engine.processRequest(message.status === 'delivered');
 
         return message;

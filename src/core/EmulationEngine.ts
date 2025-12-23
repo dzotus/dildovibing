@@ -33,6 +33,7 @@ import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
 import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
+import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -219,6 +220,9 @@ export class EmulationEngine {
   // GitLab CI emulation engines per node
   private gitlabCIEngines: Map<string, GitLabCIEmulationEngine> = new Map();
 
+  // Argo CD emulation engines per node
+  private argoCDEngines: Map<string, ArgoCDEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -395,6 +399,9 @@ export class EmulationEngine {
         if (node.type === 'gitlab-ci') {
           this.initializeGitLabCIEngine(node);
         }
+        if (node.type === 'argo-cd') {
+          this.initializeArgoCDEngine(node);
+        }
       }
       
       // Update existing PostgreSQL pools if config changed
@@ -534,6 +541,17 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
+      
+      // Initialize Argo CD emulation engine for Argo CD nodes
+      if (node.type === 'argo-cd') {
+        if (!this.argoCDEngines.has(node.id)) {
+          this.initializeArgoCDEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.argoCDEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -566,6 +584,7 @@ export class EmulationEngine {
         this.idsIpsEngines.delete(nodeId);
         this.jenkinsEngines.delete(nodeId);
         this.gitlabCIEngines.delete(nodeId);
+        this.argoCDEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -791,14 +810,57 @@ export class EmulationEngine {
       gitlabCIEngine.performUpdate(now);
       
       // Update component metrics based on GitLab CI metrics
-      const gitlabCIMetrics = gitlabCIEngine.calculateComponentMetrics();
+      const gitlabMetrics = gitlabCIEngine.getMetrics();
       const componentMetrics = this.metrics.get(nodeId);
-      if (componentMetrics && gitlabCIMetrics) {
-        componentMetrics.throughput = gitlabCIMetrics.throughput || componentMetrics.throughput;
-        componentMetrics.latency = gitlabCIMetrics.latency || componentMetrics.latency;
-        componentMetrics.utilization = gitlabCIMetrics.utilization || componentMetrics.utilization;
-        componentMetrics.errorRate = gitlabCIMetrics.errorRate || componentMetrics.errorRate;
-        componentMetrics.timestamp = now;
+      if (componentMetrics && gitlabMetrics) {
+        // Throughput: pipelines per hour converted to per second
+        componentMetrics.throughput = gitlabMetrics.pipelinesPerHour / 3600;
+        // Latency: average pipeline duration
+        componentMetrics.latency = gitlabMetrics.averagePipelineDuration || 0;
+        // Error rate: failed pipelines / total pipelines
+        const totalPipelines = gitlabMetrics.pipelinesSuccess + gitlabMetrics.pipelinesFailed;
+        componentMetrics.errorRate = totalPipelines > 0 ? gitlabMetrics.pipelinesFailed / totalPipelines : 0;
+        // Utilization: running pipelines / total pipelines
+        componentMetrics.utilization = gitlabMetrics.pipelinesTotal > 0 
+          ? gitlabMetrics.pipelinesRunning / gitlabMetrics.pipelinesTotal 
+          : 0;
+        componentMetrics.customMetrics = {
+          pipelinesTotal: gitlabMetrics.pipelinesTotal,
+          pipelinesRunning: gitlabMetrics.pipelinesRunning,
+          jobsRunning: gitlabMetrics.jobsRunning,
+          runnersOnline: gitlabMetrics.runnersOnline,
+        };
+      }
+    }
+    
+    // Perform Argo CD updates (applications, sync operations, health checks)
+    for (const [nodeId, argoCDEngine] of this.argoCDEngines.entries()) {
+      argoCDEngine.performUpdate(now);
+      
+      // Update component metrics based on Argo CD metrics
+      const argoMetrics = argoCDEngine.getMetrics();
+      const componentMetrics = this.metrics.get(nodeId);
+      if (componentMetrics && argoMetrics) {
+        // Throughput: sync operations per hour converted to per second
+        componentMetrics.throughput = argoMetrics.syncRate / 3600;
+        // Latency: average sync duration
+        componentMetrics.latency = argoMetrics.averageSyncDuration || 0;
+        // Error rate: failed syncs / total syncs
+        const totalSyncs = argoMetrics.syncOperationsSuccess + argoMetrics.syncOperationsFailed;
+        componentMetrics.errorRate = totalSyncs > 0 
+          ? argoMetrics.syncOperationsFailed / totalSyncs 
+          : 0;
+        // Utilization: running syncs / total applications
+        componentMetrics.utilization = argoMetrics.applicationsTotal > 0
+          ? argoMetrics.syncOperationsRunning / argoMetrics.applicationsTotal
+          : 0;
+        componentMetrics.customMetrics = {
+          applicationsTotal: argoMetrics.applicationsTotal,
+          applicationsSynced: argoMetrics.applicationsSynced,
+          applicationsOutOfSync: argoMetrics.applicationsOutOfSync,
+          syncOperationsRunning: argoMetrics.syncOperationsRunning,
+          repositoriesConnected: argoMetrics.repositoriesConnected,
+        };
       }
     }
     
@@ -914,6 +976,9 @@ export class EmulationEngine {
           break;
         case 'ids-ips':
           this.simulateIDSIPS(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'argo-cd':
+          this.simulateArgoCD(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4482,6 +4547,51 @@ export class EmulationEngine {
   }
 
   /**
+   * Argo CD emulation
+   */
+  private simulateArgoCD(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.argoCDEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const argoMetrics = engine.getMetrics();
+    
+    // Throughput: sync operations per hour converted to per second
+    metrics.throughput = argoMetrics.syncRate / 3600;
+    
+    // Latency: average sync duration
+    metrics.latency = argoMetrics.averageSyncDuration || 0;
+    
+    // Error rate: failed syncs / total syncs
+    const totalSyncs = argoMetrics.syncOperationsSuccess + argoMetrics.syncOperationsFailed;
+    metrics.errorRate = totalSyncs > 0 
+      ? argoMetrics.syncOperationsFailed / totalSyncs 
+      : 0;
+    
+    // Utilization: running syncs / total applications
+    metrics.utilization = argoMetrics.applicationsTotal > 0
+      ? argoMetrics.syncOperationsRunning / argoMetrics.applicationsTotal
+      : 0;
+    
+    metrics.customMetrics = {
+      applicationsTotal: argoMetrics.applicationsTotal,
+      applicationsSynced: argoMetrics.applicationsSynced,
+      applicationsOutOfSync: argoMetrics.applicationsOutOfSync,
+      syncOperationsRunning: argoMetrics.syncOperationsRunning,
+      repositoriesConnected: argoMetrics.repositoriesConnected,
+    };
+  }
+
+  /**
    * IDS/IPS emulation
    */
   private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5317,6 +5427,12 @@ export class EmulationEngine {
     this.gitlabCIEngines.set(node.id, engine);
   }
 
+  private initializeArgoCDEngine(node: CanvasNode): void {
+    const engine = new ArgoCDEmulationEngine();
+    engine.initializeConfig(node);
+    this.argoCDEngines.set(node.id, engine);
+  }
+
   /**
    * Проверяет доступность Prometheus для Grafana
    */
@@ -5733,6 +5849,13 @@ export class EmulationEngine {
    */
   public getGitLabCIEmulationEngine(nodeId: string): GitLabCIEmulationEngine | undefined {
     return this.gitlabCIEngines.get(nodeId);
+  }
+
+  /**
+   * Get Argo CD emulation engine for a node
+   */
+  public getArgoCDEmulationEngine(nodeId: string): ArgoCDEmulationEngine | undefined {
+    return this.argoCDEngines.get(nodeId);
   }
 
   /**
