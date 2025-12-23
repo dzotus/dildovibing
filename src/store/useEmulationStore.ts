@@ -5,6 +5,7 @@ import { useDataFlowStore } from './useDataFlowStore';
 import { useCanvasStore } from './useCanvasStore';
 import { useAlertStore } from './useAlertStore';
 import { useDependencyStore } from './useDependencyStore';
+import { useSimulationErrorStore } from './useSimulationErrorStore';
 
 interface EmulationStore {
   isRunning: boolean;
@@ -139,6 +140,9 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
     
     // Update alerts
     useAlertStore.getState().updateAlerts();
+    
+    // Update simulation errors
+    useSimulationErrorStore.getState().updateErrors();
   },
 
   getComponentMetrics: (nodeId) => {

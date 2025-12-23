@@ -88,10 +88,18 @@ export class PrometheusEmulationEngine {
   initializeConfig(node: CanvasNode): void {
     const config = node.data.config || {};
     
+    // Преобразуем scrapeInterval в строку, если это число
+    const scrapeIntervalStr = typeof config.scrapeInterval === 'number' 
+      ? `${config.scrapeInterval / 1000}s` 
+      : (config.scrapeInterval || '15s');
+    const evaluationIntervalStr = typeof config.evaluationInterval === 'number'
+      ? `${config.evaluationInterval / 1000}s`
+      : (config.evaluationInterval || '15s');
+    
     this.config = {
       global: {
-        scrape_interval: config.scrapeInterval || '15s',
-        evaluation_interval: config.evaluationInterval || '15s',
+        scrape_interval: scrapeIntervalStr,
+        evaluation_interval: evaluationIntervalStr,
         external_labels: {
           prometheus: 'archiphoenix',
         },
@@ -346,7 +354,13 @@ export class PrometheusEmulationEngine {
   /**
    * Парсит duration строку (15s, 1m, etc.) в миллисекунды
    */
-  private parseDuration(duration: string): number {
+  private parseDuration(duration: string | number): number {
+    // Если это уже число (миллисекунды), возвращаем как есть
+    if (typeof duration === 'number') return duration;
+    
+    // Если это строка, парсим её
+    if (typeof duration !== 'string') return 15000; // Default 15s
+    
     const match = duration.match(/^(\d+)([smhd])$/);
     if (!match) return 15000; // Default 15s
 

@@ -17,6 +17,7 @@ export interface Alert {
 export class AlertSystem {
   private alerts: Map<string, Alert> = new Map();
   private alertCallbacks: Array<(alert: Alert) => void> = [];
+  private isAnalyzing: boolean = false; // Флаг для предотвращения рекурсии
 
   /**
    * Register callback for new alerts
@@ -34,7 +35,15 @@ export class AlertSystem {
     connectionMetrics: Map<string, ConnectionMetrics>,
     componentStatuses: ComponentStatus[]
   ): Alert[] {
+    // Защита от рекурсии
+    if (this.isAnalyzing) {
+      return [];
+    }
+    
+    this.isAnalyzing = true;
     const newAlerts: Alert[] = [];
+    
+    try {
 
     // Check each component
     for (const node of nodes) {
@@ -148,8 +157,11 @@ export class AlertSystem {
       }
     }
 
-    // Remove resolved alerts
-    this.cleanupResolvedAlerts(nodes, componentMetrics, connectionMetrics, componentStatuses);
+      // Remove resolved alerts
+      this.cleanupResolvedAlerts(nodes, componentMetrics, connectionMetrics, componentStatuses);
+    } finally {
+      this.isAnalyzing = false;
+    }
 
     return newAlerts;
   }

@@ -12,6 +12,7 @@ import { ProblemFilters } from '@/components/emulation/ProblemFilters';
 import { DiagnosticsPanel } from '@/components/emulation/DiagnosticsPanel';
 import { AlertsPanel } from '@/components/emulation/AlertsPanel';
 import { SystemStatsPanel } from '@/components/emulation/SystemStatsPanel';
+import { SimulationErrorsPanel } from '@/components/emulation/SimulationErrorsPanel';
 import { GroupPropertiesPanel } from '@/components/config/GroupPropertiesPanel';
 import { Settings2, X } from 'lucide-react';
 import { PanelTitle, Text } from '@/components/ui/typography';
@@ -56,10 +57,11 @@ export function PropertiesPanel() {
       <div className="w-60 h-full bg-card border-l border-border flex flex-col">
         <Tabs defaultValue="stats" className="h-full flex flex-col">
           <div className="p-1 border-b border-border">
-            <TabsList className="grid w-full grid-cols-5 h-6 gap-0.5 p-0.5">
+            <TabsList className="grid w-full grid-cols-6 h-6 gap-0.5 p-0.5">
               <TabsTrigger value="stats" className="text-xs px-1 py-0.5">Stats</TabsTrigger>
               <TabsTrigger value="diagnostics" className="text-xs px-1 py-0.5">Diag</TabsTrigger>
               <TabsTrigger value="alerts" className="text-xs px-1 py-0.5">Alerts</TabsTrigger>
+              <TabsTrigger value="errors" className="text-xs px-1 py-0.5">Errors</TabsTrigger>
               <TabsTrigger value="filters" className="text-xs px-1 py-0.5">Filter</TabsTrigger>
               <TabsTrigger value="properties" className="text-xs px-1 py-0.5">Groups</TabsTrigger>
             </TabsList>
@@ -76,6 +78,9 @@ export function PropertiesPanel() {
           </TabsContent>
           <TabsContent value="alerts" className="flex-1 m-0 p-0 overflow-hidden">
             <AlertsPanel />
+          </TabsContent>
+          <TabsContent value="errors" className="flex-1 m-0 p-0 overflow-hidden">
+            <SimulationErrorsPanel />
           </TabsContent>
           <TabsContent value="filters" className="flex-1 m-0 p-0 overflow-hidden">
             <ScrollArea className="h-full">

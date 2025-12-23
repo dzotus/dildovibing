@@ -1,1 +1,0 @@
-import{a6 as i}from"./index-2Qx8irw2.js";function n(o){i.success(o,{duration:3e3,position:"top-right"})}function s(o){i.error(o,{duration:4e3,position:"top-right"})}function r(o){i(o,{duration:3e3,position:"top-right",icon:"ℹ️"})}function a(o){i(o,{duration:4e3,position:"top-right",icon:"⚠️"})}export{n as a,r as b,a as c,s};

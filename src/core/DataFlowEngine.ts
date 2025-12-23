@@ -135,6 +135,7 @@ export class DataFlowEngine {
     this.registerHandler('jenkins', this.createJenkinsHandler());
     this.registerHandler('gitlab-ci', this.createGitLabCIHandler());
     this.registerHandler('argo-cd', this.createArgoCDHandler());
+    this.registerHandler('terraform', this.createTerraformHandler());
   }
 
   /**
@@ -3161,6 +3162,252 @@ export class DataFlowEngine {
         }
 
         // Обновляем метрики Argo CD (requests)
+        engine.processRequest(message.status === 'delivered');
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Terraform (IaC)
+   * Обрабатывает webhook триггеры, API запросы для запуска runs, получения статусов, делегирует расчёт нагрузки TerraformEmulationEngine.
+   */
+  private createTerraformHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getTerraformEmulationEngine(node.id);
+
+        if (!engine) {
+          // Если движок не инициализирован, считаем, что Terraform недоступен
+          message.status = 'failed';
+          message.error = 'Terraform engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'webhook';
+
+        // Определяем тип операции
+        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit || payload.repository) {
+          // VCS webhook trigger - запускаем run для workspace
+          const workspaceName = payload.workspace || payload.workspaceId || '';
+          const workspaceId = payload.workspaceId || payload.workspace;
+          const branch = payload.ref?.replace('refs/heads/', '') || payload.branch || 'main';
+          const commit = payload.commit || payload.sha || undefined;
+
+          if (workspaceName || workspaceId) {
+            // Находим workspace по имени или ID
+            const workspaces = engine.getWorkspaces();
+            const workspace = workspaceId 
+              ? workspaces.find(w => w.id === workspaceId)
+              : workspaces.find(w => w.name === workspaceName);
+            
+            if (workspace) {
+              const result = engine.triggerRun(workspace.id, { 
+                planOnly: payload.planOnly ?? false,
+                source: 'vcs',
+                triggeredBy: 'vcs-webhook'
+              });
+              
+              if (result.success) {
+                message.status = 'delivered';
+                message.latency = 50; // Webhook processing latency
+                message.payload = {
+                  ...(payload || {}),
+                  terraform: {
+                    webhookReceived: true,
+                    workspaceId: workspace.id,
+                    workspaceName: workspace.name,
+                    branch,
+                    commit,
+                    runTriggered: true,
+                    runId: result.runId,
+                  },
+                };
+              } else {
+                message.status = 'failed';
+                message.error = result.reason || 'Failed to trigger run';
+                message.latency = 50;
+              }
+            } else {
+              message.status = 'failed';
+              message.error = 'Workspace not found';
+              message.latency = 50;
+            }
+          } else {
+            // Просто отмечаем получение webhook
+            message.status = 'delivered';
+            message.latency = 30;
+            message.payload = {
+              ...(payload || {}),
+              terraform: {
+                webhookReceived: true,
+                branch,
+                commit,
+                runTriggered: false,
+                reason: 'No workspace specified',
+              },
+            };
+          }
+        } else if (operation === 'triggerRun' || operation === 'createRun' || operation === 'run') {
+          // Явный запрос на запуск run
+          const workspaceId = payload.workspaceId || payload.workspace || message.metadata?.workspaceId;
+          const planOnly = payload.planOnly ?? false;
+
+          if (!workspaceId) {
+            message.status = 'failed';
+            message.error = 'Workspace ID is required for run operation';
+            return message;
+          }
+
+          const result = engine.triggerRun(workspaceId, {
+            planOnly,
+            source: 'api',
+            triggeredBy: payload.triggeredBy || 'user'
+          });
+          
+          if (result.success) {
+            message.status = 'delivered';
+            message.latency = 50;
+            message.payload = {
+              ...(payload || {}),
+              terraform: {
+                operation: 'triggerRun',
+                workspaceId,
+                planOnly,
+                runId: result.runId,
+                runTriggered: true,
+              },
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.reason || 'Failed to trigger run';
+            message.latency = 50;
+          }
+        } else if (operation === 'cancelRun' || operation === 'cancel') {
+          // Запрос на отмену run
+          const runId = payload.runId || payload.run || message.metadata?.runId;
+
+          if (!runId) {
+            message.status = 'failed';
+            message.error = 'Run ID is required for cancel operation';
+            return message;
+          }
+
+          const result = engine.cancelRun(runId);
+          
+          if (result.success) {
+            message.status = 'delivered';
+            message.latency = 30;
+            message.payload = {
+              ...(payload || {}),
+              terraform: {
+                operation: 'cancelRun',
+                runId,
+                canceled: true,
+              },
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.reason || 'Failed to cancel run';
+            message.latency = 30;
+          }
+        } else if (operation === 'getRunStatus' || operation === 'getRun' || payload.runId) {
+          // API запрос для получения статуса run
+          const runId = payload.runId || payload.run || '';
+          const run = engine.getRun(runId);
+
+          message.status = 'delivered';
+          message.latency = 20; // API latency
+          message.payload = {
+            ...(payload || {}),
+            terraform: {
+              runId,
+              status: run?.status || 'unknown',
+              workspaceId: run?.workspaceId,
+              workspaceName: run?.workspaceName,
+              createdAt: run?.createdAt,
+              startedAt: run?.startedAt,
+              finishedAt: run?.finishedAt,
+              duration: run?.duration,
+              planOnly: run?.planOnly,
+              message: run?.message,
+              error: run?.error,
+              hasChanges: run?.hasChanges,
+              resourceAdditions: run?.resourceAdditions,
+              resourceChanges: run?.resourceChanges,
+              resourceDestructions: run?.resourceDestructions,
+            },
+          };
+        } else if (operation === 'getWorkspaceStatus' || operation === 'getWorkspace' || payload.workspaceId) {
+          // API запрос для получения статуса workspace
+          const workspaceId = payload.workspaceId || payload.workspace || '';
+          const workspace = engine.getWorkspace(workspaceId);
+          const state = workspace ? engine.getStateForWorkspace(workspaceId) : undefined;
+
+          message.status = 'delivered';
+          message.latency = 20;
+          message.payload = {
+            ...(payload || {}),
+            terraform: {
+              workspaceId,
+              workspace: workspace ? {
+                id: workspace.id,
+                name: workspace.name,
+                description: workspace.description,
+                terraformVersion: workspace.terraformVersion,
+                autoApply: workspace.autoApply,
+                lastRun: workspace.lastRun,
+              } : null,
+              state: state ? {
+                version: state.version,
+                serial: state.serial,
+                resources: state.resources,
+                updatedAt: state.updatedAt,
+              } : null,
+            },
+          };
+        } else if (operation === 'getMetrics' || operation === 'getStats') {
+          // API запрос для получения метрик
+          const metrics = engine.getMetrics();
+
+          message.status = 'delivered';
+          message.latency = 20;
+          message.payload = {
+            ...(payload || {}),
+            terraform: {
+              metrics: {
+                workspacesTotal: metrics.workspacesTotal,
+                runsTotal: metrics.runsTotal,
+                runsSuccess: metrics.runsSuccess,
+                runsFailed: metrics.runsFailed,
+                runsRunning: metrics.runsRunning,
+                runsPending: metrics.runsPending,
+                runsPerHour: metrics.runsPerHour,
+                averageRunDuration: metrics.averageRunDuration,
+                statesTotal: metrics.statesTotal,
+                resourcesManaged: metrics.resourcesManaged,
+              },
+            },
+          };
+        } else {
+          // Общий API запрос
+          message.status = 'delivered';
+          message.latency = 30;
+          message.payload = {
+            ...(payload || {}),
+            terraform: {
+              processed: true,
+              operation,
+            },
+          };
+        }
+
+        // Обновляем метрики Terraform (requests)
         engine.processRequest(message.status === 'delivered');
 
         return message;

@@ -1,0 +1,344 @@
+{
+  "version": "1.0.0",
+  "name": "Terraform Test Configuration",
+  "createdAt": "2024-01-20T10:00:00.000Z",
+  "updatedAt": "2024-01-20T10:00:00.000Z",
+  "nodes": [
+    {
+      "id": "terraform-1",
+      "type": "terraform",
+      "position": { "x": 400, "y": 300 },
+      "data": {
+        "label": "Terraform Cloud",
+        "config": {
+          "organizationName": "archiphoenix",
+          "enableVCS": true,
+          "enableStateLocking": true,
+          "enableRemoteState": true,
+          "defaultTerraformVersion": "1.5.0",
+          "workspaces": [
+            {
+              "id": "prod-ws",
+              "name": "production",
+              "description": "Production infrastructure workspace",
+              "terraformVersion": "1.5.0",
+              "autoApply": false,
+              "queueAllRuns": true,
+              "workingDirectory": "/terraform/production",
+              "vcsRepo": {
+                "identifier": "archiphoenix/infrastructure",
+                "branch": "main",
+                "oauthTokenId": "token-123"
+              },
+              "variables": [
+                {
+                  "key": "environment",
+                  "value": "production",
+                  "category": "terraform",
+                  "sensitive": false
+                },
+                {
+                  "key": "aws_region",
+                  "value": "us-east-1",
+                  "category": "terraform",
+                  "sensitive": false
+                }
+              ]
+            },
+            {
+              "id": "staging-ws",
+              "name": "staging",
+              "description": "Staging environment workspace",
+              "terraformVersion": "1.5.0",
+              "autoApply": true,
+              "queueAllRuns": true,
+              "workingDirectory": "/terraform/staging",
+              "vcsRepo": {
+                "identifier": "archiphoenix/infrastructure",
+                "branch": "staging",
+                "oauthTokenId": "token-123"
+              }
+            },
+            {
+              "id": "dev-ws",
+              "name": "development",
+              "description": "Development workspace",
+              "terraformVersion": "1.4.0",
+              "autoApply": true,
+              "queueAllRuns": false,
+              "workingDirectory": "/terraform/dev"
+            }
+          ],
+          "runs": [
+            {
+              "id": "run-prod-1",
+              "workspace": "production",
+              "status": "applied",
+              "createdAt": "2024-01-20T09:00:00.000Z",
+              "planOnly": false,
+              "message": "Apply completed successfully",
+              "duration": 120000
+            },
+            {
+              "id": "run-staging-1",
+              "workspace": "staging",
+              "status": "planning",
+              "createdAt": "2024-01-20T09:30:00.000Z",
+              "planOnly": false
+            }
+          ],
+          "states": [
+            {
+              "id": "state-prod",
+              "workspace": "production",
+              "version": 5,
+              "serial": 5,
+              "resources": 42,
+              "updatedAt": "2024-01-20T09:00:00.000Z"
+            },
+            {
+              "id": "state-staging",
+              "workspace": "staging",
+              "version": 12,
+              "serial": 12,
+              "resources": 28,
+              "updatedAt": "2024-01-20T08:45:00.000Z"
+            }
+          ],
+          "runTriggerRate": 0.5,
+          "averagePlanDuration": 30000,
+          "averageApplyDuration": 120000,
+          "failureRate": 0.05
+        }
+      }
+    },
+    {
+      "id": "gitlab-ci-1",
+      "type": "gitlab-ci",
+      "position": { "x": 200, "y": 300 },
+      "data": {
+        "label": "GitLab CI",
+        "config": {
+          "gitlabUrl": "https://gitlab.com",
+          "projectId": "123",
+          "projectUrl": "https://gitlab.com/archiphoenix/infrastructure",
+          "enableRunners": true,
+          "runnerType": "docker",
+          "concurrentJobs": 4,
+          "enableCache": true,
+          "pipelines": [
+            {
+              "id": "pipeline-1",
+              "name": "Infrastructure Pipeline",
+              "status": "success",
+              "lastBuild": 10,
+              "enabled": true,
+              "branch": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "kubernetes-1",
+      "type": "kubernetes",
+      "position": { "x": 600, "y": 300 },
+      "data": {
+        "label": "Kubernetes Cluster",
+        "config": {
+          "clusterName": "production-cluster",
+          "namespace": "default",
+          "nodeCount": 3
+        }
+      }
+    },
+    {
+      "id": "argo-cd-1",
+      "type": "argo-cd",
+      "position": { "x": 400, "y": 500 },
+      "data": {
+        "label": "Argo CD",
+        "config": {
+          "serverUrl": "https://argocd.example.com",
+          "autoSync": true,
+          "syncPolicy": "automated",
+          "applications": [
+            {
+              "name": "web-app",
+              "namespace": "production",
+              "repository": "https://github.com/archiphoenix/web-app",
+              "path": "k8s",
+              "targetRevision": "main",
+              "syncPolicy": "automated",
+              "status": "synced",
+              "health": "healthy"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "vault-1",
+      "type": "secrets-vault",
+      "position": { "x": 200, "y": 500 },
+      "data": {
+        "label": "HashiCorp Vault",
+        "config": {
+          "vaultUrl": "https://vault.example.com",
+          "enableKV": true,
+          "enableTransit": true,
+          "secretsEngines": [
+            {
+              "path": "secret",
+              "type": "kv-v2",
+              "enabled": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "webhook-1",
+      "type": "webhook",
+      "position": { "x": 200, "y": 100 },
+      "data": {
+        "label": "GitHub Webhook",
+        "config": {
+          "endpoint": "/webhook/github",
+          "method": "POST",
+          "enabled": true
+        }
+      }
+    },
+    {
+      "id": "prometheus-1",
+      "type": "prometheus",
+      "position": { "x": 600, "y": 100 },
+      "data": {
+        "label": "Prometheus",
+      "config": {
+        "scrapeInterval": "15s",
+        "retentionDays": 15,
+        "targets": [
+          {
+            "job": "kubernetes",
+            "endpoint": "http://k8s:8080/metrics",
+            "enabled": true,
+            "metricsPath": "/metrics",
+            "interval": "15s"
+          }
+        ]
+      }
+      }
+    },
+    {
+      "id": "grafana-1",
+      "type": "grafana",
+      "position": { "x": 800, "y": 100 },
+      "data": {
+        "label": "Grafana",
+        "config": {
+          "grafanaUrl": "https://grafana.example.com",
+          "datasources": [
+            {
+              "name": "Prometheus",
+              "type": "prometheus",
+              "url": "http://prometheus:9090",
+              "enabled": true
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn-1",
+      "source": "gitlab-ci-1",
+      "target": "terraform-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "Pipeline → Terraform",
+        "protocol": "webhook",
+        "format": "json"
+      }
+    },
+    {
+      "id": "conn-2",
+      "source": "webhook-1",
+      "target": "terraform-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "GitHub Webhook → Terraform",
+        "protocol": "webhook",
+        "format": "json"
+      }
+    },
+    {
+      "id": "conn-3",
+      "source": "terraform-1",
+      "target": "kubernetes-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "Terraform → K8s Deploy",
+        "protocol": "api",
+        "format": "json"
+      }
+    },
+    {
+      "id": "conn-4",
+      "source": "terraform-1",
+      "target": "argo-cd-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "Terraform → Argo CD",
+        "protocol": "api",
+        "format": "json"
+      }
+    },
+    {
+      "id": "conn-5",
+      "source": "vault-1",
+      "target": "terraform-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "Vault → Terraform Secrets",
+        "protocol": "api",
+        "format": "json"
+      }
+    },
+    {
+      "id": "conn-6",
+      "source": "kubernetes-1",
+      "target": "prometheus-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "K8s Metrics → Prometheus",
+        "protocol": "http",
+        "format": "prometheus"
+      }
+    },
+    {
+      "id": "conn-7",
+      "source": "prometheus-1",
+      "target": "grafana-1",
+      "sourceHandle": "output",
+      "targetHandle": "input",
+      "data": {
+        "label": "Prometheus → Grafana",
+        "protocol": "api",
+        "format": "json"
+      }
+    }
+  ],
+  "groups": [],
+  "zoom": 1,
+  "pan": { "x": 0, "y": 0 }
+}
+

@@ -34,6 +34,8 @@ import { VaultEmulationEngine } from './VaultEmulationEngine';
 import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
+import { TerraformEmulationEngine } from './TerraformEmulationEngine';
+import { errorCollector } from './ErrorCollector';
 
 /**
  * Component runtime state with real-time metrics
@@ -223,6 +225,9 @@ export class EmulationEngine {
   // Argo CD emulation engines per node
   private argoCDEngines: Map<string, ArgoCDEmulationEngine> = new Map();
 
+  // Terraform emulation engines per node
+  private terraformEngines: Map<string, TerraformEmulationEngine> = new Map();
+
   constructor() {
     this.initializeMetrics();
   }
@@ -379,19 +384,74 @@ export class EmulationEngine {
           this.initializePagerDutyEngine(node);
         }
         if (node.type === 'keycloak') {
-          this.initializeKeycloakEngine(node);
+          try {
+            this.initializeKeycloakEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeKeycloakEngine' },
+            });
+          }
         }
         if (node.type === 'secrets-vault') {
-          this.initializeVaultEngine(node);
+          try {
+            this.initializeVaultEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeVaultEngine' },
+            });
+          }
         }
         if (node.type === 'waf') {
-          this.initializeWAFEngine(node);
+          try {
+            this.initializeWAFEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeWAFEngine' },
+            });
+          }
         }
         if (node.type === 'firewall') {
-          this.initializeFirewallEngine(node);
+          try {
+            this.initializeFirewallEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeFirewallEngine' },
+            });
+          }
         }
         if (node.type === 'ids-ips') {
-          this.initializeIDSIPSEngine(node);
+          try {
+            this.initializeIDSIPSEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeIDSIPSEngine' },
+            });
+          }
         }
         if (node.type === 'jenkins') {
           this.initializeJenkinsEngine(node);
@@ -401,6 +461,9 @@ export class EmulationEngine {
         }
         if (node.type === 'argo-cd') {
           this.initializeArgoCDEngine(node);
+        }
+        if (node.type === 'terraform') {
+          this.initializeTerraformEngine(node);
         }
       }
       
@@ -507,17 +570,65 @@ export class EmulationEngine {
       
       // Initialize WAF emulation engine for WAF nodes
       if (node.type === 'waf') {
-        this.initializeWAFEngine(node);
+        try {
+          if (!this.wafEngines.has(node.id)) {
+            this.initializeWAFEngine(node);
+          } else {
+            const engine = this.wafEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeWAFEngine' },
+          });
+        }
       }
       
       // Initialize Firewall emulation engine for Firewall nodes
       if (node.type === 'firewall') {
-        this.initializeFirewallEngine(node);
+        try {
+          if (!this.firewallEngines.has(node.id)) {
+            this.initializeFirewallEngine(node);
+          } else {
+            const engine = this.firewallEngines.get(node.id)!;
+            engine.initializeConfig(node); // FirewallEmulationEngine uses initializeConfig for updates
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeFirewallEngine' },
+          });
+        }
       }
       
       // Initialize IDS/IPS emulation engine for IDS/IPS nodes
       if (node.type === 'ids-ips') {
-        this.initializeIDSIPSEngine(node);
+        try {
+          if (!this.idsIpsEngines.has(node.id)) {
+            this.initializeIDSIPSEngine(node);
+          } else {
+            const engine = this.idsIpsEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeIDSIPSEngine' },
+          });
+        }
       }
       
       // Initialize Jenkins emulation engine for Jenkins nodes
@@ -550,6 +661,17 @@ export class EmulationEngine {
           // Update config if engine already exists
           const engine = this.argoCDEngines.get(node.id)!;
           engine.initializeConfig(node);
+        }
+      }
+      
+      // Initialize Terraform emulation engine for Terraform nodes
+      if (node.type === 'terraform') {
+        if (!this.terraformEngines.has(node.id)) {
+          this.initializeTerraformEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.terraformEngines.get(node.id)!;
+          engine.updateConfig(node);
         }
       }
     }
@@ -645,6 +767,12 @@ export class EmulationEngine {
         this.simulate();
       } catch (error) {
         console.error('Error in simulation step:', error);
+        // Записываем ошибку в ErrorCollector
+        errorCollector.addError(error as Error, {
+          severity: 'critical',
+          source: 'emulation-engine',
+          context: { simulationTime: this.simulationTime },
+        });
         // Don't stop simulation on error, just log it
       }
     }, this.updateInterval);
@@ -745,12 +873,20 @@ export class EmulationEngine {
     }
 
     // Analyze system alerts based on fresh metrics
-    alertSystem.analyze(
-      this.nodes,
-      this.metrics,
-      this.connectionMetrics,
-      [] // dependency statuses are provided from DependencyGraphEngine in UI layer
-    );
+    try {
+      alertSystem.analyze(
+        this.nodes,
+        this.metrics,
+        this.connectionMetrics,
+        [] // dependency statuses are provided from DependencyGraphEngine in UI layer
+      );
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'alert-system',
+        context: { operation: 'analyze' },
+      });
+    }
 
     const currentAlerts = alertSystem.getAlerts();
 
@@ -791,87 +927,147 @@ export class EmulationEngine {
     
     // Perform Jenkins updates (builds, pipelines, executors)
     for (const [nodeId, jenkinsEngine] of this.jenkinsEngines.entries()) {
-      jenkinsEngine.performUpdate(now);
-      
-      // Update component metrics based on Jenkins metrics
-      const jenkinsMetrics = jenkinsEngine.calculateComponentMetrics();
-      const componentMetrics = this.metrics.get(nodeId);
-      if (componentMetrics && jenkinsMetrics) {
-        componentMetrics.throughput = jenkinsMetrics.throughput || componentMetrics.throughput;
-        componentMetrics.latency = jenkinsMetrics.latency || componentMetrics.latency;
-        componentMetrics.utilization = (jenkinsMetrics.utilization || 0) / 100; // Convert to 0-1
-        componentMetrics.errorRate = (jenkinsMetrics.errorRate || 0) / 100; // Convert to 0-1
-        componentMetrics.timestamp = now;
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        jenkinsEngine.performUpdate(now);
+        
+        // Update component metrics based on Jenkins metrics
+        const jenkinsMetrics = jenkinsEngine.calculateComponentMetrics();
+        const componentMetrics = this.metrics.get(nodeId);
+        if (componentMetrics && jenkinsMetrics) {
+          componentMetrics.throughput = jenkinsMetrics.throughput || componentMetrics.throughput;
+          componentMetrics.latency = jenkinsMetrics.latency || componentMetrics.latency;
+          componentMetrics.utilization = (jenkinsMetrics.utilization || 0) / 100; // Convert to 0-1
+          componentMetrics.errorRate = (jenkinsMetrics.errorRate || 0) / 100; // Convert to 0-1
+          componentMetrics.timestamp = now;
+        }
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'jenkins', operation: 'performUpdate' },
+        });
       }
     }
     
     // Perform GitLab CI updates (pipelines, jobs, runners)
     for (const [nodeId, gitlabCIEngine] of this.gitlabCIEngines.entries()) {
-      gitlabCIEngine.performUpdate(now);
-      
-      // Update component metrics based on GitLab CI metrics
-      const gitlabMetrics = gitlabCIEngine.getMetrics();
-      const componentMetrics = this.metrics.get(nodeId);
-      if (componentMetrics && gitlabMetrics) {
-        // Throughput: pipelines per hour converted to per second
-        componentMetrics.throughput = gitlabMetrics.pipelinesPerHour / 3600;
-        // Latency: average pipeline duration
-        componentMetrics.latency = gitlabMetrics.averagePipelineDuration || 0;
-        // Error rate: failed pipelines / total pipelines
-        const totalPipelines = gitlabMetrics.pipelinesSuccess + gitlabMetrics.pipelinesFailed;
-        componentMetrics.errorRate = totalPipelines > 0 ? gitlabMetrics.pipelinesFailed / totalPipelines : 0;
-        // Utilization: running pipelines / total pipelines
-        componentMetrics.utilization = gitlabMetrics.pipelinesTotal > 0 
-          ? gitlabMetrics.pipelinesRunning / gitlabMetrics.pipelinesTotal 
-          : 0;
-        componentMetrics.customMetrics = {
-          pipelinesTotal: gitlabMetrics.pipelinesTotal,
-          pipelinesRunning: gitlabMetrics.pipelinesRunning,
-          jobsRunning: gitlabMetrics.jobsRunning,
-          runnersOnline: gitlabMetrics.runnersOnline,
-        };
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        gitlabCIEngine.performUpdate(now);
+        
+        // Update component metrics based on GitLab CI metrics
+        const gitlabMetrics = gitlabCIEngine.getMetrics();
+        const componentMetrics = this.metrics.get(nodeId);
+        if (componentMetrics && gitlabMetrics) {
+          // Throughput: pipelines per hour converted to per second
+          componentMetrics.throughput = gitlabMetrics.pipelinesPerHour / 3600;
+          // Latency: average pipeline duration
+          componentMetrics.latency = gitlabMetrics.averagePipelineDuration || 0;
+          // Error rate: failed pipelines / total pipelines
+          const totalPipelines = gitlabMetrics.pipelinesSuccess + gitlabMetrics.pipelinesFailed;
+          componentMetrics.errorRate = totalPipelines > 0 ? gitlabMetrics.pipelinesFailed / totalPipelines : 0;
+          // Utilization: running pipelines / total pipelines
+          componentMetrics.utilization = gitlabMetrics.pipelinesTotal > 0 
+            ? gitlabMetrics.pipelinesRunning / gitlabMetrics.pipelinesTotal 
+            : 0;
+          componentMetrics.customMetrics = {
+            pipelinesTotal: gitlabMetrics.pipelinesTotal,
+            pipelinesRunning: gitlabMetrics.pipelinesRunning,
+            jobsRunning: gitlabMetrics.jobsRunning,
+            runnersOnline: gitlabMetrics.runnersOnline,
+          };
+        }
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'gitlab-ci', operation: 'performUpdate' },
+        });
       }
     }
     
     // Perform Argo CD updates (applications, sync operations, health checks)
     for (const [nodeId, argoCDEngine] of this.argoCDEngines.entries()) {
-      argoCDEngine.performUpdate(now);
-      
-      // Update component metrics based on Argo CD metrics
-      const argoMetrics = argoCDEngine.getMetrics();
-      const componentMetrics = this.metrics.get(nodeId);
-      if (componentMetrics && argoMetrics) {
-        // Throughput: sync operations per hour converted to per second
-        componentMetrics.throughput = argoMetrics.syncRate / 3600;
-        // Latency: average sync duration
-        componentMetrics.latency = argoMetrics.averageSyncDuration || 0;
-        // Error rate: failed syncs / total syncs
-        const totalSyncs = argoMetrics.syncOperationsSuccess + argoMetrics.syncOperationsFailed;
-        componentMetrics.errorRate = totalSyncs > 0 
-          ? argoMetrics.syncOperationsFailed / totalSyncs 
-          : 0;
-        // Utilization: running syncs / total applications
-        componentMetrics.utilization = argoMetrics.applicationsTotal > 0
-          ? argoMetrics.syncOperationsRunning / argoMetrics.applicationsTotal
-          : 0;
-        componentMetrics.customMetrics = {
-          applicationsTotal: argoMetrics.applicationsTotal,
-          applicationsSynced: argoMetrics.applicationsSynced,
-          applicationsOutOfSync: argoMetrics.applicationsOutOfSync,
-          syncOperationsRunning: argoMetrics.syncOperationsRunning,
-          repositoriesConnected: argoMetrics.repositoriesConnected,
-        };
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        argoCDEngine.performUpdate(now);
+        
+        // Update component metrics based on Argo CD metrics
+        const argoMetrics = argoCDEngine.getMetrics();
+        const componentMetrics = this.metrics.get(nodeId);
+        if (componentMetrics && argoMetrics) {
+          // Throughput: sync operations per hour converted to per second
+          componentMetrics.throughput = argoMetrics.syncRate / 3600;
+          // Latency: average sync duration
+          componentMetrics.latency = argoMetrics.averageSyncDuration || 0;
+          // Error rate: failed syncs / total syncs
+          const totalSyncs = argoMetrics.syncOperationsSuccess + argoMetrics.syncOperationsFailed;
+          componentMetrics.errorRate = totalSyncs > 0 
+            ? argoMetrics.syncOperationsFailed / totalSyncs 
+            : 0;
+          // Utilization: running syncs / total applications
+          componentMetrics.utilization = argoMetrics.applicationsTotal > 0
+            ? argoMetrics.syncOperationsRunning / argoMetrics.applicationsTotal
+            : 0;
+          componentMetrics.customMetrics = {
+            applicationsTotal: argoMetrics.applicationsTotal,
+            applicationsSynced: argoMetrics.applicationsSynced,
+            applicationsOutOfSync: argoMetrics.applicationsOutOfSync,
+            syncOperationsRunning: argoMetrics.syncOperationsRunning,
+            repositoriesConnected: argoMetrics.repositoriesConnected,
+          };
+        }
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'argo-cd', operation: 'performUpdate' },
+        });
       }
     }
     
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
-      otelEngine.processBatchFlush();
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        otelEngine.processBatchFlush();
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'opentelemetry', operation: 'processBatchFlush' },
+        });
+      }
     }
     
     // Update connection metrics based on source/target throughput
     for (const connection of this.connections) {
-      this.updateConnectionMetrics(connection);
+      try {
+        this.updateConnectionMetrics(connection);
+      } catch (error) {
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'emulation-engine',
+          context: { operation: 'updateConnectionMetrics', connectionId: connection.id },
+        });
+      }
     }
   }
 
@@ -979,6 +1175,9 @@ export class EmulationEngine {
           break;
         case 'argo-cd':
           this.simulateArgoCD(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'terraform':
+          this.simulateTerraform(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4592,6 +4791,56 @@ export class EmulationEngine {
   }
 
   /**
+   * Terraform emulation
+   */
+  private simulateTerraform(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.terraformEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const terraformMetrics = engine.getMetrics();
+    
+    // Throughput: runs per hour converted to per second
+    metrics.throughput = terraformMetrics.runsPerHour / 3600;
+    
+    // Latency: average run duration
+    metrics.latency = terraformMetrics.averageRunDuration || 0;
+    
+    // Error rate: failed runs / total runs
+    const totalRuns = terraformMetrics.runsSuccess + terraformMetrics.runsFailed;
+    metrics.errorRate = totalRuns > 0 
+      ? terraformMetrics.runsFailed / totalRuns 
+      : 0;
+    
+    // Utilization: running runs / total workspaces
+    metrics.utilization = terraformMetrics.workspacesTotal > 0
+      ? Math.min(1, terraformMetrics.runsRunning / terraformMetrics.workspacesTotal)
+      : 0;
+    
+    metrics.customMetrics = {
+      workspacesTotal: terraformMetrics.workspacesTotal,
+      runsTotal: terraformMetrics.runsTotal,
+      runsRunning: terraformMetrics.runsRunning,
+      runsPending: terraformMetrics.runsPending,
+      runsSuccess: terraformMetrics.runsSuccess,
+      runsFailed: terraformMetrics.runsFailed,
+      statesTotal: terraformMetrics.statesTotal,
+      resourcesManaged: terraformMetrics.resourcesManaged,
+      runsPerHour: terraformMetrics.runsPerHour,
+      averageRunDuration: terraformMetrics.averageRunDuration,
+    };
+  }
+
+  /**
    * IDS/IPS emulation
    */
   private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5401,6 +5650,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Firewall emulation engine for a node
+   */
+  private initializeFirewallEngine(node: CanvasNode): void {
+    const engine = new FirewallEmulationEngine();
+    engine.initializeConfig(node);
+    this.firewallEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize IDS/IPS emulation engine for a node
    */
   private initializeIDSIPSEngine(node: CanvasNode): void {
@@ -5431,6 +5689,15 @@ export class EmulationEngine {
     const engine = new ArgoCDEmulationEngine();
     engine.initializeConfig(node);
     this.argoCDEngines.set(node.id, engine);
+  }
+
+  /**
+   * Initialize Terraform Emulation Engine for Terraform node
+   */
+  private initializeTerraformEngine(node: CanvasNode): void {
+    const engine = new TerraformEmulationEngine();
+    engine.initializeConfig(node);
+    this.terraformEngines.set(node.id, engine);
   }
 
   /**
@@ -5856,6 +6123,13 @@ export class EmulationEngine {
    */
   public getArgoCDEmulationEngine(nodeId: string): ArgoCDEmulationEngine | undefined {
     return this.argoCDEngines.get(nodeId);
+  }
+
+  /**
+   * Get Terraform emulation engine for a node
+   */
+  public getTerraformEmulationEngine(nodeId: string): TerraformEmulationEngine | undefined {
+    return this.terraformEngines.get(nodeId);
   }
 
   /**

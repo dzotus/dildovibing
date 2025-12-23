@@ -1,4 +1,7 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { TerraformEmulationEngine, TerraformWorkspace, TerraformRun, TerraformState } from '@/core/TerraformEmulationEngine';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,7 +13,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { useState, useEffect, useMemo } from 'react';
+import { useToast } from '@/hooks/use-toast';
 import { 
   Settings, 
   Activity,
@@ -23,7 +28,15 @@ import {
   Clock,
   FileText,
   Layers,
-  Cloud
+  Cloud,
+  Edit,
+  Search,
+  Filter,
+  X,
+  AlertCircle,
+  GitBranch,
+  Save,
+  Ban
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -83,9 +96,15 @@ interface TerraformConfig {
 
 export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { isRunning, getComponentMetrics } = useEmulationStore();
+  const { toast } = useToast();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
+
+  // Get Terraform emulation engine
+  const terraformEngine = emulationEngine.getTerraformEmulationEngine(componentId);
+  const componentMetrics = getComponentMetrics(componentId);
 
   const config = (node.data.config as any) || {} as TerraformConfig;
   const workspaces = config.workspaces || [
@@ -125,12 +144,90 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
       updatedAt: new Date().toISOString(),
     },
   ];
-  const totalWorkspaces = config.totalWorkspaces || workspaces.length;
-  const activeRuns = config.activeRuns || runs.filter((r) => ['pending', 'planning', 'applying'].includes(r.status)).length;
-  const completedRuns = config.completedRuns || runs.filter((r) => r.status === 'applied').length;
 
+  // State declarations
   const [editingWorkspaceIndex, setEditingWorkspaceIndex] = useState<number | null>(null);
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
+  const [realWorkspaces, setRealWorkspaces] = useState<TerraformWorkspace[]>([]);
+  const [realRuns, setRealRuns] = useState<TerraformRun[]>([]);
+  const [realStates, setRealStates] = useState<TerraformState[]>([]);
+  const [realMetrics, setRealMetrics] = useState<any>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [runFilter, setRunFilter] = useState<'all' | 'active' | 'success' | 'failed'>('all');
+  const [selectedRun, setSelectedRun] = useState<string | null>(null);
+  const [showRunDetails, setShowRunDetails] = useState(false);
+
+  // Use real data from emulation if available, otherwise fallback to config
+  const displayWorkspaces = realWorkspaces.length > 0 ? realWorkspaces : workspaces;
+  const displayRuns = realRuns.length > 0 ? realRuns : runs;
+  const displayStates = realStates.length > 0 ? realStates : states;
+
+  const totalWorkspaces = realMetrics?.workspacesTotal || displayWorkspaces.length;
+  const activeRuns = realMetrics?.runsRunning || displayRuns.filter((r: any) => ['pending', 'planning', 'applying'].includes(r.status)).length;
+  const completedRuns = realMetrics?.runsSuccess || displayRuns.filter((r: any) => r.status === 'applied').length;
+
+  // Filtered runs based on search and filter
+  const filteredRuns = useMemo(() => {
+    let filtered = displayRuns;
+    
+    if (searchQuery) {
+      filtered = filtered.filter((run: any) => 
+        run.workspaceName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        run.id?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    
+    if (runFilter === 'active') {
+      filtered = filtered.filter((run: any) => ['pending', 'planning', 'applying'].includes(run.status));
+    } else if (runFilter === 'success') {
+      filtered = filtered.filter((run: any) => run.status === 'applied');
+    } else if (runFilter === 'failed') {
+      filtered = filtered.filter((run: any) => run.status === 'errored');
+    }
+    
+    return filtered.sort((a: any, b: any) => {
+      const aTime = a.createdAt ? (typeof a.createdAt === 'string' ? new Date(a.createdAt).getTime() : a.createdAt) : 0;
+      const bTime = b.createdAt ? (typeof b.createdAt === 'string' ? new Date(b.createdAt).getTime() : b.createdAt) : 0;
+      return bTime - aTime;
+    });
+  }, [displayRuns, searchQuery, runFilter]);
+
+  // Update real-time data from emulation
+  useEffect(() => {
+    if (!terraformEngine) return;
+    
+    const updateData = () => {
+      try {
+        const workspaces = terraformEngine.getWorkspaces();
+        const activeRuns = terraformEngine.getActiveRuns();
+        // Get runs for all workspaces
+        const allRuns: TerraformRun[] = [];
+        for (const workspace of workspaces) {
+          const workspaceRuns = terraformEngine.getRunsForWorkspace(workspace.id, 100);
+          allRuns.push(...workspaceRuns);
+        }
+        const states = terraformEngine.getStates();
+        const metrics = terraformEngine.getMetrics();
+        
+        setRealWorkspaces(workspaces);
+        setRealRuns(allRuns);
+        setRealStates(states);
+        setRealMetrics(metrics);
+      } catch (error) {
+        console.error('Error updating Terraform data:', error);
+      }
+    };
+    
+    updateData();
+    const interval = setInterval(updateData, isRunning ? 500 : 2000);
+    return () => clearInterval(interval);
+  }, [terraformEngine, isRunning]);
+
+  // Sync config with emulation engine when it changes
+  useEffect(() => {
+    if (!terraformEngine || !node) return;
+    terraformEngine.updateConfig(node);
+  }, [config.workspaces?.length, config.runs?.length, config.states?.length, terraformEngine, node]);
 
   const updateConfig = (updates: Partial<TerraformConfig>) => {
     updateNode(componentId, {
@@ -145,37 +242,116 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
     const newWorkspace: Workspace = {
       id: `workspace-${Date.now()}`,
       name: 'new-workspace',
-      terraformVersion: '1.5.0',
+      terraformVersion: config.defaultTerraformVersion || '1.5.0',
       autoApply: false,
       queueAllRuns: true,
     };
     updateConfig({ workspaces: [...workspaces, newWorkspace] });
     setShowCreateWorkspace(false);
+    toast({
+      title: 'Workspace created',
+      description: 'New workspace has been added',
+    });
   };
 
   const removeWorkspace = (id: string) => {
-    updateConfig({ workspaces: workspaces.filter((w) => w.id !== id) });
+    if (displayWorkspaces.length === 1) {
+      toast({
+        title: 'Cannot delete workspace',
+        description: 'At least one workspace is required',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    const workspace = displayWorkspaces.find(w => w.id === id);
+    if (workspace && window.confirm(`Are you sure you want to delete workspace "${workspace.name}"?`)) {
+      updateConfig({ workspaces: workspaces.filter((w) => w.id !== id) });
+      toast({
+        title: 'Workspace deleted',
+        description: `Workspace "${workspace.name}" has been removed`,
+      });
+    }
   };
 
   const updateWorkspace = (id: string, field: string, value: any) => {
-    const newWorkspaces = workspaces.map((w) =>
-      w.id === id ? { ...w, [field]: value } : w
-    );
+    const newWorkspaces = workspaces.map((w) => {
+      if (w.id === id) {
+        if (field === 'vcsRepo' && value === undefined) {
+          const { vcsRepo, ...rest } = w;
+          return rest;
+        }
+        return { ...w, [field]: value };
+      }
+      return w;
+    });
     updateConfig({ workspaces: newWorkspaces });
   };
 
   const createRun = (workspaceId: string, planOnly: boolean = false) => {
     const workspace = workspaces.find((w) => w.id === workspaceId);
-    if (!workspace) return;
+    if (!workspace) {
+      toast({
+        title: 'Error',
+        description: 'Workspace not found',
+        variant: 'destructive',
+      });
+      return;
+    }
 
-    const newRun: Run = {
-      id: `run-${Date.now()}`,
-      workspace: workspace.name,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      planOnly,
-    };
-    updateConfig({ runs: [newRun, ...runs.slice(0, 9)] });
+    if (terraformEngine) {
+      const result = terraformEngine.triggerRun(workspaceId, { planOnly, source: 'api', triggeredBy: 'user' });
+      if (result.success) {
+        toast({
+          title: 'Run triggered',
+          description: `Run ${result.runId} created for workspace ${workspace.name}`,
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: result.reason || 'Failed to trigger run',
+          variant: 'destructive',
+        });
+      }
+    } else {
+      // Fallback to config update if engine not available
+      const newRun: Run = {
+        id: `run-${Date.now()}`,
+        workspace: workspace.name,
+        status: 'pending',
+        createdAt: new Date().toISOString(),
+        planOnly,
+      };
+      updateConfig({ runs: [newRun, ...runs.slice(0, 9)] });
+      toast({
+        title: 'Run created',
+        description: `Run created for workspace ${workspace.name}`,
+      });
+    }
+  };
+
+  const cancelRun = (runId: string) => {
+    if (terraformEngine) {
+      const result = terraformEngine.cancelRun(runId);
+      if (result.success) {
+        toast({
+          title: 'Run canceled',
+          description: `Run ${runId} has been canceled`,
+        });
+      } else {
+        toast({
+          title: 'Error',
+          description: result.reason || 'Failed to cancel run',
+          variant: 'destructive',
+        });
+      }
+    } else {
+      toast({
+        title: 'Error',
+        description: 'Terraform engine not available',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -190,7 +366,19 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                if (terraformEngine && node) {
+                  terraformEngine.updateConfig(node);
+                  toast({
+                    title: 'Refreshed',
+                    description: 'Configuration has been refreshed',
+                  });
+                }
+              }}
+            >
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -263,15 +451,15 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
           <TabsList>
             <TabsTrigger value="workspaces">
               <Layers className="h-4 w-4 mr-2" />
-              Workspaces ({workspaces.length})
+              Workspaces ({displayWorkspaces.length})
             </TabsTrigger>
             <TabsTrigger value="runs">
               <Play className="h-4 w-4 mr-2" />
-              Runs ({runs.length})
+              Runs ({filteredRuns.length})
             </TabsTrigger>
             <TabsTrigger value="state">
               <FileText className="h-4 w-4 mr-2" />
-              State ({states.length})
+              State ({displayStates.length})
             </TabsTrigger>
             <TabsTrigger value="settings">
               <Settings className="h-4 w-4 mr-2" />
@@ -295,7 +483,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {workspaces.map((workspace) => (
+                  {displayWorkspaces.map((workspace) => (
                     <Card key={workspace.id} className="border-l-4 border-l-blue-500 hover:shadow-md transition-shadow bg-card">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -326,7 +514,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                                   }>
                                     {workspace.lastRun.status === 'applied' && <CheckCircle className="h-3 w-3 mr-1" />}
                                     {workspace.lastRun.status === 'errored' && <XCircle className="h-3 w-3 mr-1" />}
-                                    {workspace.lastRun.status}
+                                    {typeof workspace.lastRun.status === 'string' ? workspace.lastRun.status : 'unknown'}
                                   </Badge>
                                 )}
                               </div>
@@ -346,7 +534,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                               variant="ghost"
                               size="icon"
                               onClick={() => removeWorkspace(workspace.id)}
-                              disabled={workspaces.length === 1}
+                              disabled={displayWorkspaces.length === 1}
                               className="hover:bg-destructive/10 hover:text-destructive"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -366,7 +554,7 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                           <div className="space-y-2">
                             <Label>Terraform Version</Label>
                             <Select
-                              value={workspace.terraformVersion || '1.5.0'}
+                              value={workspace.terraformVersion || config.defaultTerraformVersion || '1.5.0'}
                               onValueChange={(value) => updateWorkspace(workspace.id, 'terraformVersion', value)}
                             >
                               <SelectTrigger>
@@ -395,16 +583,58 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                             />
                           </div>
                         </div>
-                        {workspace.description && (
-                          <div className="space-y-2">
-                            <Label>Description</Label>
-                            <Textarea
-                              value={workspace.description}
-                              onChange={(e) => updateWorkspace(workspace.id, 'description', e.target.value)}
-                              rows={2}
+                        <div className="space-y-2">
+                          <Label>Description</Label>
+                          <Textarea
+                            value={workspace.description || ''}
+                            onChange={(e) => updateWorkspace(workspace.id, 'description', e.target.value)}
+                            rows={2}
+                            placeholder="Workspace description"
+                          />
+                        </div>
+                        <Separator />
+                        <div className="space-y-2">
+                          <Label>VCS Repository (Optional)</Label>
+                          <div className="grid grid-cols-3 gap-2">
+                            <Input
+                              placeholder="org/repo"
+                              value={workspace.vcsRepo?.identifier || ''}
+                              onChange={(e) => {
+                                const ws = workspaces.find(w => w.id === workspace.id);
+                                if (ws) {
+                                  updateWorkspace(workspace.id, 'vcsRepo', {
+                                    ...(ws.vcsRepo || {}),
+                                    identifier: e.target.value,
+                                  });
+                                }
+                              }}
                             />
+                            <Input
+                              placeholder="branch"
+                              value={workspace.vcsRepo?.branch || ''}
+                              onChange={(e) => {
+                                const ws = workspaces.find(w => w.id === workspace.id);
+                                if (ws) {
+                                  updateWorkspace(workspace.id, 'vcsRepo', {
+                                    ...(ws.vcsRepo || { identifier: '' }),
+                                    branch: e.target.value,
+                                  });
+                                }
+                              }}
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const ws = workspaces.find(w => w.id === workspace.id);
+                                if (ws) updateWorkspace(workspace.id, 'vcsRepo', undefined);
+                              }}
+                              disabled={!workspace.vcsRepo}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
                           </div>
-                        )}
+                        </div>
                       </CardContent>
                     </Card>
                   ))}
@@ -416,15 +646,41 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
           <TabsContent value="runs" className="space-y-4">
             <Card>
               <CardHeader>
-                <CardTitle>Terraform Runs</CardTitle>
-                <CardDescription>Execution history and status</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Terraform Runs</CardTitle>
+                    <CardDescription>Execution history and status</CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search runs..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="pl-8 w-64"
+                      />
+                    </div>
+                    <Select value={runFilter} onValueChange={(value: any) => setRunFilter(value)}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All</SelectItem>
+                        <SelectItem value="active">Active</SelectItem>
+                        <SelectItem value="success">Success</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
-                {runs.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">No runs executed</p>
+                {filteredRuns.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">No runs found</p>
                 ) : (
                   <div className="space-y-2">
-                    {runs.map((run) => (
+                    {filteredRuns.map((run: any) => (
                       <Card
                         key={run.id}
                         className={`border-l-4 hover:shadow-md transition-all ${
@@ -461,23 +717,59 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                                     Plan Only
                                   </Badge>
                                 )}
-                                <span className="font-semibold text-base">{run.workspace}</span>
+                                <span className="font-semibold text-base">{run.workspaceName || run.workspace}</span>
                               </div>
                               {run.message && (
                                 <p className="text-sm text-muted-foreground mb-2">{run.message}</p>
                               )}
+                              {run.error && (
+                                <p className="text-sm text-destructive mb-2">{run.error}</p>
+                              )}
+                              {run.hasChanges && (
+                                <div className="flex items-center gap-2 mb-2 text-xs text-muted-foreground">
+                                  {run.resourceAdditions !== undefined && run.resourceAdditions > 0 && (
+                                    <Badge variant="outline" className="bg-green-50 text-green-700">+{run.resourceAdditions}</Badge>
+                                  )}
+                                  {run.resourceChanges !== undefined && run.resourceChanges > 0 && (
+                                    <Badge variant="outline" className="bg-yellow-50 text-yellow-700">~{run.resourceChanges}</Badge>
+                                  )}
+                                  {run.resourceDestructions !== undefined && run.resourceDestructions > 0 && (
+                                    <Badge variant="outline" className="bg-red-50 text-red-700">-{run.resourceDestructions}</Badge>
+                                  )}
+                                </div>
+                              )}
                               <div className="flex items-center gap-4 text-xs text-muted-foreground">
                                 <div className="flex items-center gap-1">
                                   <Clock className="h-3 w-3" />
-                                  {new Date(run.createdAt).toLocaleString()}
+                                  {run.createdAt ? (
+                                    typeof run.createdAt === 'string' 
+                                      ? new Date(run.createdAt).toLocaleString()
+                                      : new Date(run.createdAt).toLocaleString()
+                                  ) : 'Unknown'}
                                 </div>
-                                {run.duration && (
+                                {run.duration !== undefined && (
                                   <div className="flex items-center gap-1">
                                     <Activity className="h-3 w-3" />
-                                    {run.duration}s
+                                    {Math.round(run.duration / 1000)}s
                                   </div>
                                 )}
                               </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {['pending', 'planning', 'applying'].includes(run.status) && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    if (window.confirm(`Are you sure you want to cancel run ${run.id}?`)) {
+                                      cancelRun(run.id);
+                                    }
+                                  }}
+                                >
+                                  <Ban className="h-4 w-4 mr-2" />
+                                  Cancel
+                                </Button>
+                              )}
                             </div>
                           </div>
                         </CardContent>
@@ -496,26 +788,38 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                 <CardDescription>Terraform state versions</CardDescription>
               </CardHeader>
               <CardContent>
-                {states.length === 0 ? (
+                {displayStates.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-8">No state versions</p>
                 ) : (
                   <div className="space-y-2">
-                    {states.map((state) => (
+                    {displayStates.map((state: any) => (
                       <Card key={state.id} className="border-l-4 border-l-purple-500">
                         <CardContent className="pt-4">
                           <div className="flex items-start justify-between">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 mb-2">
-                                <Badge variant="outline">{state.workspace}</Badge>
+                                <Badge variant="outline">{state.workspaceName || state.workspace}</Badge>
                                 <Badge variant="outline">v{state.version}</Badge>
                                 <Badge variant="outline">Serial: {state.serial}</Badge>
-                                {state.resources && (
+                                {state.resources !== undefined && (
                                   <Badge variant="outline">{state.resources} resources</Badge>
                                 )}
                               </div>
                               <div className="text-sm text-muted-foreground">
-                                <p>Updated: {new Date(state.updatedAt).toLocaleString()}</p>
+                                <p>Updated: {state.updatedAt ? (typeof state.updatedAt === 'string' ? new Date(state.updatedAt).toLocaleString() : new Date(state.updatedAt).toLocaleString()) : 'Unknown'}</p>
                               </div>
+                              {state.outputs && Object.keys(state.outputs).length > 0 && (
+                                <div className="mt-2">
+                                  <p className="text-xs font-semibold text-muted-foreground mb-1">Outputs:</p>
+                                  <div className="space-y-1">
+                                    {Object.entries(state.outputs).map(([key, value]) => (
+                                      <div key={key} className="text-xs font-mono bg-muted p-1 rounded">
+                                        <span className="text-blue-600">{key}</span> = <span className="text-green-600">{String(value)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         </CardContent>
@@ -536,7 +840,10 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Default Terraform Version</Label>
-                  <Select defaultValue="1.5.0">
+                  <Select
+                    value={config.defaultTerraformVersion || '1.5.0'}
+                    onValueChange={(value) => updateConfig({ defaultTerraformVersion: value })}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -549,12 +856,35 @@ export function TerraformConfigAdvanced({ componentId }: TerraformConfigProps) {
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">
-                  <Label>Enable State Locking</Label>
-                  <Switch defaultChecked />
+                  <div className="space-y-0.5">
+                    <Label>Enable State Locking</Label>
+                    <p className="text-xs text-muted-foreground">Prevents concurrent modifications</p>
+                  </div>
+                  <Switch
+                    checked={config.enableStateLocking !== false}
+                    onCheckedChange={(checked) => updateConfig({ enableStateLocking: checked })}
+                  />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label>Enable Remote State</Label>
-                  <Switch defaultChecked />
+                  <div className="space-y-0.5">
+                    <Label>Enable Remote State</Label>
+                    <p className="text-xs text-muted-foreground">Store state remotely</p>
+                  </div>
+                  <Switch
+                    checked={config.enableRemoteState !== false}
+                    onCheckedChange={(checked) => updateConfig({ enableRemoteState: checked })}
+                  />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label>Enable VCS Integration</Label>
+                    <p className="text-xs text-muted-foreground">Connect to version control</p>
+                  </div>
+                  <Switch
+                    checked={config.enableVCS !== false}
+                    onCheckedChange={(checked) => updateConfig({ enableVCS: checked })}
+                  />
                 </div>
               </CardContent>
             </Card>

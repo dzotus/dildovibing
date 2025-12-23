@@ -14,23 +14,25 @@ interface AlertStore {
 }
 
 export const useAlertStore = create<AlertStore>((set, get) => {
-  // Setup alert callback
-  alertSystem.onAlert((alert) => {
-    // Update store when new alert is generated
-    get().updateAlerts();
-  });
+  // НЕ регистрируем callback здесь, чтобы избежать бесконечной рекурсии
+  // updateAlerts будет вызываться напрямую из EmulationEngine.simulate()
 
   return {
     alerts: [],
 
     updateAlerts: () => {
-      const { nodes, connections } = useCanvasStore.getState();
-      const { componentMetrics, connectionMetrics } = useEmulationStore.getState();
-      const componentStatuses = useDependencyStore.getState().getAllComponentStatuses();
+      try {
+        const { nodes, connections } = useCanvasStore.getState();
+        const { componentMetrics, connectionMetrics } = useEmulationStore.getState();
+        const componentStatuses = useDependencyStore.getState().getAllComponentStatuses();
 
-      alertSystem.analyze(nodes, componentMetrics, connectionMetrics, componentStatuses);
-      const alerts = alertSystem.getAlerts();
-      set({ alerts });
+        alertSystem.analyze(nodes, componentMetrics, connectionMetrics, componentStatuses);
+        const alerts = alertSystem.getAlerts();
+        set({ alerts });
+      } catch (error) {
+        // Ошибки в AlertSystem обрабатываются через ErrorCollector в EmulationEngine
+        console.error('Error in updateAlerts:', error);
+      }
     },
 
     acknowledgeAlert: (alertId) => {

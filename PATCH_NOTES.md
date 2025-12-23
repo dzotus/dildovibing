@@ -1,5 +1,275 @@
 # Patch Notes
 
+## Версия 0.1.7zh - Универсальная система обработки ошибок симуляции
+
+### Обзор изменений
+**Критическое обновление**: Реализована универсальная система сбора и отображения ошибок симуляции. Все ошибки, возникающие во время работы симуляции, теперь автоматически перехватываются, категоризируются и отображаются в UI. Исправлены критические ошибки, которые блокировали запуск симуляции: отсутствие метода `getMetrics()` в GitLabCIEmulationEngine, бесконечная рекурсия в AlertSystem, отсутствие метода `initializeFirewallEngine()`. Добавлена обработка ошибок во всех критических местах EmulationEngine с детальным контекстом.
+
+**Terraform компонент**: Реализован полноценный TerraformEmulationEngine с симуляцией Infrastructure as Code. Поддержка workspaces, runs lifecycle (pending → planning → planned/applying → applied/errored), state management, VCS интеграция, автоматические триггеры. Полностью конфигурируемая симуляция без хардкода: все вероятности, диапазоны и параметры настраиваются через конфигурацию. Реалистичные длительности с учетом количества ресурсов, вариативность ±30%, динамические метрики. Расширенный UI с real-time обновлением данных, полным CRUD для workspaces/runs/states, интеграцией с эмуляцией.
+
+### Ключевые изменения
+
+#### Универсальная система обработки ошибок
+- ✅ **ErrorCollector** (`src/core/ErrorCollector.ts`): Создан универсальный сборщик ошибок
+  - Автоматическая категоризация по серьезности (critical, warning, info)
+  - Категоризация по источнику (emulation-engine, component-engine, alert-system, data-flow, routing-engine, initialization, configuration)
+  - Подсчет повторяющихся ошибок с обновлением счетчика
+  - Ограничение количества хранимых ошибок (200 последних)
+  - Подписка на новые ошибки с уведомлениями
+  - Методы фильтрации: по серьезности, источнику, компоненту
+  - Статистика ошибок: общее количество, по типам, по источникам
+  - Автоматическое определение серьезности на основе типа ошибки
+  - Генерация уникальных ID для группировки одинаковых ошибок
+- ✅ **useSimulationErrorStore** (`src/store/useSimulationErrorStore.ts`): Zustand store для управления ошибками
+  - Автоматическое обновление при появлении новых ошибок через подписку
+  - Методы для фильтрации и получения статистики
+  - Интеграция с ErrorCollector
+- ✅ **SimulationErrorsPanel** (`src/components/emulation/SimulationErrorsPanel.tsx`): UI компонент для отображения ошибок
+  - Компактный дизайн с оптимизацией для ограниченного пространства
+  - Фильтры: по серьезности, источнику, компоненту
+  - Поиск по тексту ошибки, компоненту, типу ошибки
+  - Статистика ошибок в заголовке (Total, Critical, Warning, Info)
+  - Детальная информация: timestamp, component type, error type
+  - Раскрывающиеся блоки для Context и Stack Trace
+  - Удаление отдельных ошибок
+  - Очистка всех ошибок
+  - Цветовая индикация по серьезности (красный, желтый, синий)
+  - Сокращенные метки источников для компактности
+  - Автоматическое обновление каждую секунду
+- ✅ **Интеграция в PropertiesPanel**: Добавлена вкладка "Errors" в панель свойств
+  - Доступ к ошибкам симуляции из основного интерфейса
+  - Автоматическое обновление при обновлении метрик
+
+#### Исправление критических ошибок
+- ✅ **GitLabCIEmulationEngine.getMetrics()**: Добавлен отсутствующий метод
+  - Метод `getMetrics()` возвращает `GitLabCIEngineMetrics`
+  - Алиас для `getGitLabCIMetrics()` для совместимости
+  - Исправлена ошибка `TypeError: gitlabCIEngine.getMetrics is not a function`
+- ✅ **AlertSystem бесконечная рекурсия**: Исправлена циклическая зависимость
+  - Добавлен флаг `isAnalyzing` для предотвращения рекурсии
+  - Убран автоматический вызов `updateAlerts()` из callback в `useAlertStore`
+  - `updateAlerts()` теперь вызывается только из `EmulationEngine.simulate()`
+  - Исправлена ошибка `RangeError: Maximum call stack size exceeded`
+- ✅ **initializeFirewallEngine()**: Добавлен отсутствующий метод
+  - Метод для инициализации FirewallEmulationEngine
+  - Интеграция в `initialize()` и `updateNodesAndConnections()`
+  - Обработка ошибок при инициализации
+  - Исправлена ошибка `TypeError: this.initializeFirewallEngine is not a function`
+
+#### Обработка ошибок в EmulationEngine
+- ✅ **Обработка ошибок в simulate()**: Все вызовы методов движков обернуты в try-catch
+  - Jenkins: обработка ошибок в `performUpdate()` и `calculateComponentMetrics()`
+  - GitLab CI: обработка ошибок в `performUpdate()` и `getMetrics()`
+  - Argo CD: обработка ошибок в `performUpdate()` и `getMetrics()`
+  - Terraform: обработка ошибок в `getMetrics()`
+  - Prometheus: обработка ошибок в `performScraping()`
+  - Grafana: обработка ошибок в `performUpdate()` и вспомогательных методах
+  - Loki: обработка ошибок в `performRetention()`
+  - Jaeger: обработка ошибок в `performCleanup()`
+  - PagerDuty: обработка ошибок в `processAlerts()` и `advanceTime()`
+  - OpenTelemetry: обработка ошибок в `processBatchFlush()`
+  - AlertSystem: обработка ошибок в `analyze()`
+  - Connection metrics: обработка ошибок в `updateConnectionMetrics()`
+  - Component metrics: обработка ошибок в `updateComponentMetrics()`
+- ✅ **Обработка ошибок при инициализации**: Все методы инициализации обернуты в try-catch
+  - Keycloak, Vault, WAF, Firewall, IDS/IPS engines
+  - Запись ошибок в ErrorCollector с контекстом (componentId, componentLabel, componentType)
+  - Продолжение инициализации других компонентов при ошибке одного
+- ✅ **Детальный контекст ошибок**: Каждая ошибка содержит полную информацию
+  - Component ID и Label для идентификации компонента
+  - Component Type для категоризации
+  - Error Type (TypeError, RangeError, etc.)
+  - Context с дополнительными данными (engine, operation)
+  - Stack Trace для критических ошибок
+  - Timestamp для отслеживания времени возникновения
+
+#### Улучшения UI
+- ✅ **Компактный дизайн**: Оптимизация для ограниченного пространства
+  - Уменьшены отступы (padding с p-3 до p-1.5)
+  - Уменьшены размеры иконок (с h-4 w-4 до h-3 w-3)
+  - Уменьшены размеры бейджей (text-[9px] px-1 py-0 h-4)
+  - Уменьшены размеры текста (text-[11px] для заголовков, text-[10px] для описаний)
+  - Сокращенные метки источников (Engine, Component, Alert вместо полных названий)
+  - Объединение информации в одну строку (timestamp, componentType, errorType)
+  - Ограничение сообщения об ошибке до 2 строк (line-clamp-2)
+  - Уменьшена толщина границы (с border-l-4 до border-l-2)
+  - Уменьшены отступы между элементами
+
+### Технические изменения
+
+#### Новые файлы
+- `src/core/ErrorCollector.ts`: Универсальный сборщик ошибок (250+ строк)
+  - Интерфейс `SimulationError` с полной информацией об ошибке
+  - Класс `ErrorCollector` с методами сбора, фильтрации и статистики
+  - Singleton instance `errorCollector` для глобального доступа
+- `src/store/useSimulationErrorStore.ts`: Zustand store для управления ошибками
+  - Интеграция с ErrorCollector через подписку
+  - Методы для обновления, фильтрации и очистки ошибок
+- `src/components/emulation/SimulationErrorsPanel.tsx`: UI компонент для отображения ошибок (340+ строк)
+  - Компактный дизайн с фильтрацией и поиском
+  - Детальная информация об ошибках с раскрывающимися блоками
+
+#### Измененные файлы
+- `src/core/EmulationEngine.ts`:
+  - Импорт `errorCollector` из `ErrorCollector`
+  - Обработка ошибок в `simulate()` для всех движков
+  - Обработка ошибок при инициализации компонентов
+  - Запись ошибок в ErrorCollector с детальным контекстом
+  - Исправлен вызов `gitlabCIEngine.getMetrics()` (теперь метод существует)
+- `src/core/AlertSystem.ts`:
+  - Добавлен флаг `isAnalyzing` для предотвращения рекурсии
+  - Обернут метод `analyze()` в try-finally для защиты от рекурсии
+- `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен метод `getMetrics()` для совместимости с EmulationEngine
+- `src/store/useAlertStore.ts`:
+  - Убран автоматический вызов `updateAlerts()` из callback
+  - Добавлена обработка ошибок в `updateAlerts()`
+- `src/store/useEmulationStore.ts`:
+  - Добавлен вызов `useSimulationErrorStore.getState().updateErrors()` в `updateMetrics()`
+  - Импорт `useSimulationErrorStore`
+- `src/components/layout/PropertiesPanel.tsx`:
+  - Добавлена вкладка "Errors" в TabsList
+  - Импорт `SimulationErrorsPanel`
+  - Добавлен TabsContent для отображения панели ошибок
+
+### Исправленные ошибки
+- ✅ `TypeError: gitlabCIEngine.getMetrics is not a function` - добавлен метод `getMetrics()`
+- ✅ `RangeError: Maximum call stack size exceeded` в AlertSystem - исправлена рекурсия
+- ✅ `TypeError: this.initializeFirewallEngine is not a function` - добавлен метод инициализации
+- ✅ Ошибки видны только в консоли - теперь отображаются в UI
+
+### Улучшения пользовательского опыта
+- ✅ Все ошибки симуляции видны в UI в реальном времени
+- ✅ Детальная информация об ошибках с контекстом
+- ✅ Фильтрация и поиск ошибок для быстрой диагностики
+- ✅ Статистика ошибок для мониторинга состояния системы
+- ✅ Компактный дизайн, оптимизированный для ограниченного пространства
+- ✅ Автоматическое обновление ошибок каждую секунду
+
+#### Terraform: Полная реализация симуляции Infrastructure as Code
+
+- ✅ **TerraformEmulationEngine** (`src/core/TerraformEmulationEngine.ts`): Создан полноценный эмуляционный движок
+  - Симуляция workspaces: управление конфигурацией, VCS интеграция, переменные
+  - Симуляция runs: lifecycle (pending → planning → planned/applying → applied/errored), длительности, статусы
+  - Симуляция state management: версионирование, сериализация, ресурсы, outputs
+  - Динамические метрики: runs per hour, average duration, success/failure rates, resources managed
+  - Конфигурируемые параметры симуляции:
+    - `changeProbability` (0-1): вероятность изменений в plan
+    - `maxResourceAdditions/Changes/Destructions`: ограничения на изменения ресурсов
+    - `vcsWebhookProbability` (0-1): вероятность VCS webhook событий
+    - `defaultStateResources`: дефолтное количество ресурсов
+    - `durationVariation` (0-1): вариативность длительностей (±30%)
+    - `resourceTimeMultiplier`: множитель времени на ресурс для реалистичности
+  - Учет количества ресурсов при расчете длительностей (логарифмическая шкала)
+  - Автоматические VCS webhook триггеры для workspaces с VCS интеграцией
+  - Автоматические scheduled runs на основе `runTriggerRate`
+  - Обновление state после успешного apply с инкрементом version/serial
+  - История runs с ограничением (MAX_RUN_HISTORY = 1000)
+- ✅ **Интеграция в EmulationEngine**:
+  - Хранилище `terraformEngines: Map<string, TerraformEmulationEngine>`
+  - Инициализация `initializeTerraformEngine()` при добавлении ноды
+  - Метод `simulateTerraform()` для расчета метрик компонента
+  - Периодическое обновление через `performUpdate()` в цикле симуляции
+  - Метод доступа `getTerraformEmulationEngine(nodeId)`
+  - Метрики: throughput (runs/hour), latency (average duration), error rate, utilization
+- ✅ **Интеграция в DataFlowEngine**:
+  - Обработчик `createTerraformHandler()` для webhook/API запросов
+  - Поддержка операций: webhook, triggerRun, cancelRun, getRunStatus, getWorkspaceStatus, getMetrics
+  - Триггеринг runs через webhook от GitLab CI, GitHub, и других источников
+  - Обработка VCS webhook событий с автоматическим запуском runs
+  - Обновление метрик requests через `processRequest()`
+- ✅ **TerraformConfigAdvanced UI** (`src/components/config/devops/TerraformConfigAdvanced.tsx`):
+  - Интеграция с эмуляцией через `useEmulationStore` и `emulationEngine`
+  - Real-time обновление данных: workspaces, runs, states, metrics (500ms при запуске, 2000ms при остановке)
+  - Вкладка **Workspaces**: 
+    - Список всех workspaces с детальной информацией
+    - Редактирование: name, description, terraformVersion, workingDirectory, autoApply
+    - VCS Repository настройки: identifier, branch, удаление
+    - Создание и удаление workspaces с подтверждением
+    - Индикаторы статуса последнего run
+    - Кнопки "Run Plan" для запуска runs
+  - Вкладка **Runs**:
+    - Список всех runs с фильтрацией (all, active, success, failed)
+    - Поиск по workspace name и run ID
+    - Отображение статуса, длительности, изменений ресурсов (additions/changes/destructions)
+    - Badges для plan-only runs
+    - Кнопка "Cancel" для активных runs с подтверждением
+    - Детальная информация: message, error, timestamps
+  - Вкладка **State**:
+    - Список state versions для каждого workspace
+    - Отображение: version, serial, resources count, updated timestamp
+    - Отображение outputs (key-value пары)
+  - Вкладка **Settings**:
+    - Default Terraform Version (настраиваемый)
+    - Enable State Locking (toggle)
+    - Enable Remote State (toggle)
+    - Enable VCS Integration (toggle)
+  - Toast-уведомления для всех операций (create, delete, trigger, cancel)
+  - Валидация и подтверждения для критичных действий
+  - Синхронизация конфигурации с эмуляцией при изменениях
+- ✅ **Устранение хардкода и скриптованности**:
+  - Все вероятности вынесены в конфигурацию (changeProbability, vcsWebhookProbability, failureRate)
+  - Все диапазоны настраиваемы (maxResourceAdditions/Changes/Destructions)
+  - Дефолтные значения используются только как fallback
+  - Вариативность длительностей (±30% настраивается через durationVariation)
+  - Учет количества ресурсов при расчете времени (реалистичность)
+  - Связь размера изменений с количеством ресурсов в state
+
+#### Улучшения симулятивности Terraform
+
+- ✅ **Динамические длительности**:
+  - Базовая длительность + логарифмический множитель от количества ресурсов
+  - Вариативность ±30% для реалистичности
+  - Учет ресурсов в state при расчете времени plan/apply
+- ✅ **Реалистичные изменения ресурсов**:
+  - Вероятность изменений настраивается через `changeProbability`
+  - Размер изменений зависит от количества ресурсов в state (но не линейно)
+  - Максимальные значения настраиваемы через конфиг
+- ✅ **Автоматические триггеры**:
+  - VCS webhooks с настраиваемой вероятностью
+  - Scheduled runs на основе `runTriggerRate`
+  - Учет `autoApply` и `queueAllRuns` настроек workspace
+- ✅ **Обновление метрик в реальном времени**:
+  - runsPerHour: из истории последнего часа
+  - averageRunDuration: из завершенных runs
+  - workspacesTotal, runsRunning, runsPending: из текущего состояния
+  - resourcesManaged: сумма ресурсов из всех states
+
+#### Технические детали
+
+**Новые файлы:**
+- `src/core/TerraformEmulationEngine.ts` (753 строки)
+  - Интерфейсы: TerraformWorkspace, TerraformRun, TerraformState, TerraformEmulationConfig, TerraformEngineMetrics
+  - Методы: initializeConfig, updateConfig, performUpdate, triggerRun, cancelRun, getMetrics, getWorkspaces, getRunsForWorkspace, getStateForWorkspace
+
+**Изменённые файлы:**
+- `src/core/EmulationEngine.ts`:
+  - Добавлен импорт TerraformEmulationEngine
+  - Добавлено хранилище `terraformEngines: Map<string, TerraformEmulationEngine>`
+  - Метод `initializeTerraformEngine()` для инициализации
+  - Метод `simulateTerraform()` для симуляции метрик
+  - Интеграция в `initialize()` и `updateNodesAndConnections()`
+  - Периодическое обновление через `performUpdate()` в цикле симуляции
+  - Метод доступа `getTerraformEmulationEngine(nodeId)`
+- `src/core/DataFlowEngine.ts`:
+  - Метод `createTerraformHandler()` для обработки запросов
+  - Регистрация handler в `registerDefaultHandlers()`
+  - Поддержка операций: webhook, triggerRun, cancelRun, getRunStatus, getWorkspaceStatus, getMetrics
+- `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Полная переработка с интеграцией эмуляции
+  - Real-time обновление данных через useEffect
+  - Синхронизация конфигурации с эмуляцией
+  - Расширенный UI со всеми вкладками и функциями
+  - Toast-уведомления и валидация
+
+**Тестовая конфигурация:**
+- `terraform_test_config.json`: Полная конфигурация с Terraform, GitLab CI, Kubernetes, Argo CD, Vault, Prometheus, Grafana
+  - Реалистичные связи между компонентами
+  - Примеры workspaces с разными настройками
+  - Готова для тестирования симуляции
+
+---
+
 ## Версия 0.1.7zg - Argo CD: Полная реализация симуляции GitOps и расширенный UI/UX
 
 ### Обзор изменений

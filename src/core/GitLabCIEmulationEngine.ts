@@ -1276,6 +1276,13 @@ export class GitLabCIEmulationEngine {
   }
   
   /**
+   * Получает метрики GitLab CI (алиас для совместимости с другими движками)
+   */
+  getMetrics(): GitLabCIEngineMetrics {
+    return this.getGitLabCIMetrics();
+  }
+  
+  /**
    * Получает все pipelines
    */
   getPipelines(): GitLabCIPipeline[] {
