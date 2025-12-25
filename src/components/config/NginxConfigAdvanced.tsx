@@ -1,4 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,7 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useToast } from '@/hooks/use-toast';
 import { 
   Globe, 
   Server, 
@@ -74,6 +77,146 @@ interface RateLimitZone {
   rate: string;
 }
 
+/**
+ * Generate NGINX configuration from structured settings
+ */
+function generateNginxConfig(config: {
+  port: number;
+  serverName: string;
+  locations: Location[];
+  upstreams: Upstream[];
+  sslCertificates: SSLCertificate[];
+  rateLimitZones: RateLimitZone[];
+  enableSSL: boolean;
+  sslPort: number;
+  enableGzip: boolean;
+  enableCache: boolean;
+  maxWorkers: number;
+}): string {
+  let nginxConfig = `# NGINX Configuration\n`;
+  nginxConfig += `# Generated from structured settings\n\n`;
+  
+  // Upstream blocks
+  if (config.upstreams && config.upstreams.length > 0) {
+    nginxConfig += `# Upstream blocks\n`;
+    for (const upstream of config.upstreams) {
+      nginxConfig += `upstream ${upstream.name} {\n`;
+      if (upstream.method && upstream.method !== 'round-robin') {
+        nginxConfig += `    ${upstream.method};\n`;
+      }
+      if (upstream.keepalive) {
+        nginxConfig += `    keepalive ${upstream.keepalive};\n`;
+      }
+      for (const server of upstream.servers || []) {
+        let serverLine = `    server ${server.address}`;
+        if (server.weight && server.weight !== 1) {
+          serverLine += ` weight=${server.weight}`;
+        }
+        if (server.maxFails) {
+          serverLine += ` max_fails=${server.maxFails}`;
+        }
+        if (server.failTimeout) {
+          serverLine += ` fail_timeout=${server.failTimeout}`;
+        }
+        if (server.backup) {
+          serverLine += ` backup`;
+        }
+        if (server.down) {
+          serverLine += ` down`;
+        }
+        serverLine += `;`;
+        nginxConfig += `    ${serverLine}\n`;
+      }
+      nginxConfig += `}\n\n`;
+    }
+  }
+  
+  // Rate limit zones
+  if (config.rateLimitZones && config.rateLimitZones.length > 0) {
+    nginxConfig += `# Rate limit zones\n`;
+    for (const zone of config.rateLimitZones) {
+      nginxConfig += `limit_req_zone $binary_remote_addr zone=${zone.name}:${zone.size} rate=${zone.rate};\n`;
+    }
+    nginxConfig += `\n`;
+  }
+  
+  // Server block
+  nginxConfig += `server {\n`;
+  if (config.enableSSL) {
+    nginxConfig += `    listen ${config.sslPort} ssl;\n`;
+    if (config.sslCertificates && config.sslCertificates.length > 0) {
+      const cert = config.sslCertificates[0];
+      nginxConfig += `    ssl_certificate ${cert.certPath};\n`;
+      nginxConfig += `    ssl_certificate_key ${cert.keyPath};\n`;
+    }
+  } else {
+    nginxConfig += `    listen ${config.port};\n`;
+  }
+  nginxConfig += `    server_name ${config.serverName};\n\n`;
+  
+  // Gzip
+  if (config.enableGzip) {
+    nginxConfig += `    gzip on;\n`;
+    nginxConfig += `    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript;\n\n`;
+  }
+  
+  // Cache
+  if (config.enableCache) {
+    nginxConfig += `    proxy_cache_path /var/cache/nginx levels=1:2 keys_zone=my_cache:10m max_size=10g inactive=60m use_temp_path=off;\n\n`;
+  }
+  
+  // Location blocks
+  if (config.locations && config.locations.length > 0) {
+    for (const location of config.locations) {
+      nginxConfig += `    location ${location.path} {\n`;
+      
+      if (location.rateLimit) {
+        nginxConfig += `        limit_req zone=${location.rateLimit.zone} rate=${location.rateLimit.rate}`;
+        if (location.rateLimit.burst) {
+          nginxConfig += ` burst=${location.rateLimit.burst}`;
+        }
+        if (location.rateLimit.nodelay) {
+          nginxConfig += ` nodelay`;
+        }
+        nginxConfig += `;\n`;
+      }
+      
+      if (location.method === 'proxy' && location.proxyPass) {
+        nginxConfig += `        proxy_pass ${location.proxyPass};\n`;
+        nginxConfig += `        proxy_set_header Host $host;\n`;
+        nginxConfig += `        proxy_set_header X-Real-IP $remote_addr;\n`;
+        nginxConfig += `        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n`;
+        nginxConfig += `        proxy_set_header X-Forwarded-Proto $scheme;\n`;
+      } else if (location.method === 'static') {
+        nginxConfig += `        root /usr/share/nginx/html;\n`;
+        nginxConfig += `        try_files $uri $uri/ =404;\n`;
+      }
+      
+      if (location.cache?.enabled) {
+        nginxConfig += `        proxy_cache my_cache;\n`;
+        nginxConfig += `        proxy_cache_valid ${location.cache.valid || '200 1h'};\n`;
+      }
+      
+      nginxConfig += `    }\n\n`;
+    }
+  } else {
+    // Default location
+    nginxConfig += `    location / {\n`;
+    if (config.upstreams && config.upstreams.length > 0) {
+      nginxConfig += `        proxy_pass http://${config.upstreams[0].name};\n`;
+    } else {
+      nginxConfig += `        proxy_pass http://backend:8080;\n`;
+    }
+    nginxConfig += `        proxy_set_header Host $host;\n`;
+    nginxConfig += `        proxy_set_header X-Real-IP $remote_addr;\n`;
+    nginxConfig += `    }\n\n`;
+  }
+  
+  nginxConfig += `}\n`;
+  
+  return nginxConfig;
+}
+
 interface NginxConfig {
   port?: number;
   serverName?: string;
@@ -92,10 +235,17 @@ interface NginxConfig {
 }
 
 export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
+  const { getComponentMetrics, isRunning } = useEmulationStore();
+  const { toast } = useToast();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
+
+  // Get real-time metrics from emulation
+  const metrics = getComponentMetrics(componentId);
+  const hasConnections = connections.some(c => c.source === componentId || c.target === componentId);
+  const isActive = isRunning && hasConnections && metrics && (metrics.throughput > 0 || metrics.utilization > 0);
 
   const config = (node.data.config as any) || {} as NginxConfig;
   const port = config.port || 80;
@@ -150,6 +300,29 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
   const [showCreateSSL, setShowCreateSSL] = useState(false);
   const [showCreateRateLimit, setShowCreateRateLimit] = useState(false);
   const [editingUpstreamIndex, setEditingUpstreamIndex] = useState<number | null>(null);
+  const [newUpstreamName, setNewUpstreamName] = useState('');
+  const [newSSLName, setNewSSLName] = useState('');
+  const [newRateLimitName, setNewRateLimitName] = useState('');
+
+  // Sync routing engine when config changes
+  useEffect(() => {
+    if (node) {
+      const routingEngine = emulationEngine.getNginxRoutingEngine(componentId);
+      if (routingEngine) {
+        routingEngine.initialize({
+          locations: config.locations || [],
+          upstreams: config.upstreams || [],
+          rateLimitZones: config.rateLimitZones || [],
+          sslCertificates: config.sslCertificates || [],
+          enableSSL: config.enableSSL,
+          sslPort: config.sslPort,
+          enableGzip: config.enableGzip,
+          enableCache: config.enableCache,
+          maxWorkers: config.maxWorkers,
+        });
+      }
+    }
+  }, [config, componentId, node]);
 
   const updateConfig = (updates: Partial<NginxConfig>) => {
     updateNode(componentId, {
@@ -177,13 +350,26 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
   };
 
   const addUpstream = () => {
+    if (!newUpstreamName.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Upstream name is required',
+        variant: 'destructive',
+      });
+      return;
+    }
     const newUpstream: Upstream = {
-      name: 'new_upstream',
+      name: newUpstreamName.trim(),
       servers: [{ address: 'server1:8080', weight: 1 }],
       method: 'round-robin'
     };
     updateConfig({ upstreams: [...upstreams, newUpstream] });
     setShowCreateUpstream(false);
+    setNewUpstreamName('');
+    toast({
+      title: 'Success',
+      description: `Upstream "${newUpstream.name}" added`,
+    });
   };
 
   const removeUpstream = (index: number) => {
@@ -224,14 +410,27 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
   };
 
   const addSSLCertificate = () => {
+    if (!newSSLName.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Certificate name is required',
+        variant: 'destructive',
+      });
+      return;
+    }
     const newCert: SSLCertificate = {
-      name: 'new_cert',
+      name: newSSLName.trim(),
       certPath: '/etc/nginx/ssl/cert.pem',
       keyPath: '/etc/nginx/ssl/key.pem',
       domain: 'example.com'
     };
     updateConfig({ sslCertificates: [...sslCertificates, newCert] });
     setShowCreateSSL(false);
+    setNewSSLName('');
+    toast({
+      title: 'Success',
+      description: `SSL certificate "${newCert.name}" added`,
+    });
   };
 
   const removeSSLCertificate = (index: number) => {
@@ -245,13 +444,26 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
   };
 
   const addRateLimitZone = () => {
+    if (!newRateLimitName.trim()) {
+      toast({
+        title: 'Error',
+        description: 'Zone name is required',
+        variant: 'destructive',
+      });
+      return;
+    }
     const newZone: RateLimitZone = {
-      name: 'new_limit',
+      name: newRateLimitName.trim(),
       size: '10m',
       rate: '10r/s'
     };
     updateConfig({ rateLimitZones: [...rateLimitZones, newZone] });
     setShowCreateRateLimit(false);
+    setNewRateLimitName('');
+    toast({
+      title: 'Success',
+      description: `Rate limit zone "${newZone.name}" added`,
+    });
   };
 
   const removeRateLimitZone = (index: number) => {
@@ -282,10 +494,33 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+              <div className={`h-2 w-2 rounded-full ${isActive ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {isActive ? 'Running' : 'Idle'}
             </Badge>
-            <Button size="sm" variant="outline">
+            <Button 
+              size="sm" 
+              variant="outline"
+              onClick={() => {
+                const routingEngine = emulationEngine.getNginxRoutingEngine(componentId);
+                if (routingEngine) {
+                  routingEngine.initialize({
+                    locations: config.locations || [],
+                    upstreams: config.upstreams || [],
+                    rateLimitZones: config.rateLimitZones || [],
+                    sslCertificates: config.sslCertificates || [],
+                    enableSSL: config.enableSSL,
+                    sslPort: config.sslPort,
+                    enableGzip: config.enableGzip,
+                    enableCache: config.enableCache,
+                    maxWorkers: config.maxWorkers,
+                  });
+                  toast({
+                    title: 'Success',
+                    description: 'NGINX configuration reloaded',
+                  });
+                }
+              }}
+            >
               <Settings className="h-4 w-4 mr-2" />
               Reload Config
             </Button>
@@ -295,6 +530,58 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
         <Separator />
 
         {/* Stats Overview */}
+        <div className="grid grid-cols-4 gap-4">
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Throughput</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {metrics ? Math.round(metrics.throughput) : '0'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">req/s</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Latency</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {metrics ? Math.round(metrics.latency) : '0'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">ms (avg)</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Cache Hit Rate</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {metrics?.customMetrics?.cache_hit_rate ? 
+                  `${Math.round(metrics.customMetrics.cache_hit_rate * 100)}%` : 
+                  '0%'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {metrics?.customMetrics?.cache_hits || 0} hits / {metrics?.customMetrics?.cache_misses || 0} misses
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Utilization</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">
+                {metrics ? Math.round(metrics.utilization * 100) : '0'}%
+              </div>
+              <Progress value={metrics ? metrics.utilization * 100 : 0} className="mt-2" />
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Additional Stats */}
         <div className="grid grid-cols-4 gap-4">
           <Card>
             <CardHeader className="pb-3">
@@ -336,7 +623,7 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="server" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
+          <TabsList className="grid w-full grid-cols-8">
             <TabsTrigger value="server" className="gap-2">
               <Server className="h-4 w-4" />
               Server
@@ -360,6 +647,10 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
             <TabsTrigger value="performance" className="gap-2">
               <Zap className="h-4 w-4" />
               Performance
+            </TabsTrigger>
+            <TabsTrigger value="metrics" className="gap-2">
+              <Activity className="h-4 w-4" />
+              Metrics
             </TabsTrigger>
             <TabsTrigger value="config" className="gap-2">
               <Settings className="h-4 w-4" />
@@ -432,11 +723,18 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Upstream Name</Label>
-                      <Input placeholder="backend" />
+                      <Input 
+                        placeholder="backend" 
+                        value={newUpstreamName}
+                        onChange={(e) => setNewUpstreamName(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={addUpstream}>Create Upstream</Button>
-                      <Button variant="outline" onClick={() => setShowCreateUpstream(false)}>Cancel</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateUpstream(false);
+                        setNewUpstreamName('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
@@ -665,11 +963,18 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Certificate Name</Label>
-                      <Input placeholder="default" />
+                      <Input 
+                        placeholder="default" 
+                        value={newSSLName}
+                        onChange={(e) => setNewSSLName(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={addSSLCertificate}>Add Certificate</Button>
-                      <Button variant="outline" onClick={() => setShowCreateSSL(false)}>Cancel</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateSSL(false);
+                        setNewSSLName('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
@@ -763,11 +1068,18 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Zone Name</Label>
-                      <Input placeholder="api_limit" />
+                      <Input 
+                        placeholder="api_limit" 
+                        value={newRateLimitName}
+                        onChange={(e) => setNewRateLimitName(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
                       <Button onClick={addRateLimitZone}>Add Zone</Button>
-                      <Button variant="outline" onClick={() => setShowCreateRateLimit(false)}>Cancel</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateRateLimit(false);
+                        setNewRateLimitName('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
@@ -859,12 +1171,141 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
             </Card>
           </TabsContent>
 
+          {/* Metrics Tab */}
+          <TabsContent value="metrics" className="space-y-4 mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Real-time Metrics</CardTitle>
+                <CardDescription>Live performance metrics from NGINX simulation</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {metrics ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Requests Per Second</Label>
+                        <div className="text-3xl font-bold">{Math.round(metrics.throughput)}</div>
+                        <p className="text-sm text-muted-foreground">Current throughput</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Average Latency</Label>
+                        <div className="text-3xl font-bold">{Math.round(metrics.latency)}ms</div>
+                        <p className="text-sm text-muted-foreground">Response time</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Error Rate</Label>
+                        <div className="text-3xl font-bold">{(metrics.errorRate * 100).toFixed(2)}%</div>
+                        <p className="text-sm text-muted-foreground">Failed requests</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Utilization</Label>
+                        <div className="text-3xl font-bold">{Math.round(metrics.utilization * 100)}%</div>
+                        <Progress value={metrics.utilization * 100} className="mt-2" />
+                      </div>
+                    </div>
+                    <Separator />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Cache Hit Rate</Label>
+                        <div className="text-2xl font-bold">
+                          {metrics.customMetrics?.cache_hit_rate ? 
+                            `${Math.round(metrics.customMetrics.cache_hit_rate * 100)}%` : 
+                            '0%'}
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          Hits: {metrics.customMetrics?.cache_hits || 0} | 
+                          Misses: {metrics.customMetrics?.cache_misses || 0}
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Active Connections</Label>
+                        <div className="text-2xl font-bold">
+                          {metrics.customMetrics?.active_connections || 0}
+                        </div>
+                        <p className="text-sm text-muted-foreground">Current connections</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Rate Limit Blocks</Label>
+                        <div className="text-2xl font-bold">
+                          {metrics.customMetrics?.rate_limit_blocks || 0}
+                        </div>
+                        <p className="text-sm text-muted-foreground">Blocked requests</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Worker Threads</Label>
+                        <div className="text-2xl font-bold">
+                          {metrics.customMetrics?.worker_threads || maxWorkers}
+                        </div>
+                        <p className="text-sm text-muted-foreground">Active workers</p>
+                      </div>
+                    </div>
+                    {metrics.latencyP50 !== undefined && (
+                      <>
+                        <Separator />
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label>Latency P50</Label>
+                            <div className="text-2xl font-bold">{Math.round(metrics.latencyP50)}ms</div>
+                            <p className="text-sm text-muted-foreground">Median latency</p>
+                          </div>
+                          {metrics.latencyP99 !== undefined && (
+                            <div className="space-y-2">
+                              <Label>Latency P99</Label>
+                              <div className="text-2xl font-bold">{Math.round(metrics.latencyP99)}ms</div>
+                              <p className="text-sm text-muted-foreground">99th percentile</p>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </>
+                ) : (
+                  <div className="text-center text-muted-foreground py-8">
+                    No metrics available. Start the simulation to see real-time metrics.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Config Tab */}
           <TabsContent value="config" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>Server Block Configuration</CardTitle>
-                <CardDescription>NGINX server block configuration</CardDescription>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Server Block Configuration</CardTitle>
+                    <CardDescription>NGINX server block configuration (read-only view)</CardDescription>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      // Generate config from structured data
+                      const generatedConfig = generateNginxConfig({
+                        port,
+                        serverName,
+                        locations,
+                        upstreams,
+                        sslCertificates,
+                        rateLimitZones,
+                        enableSSL,
+                        sslPort,
+                        enableGzip,
+                        enableCache,
+                        maxWorkers,
+                      });
+                      updateConfig({ config: generatedConfig });
+                      toast({
+                        title: 'Success',
+                        description: 'Configuration regenerated from structured settings',
+                      });
+                    }}
+                  >
+                    <Settings className="h-4 w-4 mr-2" />
+                    Regenerate from Settings
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
@@ -876,6 +1317,10 @@ export function NginxConfigAdvanced({ componentId }: NginxConfigProps) {
                     className="font-mono text-sm h-96"
                     placeholder="Enter NGINX configuration..."
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Note: This is a read-only view. Use the structured tabs (Server, Locations, Upstreams, etc.) to configure NGINX.
+                    Changes here are saved but do not affect simulation. Click "Regenerate from Settings" to sync with current configuration.
+                  </p>
                 </div>
               </CardContent>
             </Card>

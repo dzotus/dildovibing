@@ -114,6 +114,7 @@ export class DataFlowEngine {
     
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
+    this.registerHandler('nginx', this.createIntegrationHandler('nginx'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
@@ -2223,6 +2224,85 @@ export class DataFlowEngine {
         },
         
         getSupportedFormats: () => ['json', 'xml', 'binary'],
+      };
+    }
+
+    if (type === 'nginx') {
+      return {
+        processData: (node, message, config) => {
+          // Get NGINX routing engine from emulation engine
+          const routingEngine = emulationEngine.getNginxRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const protocol = headers['X-Forwarded-Proto'] === 'https' || message.metadata?.protocol === 'https' ? 'https' : 'http';
+
+          // Route request through NGINX
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            protocol,
+          });
+
+          if (routeResult.response.status >= 200 && routeResult.response.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.response.latency;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              nginxLocation: routeResult.match?.location.path,
+              nginxUpstream: routeResult.upstreamTarget,
+              nginxResponseStatus: routeResult.response.status,
+              nginxCacheHit: routeResult.response.cacheHit,
+            };
+            // Update payload if response has body
+            if (routeResult.response.body) {
+              message.payload = routeResult.response.body;
+            }
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.response.error || `HTTP ${routeResult.response.status}`;
+            message.latency = routeResult.response.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // NGINX can transform requests/responses (gzip, etc.)
+          const nginxConfig = (node.data.config as any) || {};
+          if (nginxConfig.enableGzip && message.metadata?.nginxCacheHit) {
+            // Gzip compression is handled by NGINX
+            message.metadata = {
+              ...message.metadata,
+              contentEncoding: 'gzip',
+            };
+          }
+          
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
       };
     }
 

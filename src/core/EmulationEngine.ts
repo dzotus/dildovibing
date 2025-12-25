@@ -9,6 +9,7 @@ import { PubSubRoutingEngine } from './PubSubRoutingEngine';
 import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
+import { NginxRoutingEngine } from './NginxRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
@@ -146,6 +147,9 @@ export class EmulationEngine {
   
   // Kong Gateway routing engines per node
   private kongRoutingEngines: Map<string, KongRoutingEngine> = new Map();
+  
+  // NGINX routing engines per node
+  private nginxRoutingEngines: Map<string, NginxRoutingEngine> = new Map();
   
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
@@ -335,6 +339,9 @@ export class EmulationEngine {
         }
         if (node.type === 'kong') {
           this.initializeKongRoutingEngine(node);
+        }
+        if (node.type === 'nginx') {
+          this.initializeNginxRoutingEngine(node);
         }
         if (node.type === 'apigee') {
           this.initializeApigeeRoutingEngine(node);
@@ -547,6 +554,11 @@ export class EmulationEngine {
         this.initializeKongRoutingEngine(node);
       }
       
+      // Initialize NGINX routing engine for NGINX nodes
+      if (node.type === 'nginx') {
+        this.initializeNginxRoutingEngine(node);
+      }
+      
       // Initialize Apigee routing engine for Apigee Gateway nodes
       if (node.type === 'apigee') {
         this.initializeApigeeRoutingEngine(node);
@@ -701,6 +713,7 @@ export class EmulationEngine {
         this.azureServiceBusRoutingEngines.delete(nodeId);
         this.pubSubRoutingEngines.delete(nodeId);
         this.kongRoutingEngines.delete(nodeId);
+        this.nginxRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
@@ -4056,27 +4069,75 @@ export class EmulationEngine {
       return;
     }
     
-    const workerThreads = config.workerThreads || 4;
-    const throughputReqs = config.requestsPerSecond || 10000;
+    // Get NGINX routing engine
+    const routingEngine = this.nginxRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default behavior
+      const workerThreads = config.workerThreads || (config as any).maxWorkers || 4;
+      const throughputReqs = config.requestsPerSecond || 10000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 1 + (1 - loadVariation) * 4;
+      metrics.errorRate = 0.00001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (workerThreads / 4));
+      
+      metrics.customMetrics = {
+        'worker_threads': workerThreads,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+      };
+      return;
+    }
+
+    // Get NGINX config
+    const nginxConfig = (config as any) || {};
+    const maxWorkers = nginxConfig.maxWorkers || 4;
+    const requestsPerSecond = nginxConfig.requestsPerSecond || 10000;
+    const enableCache = nginxConfig.enableCache ?? true;
+    const enableGzip = nginxConfig.enableGzip ?? true;
     
-    // Throughput with load variation
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+    
+    // Calculate throughput with load variation
     const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
-    metrics.throughput = throughputReqs * loadVariation;
+    let baseThroughput = requestsPerSecond * loadVariation;
     
-    // Latency 1-5ms for balancing
-    metrics.latency = 1 + (1 - loadVariation) * 4;
+    // Apply rate limiting effects
+    if (stats.rateLimitBlocks > 0) {
+      // Rate limiting reduces effective throughput
+      const blockRate = Math.min(0.1, stats.rateLimitBlocks / Math.max(1, stats.requests));
+      baseThroughput = baseThroughput * (1 - blockRate);
+    }
     
-    // Very low error rate
-    metrics.errorRate = 0.00001;
+    metrics.throughput = baseThroughput;
     
-    // Utilization based on worker threads
-    metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (workerThreads / 4));
+    // Latency calculation (1-10ms base + upstream latency)
+    const baseLatency = 1 + (1 - loadVariation) * 4;
+    const upstreamLatency = 10 + Math.random() * 90; // Simulated upstream latency
+    metrics.latency = baseLatency + (upstreamLatency * 0.3); // NGINX adds ~30% of upstream latency
     
+    // Error rate (very low for NGINX, but can increase with rate limiting)
+    const rateLimitErrorRate = stats.rateLimitBlocks > 0 ? 
+      Math.min(0.05, stats.rateLimitBlocks / Math.max(1, stats.requests)) : 0;
+    metrics.errorRate = 0.00001 + rateLimitErrorRate;
+    
+    // Utilization based on worker threads and throughput
+    const workerUtilization = Math.min(1, (metrics.throughput / requestsPerSecond) * (maxWorkers / 4));
+    metrics.utilization = workerUtilization;
+    
+    // Custom metrics
     metrics.customMetrics = {
-      'worker_threads': workerThreads,
+      'worker_threads': maxWorkers,
       'active_connections': Math.floor(metrics.throughput * 0.1),
-      'cache_hits': Math.floor(Math.random() * 10000),
-      'cache_misses': Math.floor(Math.random() * 1000),
+      'cache_hits': stats.cacheHits,
+      'cache_misses': stats.cacheMisses,
+      'cache_hit_rate': Math.round(stats.cacheHitRate * 100) / 100,
+      'rate_limit_blocks': stats.rateLimitBlocks,
+      'locations': stats.locations,
+      'upstreams': stats.upstreams,
+      'ssl_enabled': nginxConfig.enableSSL ? 1 : 0,
+      'gzip_enabled': enableGzip ? 1 : 0,
     };
   }
 
@@ -5351,6 +5412,29 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize NGINX routing engine for a node
+   */
+  private initializeNginxRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new NginxRoutingEngine();
+    
+    routingEngine.initialize({
+      locations: config.locations || [],
+      upstreams: config.upstreams || [],
+      rateLimitZones: config.rateLimitZones || [],
+      sslCertificates: config.sslCertificates || [],
+      enableSSL: config.enableSSL,
+      sslPort: config.sslPort,
+      enableGzip: config.enableGzip,
+      enableCache: config.enableCache,
+      maxWorkers: config.maxWorkers,
+    });
+    
+    this.nginxRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Apigee routing engine for a node
    */
   private initializeApigeeRoutingEngine(node: CanvasNode): void {
@@ -6164,6 +6248,13 @@ export class EmulationEngine {
    */
   public getKongRoutingEngine(nodeId: string): KongRoutingEngine | undefined {
     return this.kongRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get NGINX routing engine for a node
+   */
+  public getNginxRoutingEngine(nodeId: string): NginxRoutingEngine | undefined {
+    return this.nginxRoutingEngines.get(nodeId);
   }
 
   /**
