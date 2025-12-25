@@ -138,6 +138,7 @@ export class DataFlowEngine {
     this.registerHandler('argo-cd', this.createArgoCDHandler());
     this.registerHandler('terraform', this.createTerraformHandler());
     this.registerHandler('harbor', this.createHarborHandler());
+    this.registerHandler('docker', this.createDockerHandler());
   }
 
   /**
@@ -3574,6 +3575,102 @@ export class DataFlowEngine {
         return message;
       },
       getSupportedFormats: () => ['json', 'binary'],
+    };
+  }
+
+  /**
+   * Create handler for Docker (Container Management)
+   * Обрабатывает операции с контейнерами, образами, сетями, томами
+   */
+  private createDockerHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getDockerEmulationEngine(node.id);
+
+        if (!engine) {
+          message.status = 'failed';
+          message.error = 'Docker engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'container-operation';
+
+        // Docker operations: container (create, start, stop, etc.), image (pull, push, build), network, volume
+        if (operation.startsWith('container-')) {
+          // Container operations
+          const containerOp = operation.replace('container-', '');
+          message.status = 'delivered';
+          
+          switch (containerOp) {
+            case 'create':
+              message.latency = 500 + Math.random() * 1000; // 500-1500ms
+              break;
+            case 'start':
+              message.latency = 200 + Math.random() * 500; // 200-700ms
+              break;
+            case 'stop':
+              message.latency = 100 + Math.random() * 300; // 100-400ms
+              break;
+            case 'restart':
+              message.latency = 300 + Math.random() * 700; // 300-1000ms
+              break;
+            default:
+              message.latency = 100 + Math.random() * 200;
+          }
+          
+          message.payload = {
+            ...(payload || {}),
+            docker: {
+              operation: containerOp,
+              containerId: payload.containerId || 'unknown',
+              status: 'completed',
+            },
+          };
+        } else if (operation.startsWith('image-')) {
+          // Image operations
+          const imageOp = operation.replace('image-', '');
+          message.status = 'delivered';
+          
+          switch (imageOp) {
+            case 'pull':
+              message.latency = 2000 + Math.random() * 8000; // 2-10 seconds
+              break;
+            case 'push':
+              message.latency = 3000 + Math.random() * 10000; // 3-13 seconds
+              break;
+            case 'build':
+              message.latency = 5000 + Math.random() * 15000; // 5-20 seconds
+              break;
+            default:
+              message.latency = 1000 + Math.random() * 2000;
+          }
+          
+          message.payload = {
+            ...(payload || {}),
+            docker: {
+              operation: imageOp,
+              imageId: payload.imageId || 'unknown',
+              status: 'completed',
+            },
+          };
+        } else {
+          // Default: pass through
+          message.status = 'delivered';
+          message.latency = 100 + Math.random() * 200;
+          message.payload = {
+            ...(payload || {}),
+            docker: {
+              operation: operation || 'unknown',
+              status: 'completed',
+            },
+          };
+        }
+
+        return message;
+      },
+      getSupportedFormats: () => ['json', 'text'],
     };
   }
 

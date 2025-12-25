@@ -37,6 +37,7 @@ import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 import { TerraformEmulationEngine } from './TerraformEmulationEngine';
 import { HarborEmulationEngine } from './HarborEmulationEngine';
+import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -235,6 +236,9 @@ export class EmulationEngine {
 
   // Harbor emulation engines per node
   private harborEngines: Map<string, HarborEmulationEngine> = new Map();
+
+  // Docker emulation engines per node
+  private dockerEngines: Map<string, DockerEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -483,6 +487,15 @@ export class EmulationEngine {
           } else {
             // Update config if engine already exists
             const engine = this.harborEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        }
+        if (node.type === 'docker') {
+          if (!this.dockerEngines.has(node.id)) {
+            this.initializeDockerEngine(node);
+          } else {
+            // Update config if engine already exists
+            const engine = this.dockerEngines.get(node.id)!;
             engine.updateConfig(node);
           }
         }
@@ -1092,6 +1105,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Docker updates (container operations, image operations, resource updates)
+    for (const [nodeId, dockerEngine] of this.dockerEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        dockerEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateDocker method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'docker', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1234,6 +1271,9 @@ export class EmulationEngine {
           break;
         case 'harbor':
           this.simulateHarbor(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'docker':
+          this.simulateDocker(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -5004,6 +5044,64 @@ export class EmulationEngine {
   }
 
   /**
+   * Docker emulation
+   */
+  private simulateDocker(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.dockerEngines.get(node.id);
+
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const dockerMetrics = engine.getMetrics();
+
+    // Throughput = все операции в секунду (container ops, image ops)
+    metrics.throughput = load.throughput;
+
+    // Latency = средняя латентность операций
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных операций
+    metrics.errorRate = load.errorRate;
+
+    // Utilization = среднее использование ресурсов (CPU, память, сеть, диск)
+    metrics.utilization = (load.cpuUtilization + load.memoryUtilization + load.networkUtilization + load.diskUtilization) / 4;
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      docker_containers_total: dockerMetrics.containersTotal,
+      docker_containers_running: dockerMetrics.containersRunning,
+      docker_containers_stopped: dockerMetrics.containersStopped,
+      docker_containers_paused: dockerMetrics.containersPaused,
+      docker_images_total: dockerMetrics.imagesTotal,
+      docker_images_size: dockerMetrics.imagesSize,
+      docker_networks_total: dockerMetrics.networksTotal,
+      docker_volumes_total: dockerMetrics.volumesTotal,
+      docker_volumes_size: dockerMetrics.volumesSize,
+      docker_ops_per_sec: dockerMetrics.operationsPerSecond,
+      docker_avg_operation_latency: dockerMetrics.averageOperationLatency,
+      docker_total_cpu_usage: dockerMetrics.totalCpuUsage,
+      docker_total_memory_usage: dockerMetrics.totalMemoryUsage,
+      docker_total_memory_limit: dockerMetrics.totalMemoryLimit,
+      docker_total_network_rx: dockerMetrics.totalNetworkRx,
+      docker_total_network_tx: dockerMetrics.totalNetworkTx,
+      docker_build_ops_per_sec: dockerMetrics.buildOperationsPerSecond,
+      docker_pull_ops_per_sec: dockerMetrics.pullOperationsPerSecond,
+      docker_push_ops_per_sec: dockerMetrics.pushOperationsPerSecond,
+      docker_cpu_utilization: load.cpuUtilization,
+      docker_memory_utilization: load.memoryUtilization,
+      docker_network_utilization: load.networkUtilization,
+      docker_disk_utilization: load.diskUtilization,
+    };
+  }
+
+  /**
    * IDS/IPS emulation
    */
   private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5896,6 +5994,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Docker Emulation Engine for Docker node
+   */
+  private initializeDockerEngine(node: CanvasNode): void {
+    const engine = new DockerEmulationEngine();
+    engine.initializeConfig(node);
+    this.dockerEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -6339,6 +6446,13 @@ export class EmulationEngine {
    */
   public getHarborEmulationEngine(nodeId: string): HarborEmulationEngine | undefined {
     return this.harborEngines.get(nodeId);
+  }
+
+  /**
+   * Get Docker emulation engine for a node
+   */
+  public getDockerEmulationEngine(nodeId: string): DockerEmulationEngine | undefined {
+    return this.dockerEngines.get(nodeId);
   }
 
   /**
