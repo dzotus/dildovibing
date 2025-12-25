@@ -137,6 +137,12 @@
   - Интерфейсы для всех сущностей
   - Методы для управления и получения данных
   - Расчет метрик
+- ✅ `src/core/OpenTelemetryCollectorRoutingEngine.ts` (~350 строк)
+  - Полная реализация класса OpenTelemetryCollectorRoutingEngine
+  - Поддержка receivers, processors, exporters, pipelines
+  - Обработка traces, metrics, logs
+  - Подсчет метрик обработки данных
+  - Исправлена критическая ошибка отсутствующего экспорта
 
 #### Измененные файлы
 - ✅ `src/core/EmulationEngine.ts`
@@ -333,6 +339,26 @@
   - realProjects, realCredentials, realSchedules для синхронизации с эмуляцией
   - Автоматическое обновление UI при изменении данных в эмуляции
   - Fallback на config данные при отсутствии эмуляции
+
+- ✅ **Критическое исправление OpenTelemetryCollectorRoutingEngine**: Исправлена ошибка компиляции
+  - Файл `src/core/OpenTelemetryCollectorRoutingEngine.ts` был пустым, что вызывало ошибку экспорта
+  - Создана полная реализация класса с корректным экспортом
+  - Реализованы методы `initializeConfig()` и `processMessage()`
+  - Добавлены интерфейсы для receivers, processors, exporters, pipelines
+  - Реализована логика обработки данных через pipelines с определением типа (traces/metrics/logs)
+  - Добавлены методы получения и сброса метрик
+  - Исправлена ошибка: `The requested module '/src/core/OpenTelemetryCollectorRoutingEngine.ts' does not provide an export named 'OpenTelemetryCollectorRoutingEngine'`
+  - Класс полностью интегрирован с EmulationEngine и DataFlowEngine
+
+#### Исправление критической ошибки экспорта
+- ✅ **OpenTelemetryCollectorRoutingEngine**: Исправлена ошибка отсутствующего экспорта
+  - Файл `src/core/OpenTelemetryCollectorRoutingEngine.ts` был пустым
+  - Создана полная реализация класса с экспортом
+  - Реализованы методы `initializeConfig()` и `processMessage()`
+  - Добавлены интерфейсы для receivers, processors, exporters, pipelines
+  - Реализована логика обработки данных через pipelines
+  - Добавлены методы получения метрик
+  - Исправлена ошибка: `The requested module '/src/core/OpenTelemetryCollectorRoutingEngine.ts' does not provide an export named 'OpenTelemetryCollectorRoutingEngine'`
 
 ### Известные ограничения
 - ⚠️ **Workflow Job Templates**: Не реализованы (ansible-12, можно отложить)

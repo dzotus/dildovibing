@@ -35,7 +35,6 @@ import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 import { TerraformEmulationEngine } from './TerraformEmulationEngine';
-import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -228,9 +227,6 @@ export class EmulationEngine {
 
   // Terraform emulation engines per node
   private terraformEngines: Map<string, TerraformEmulationEngine> = new Map();
-
-  // Ansible emulation engines per node
-  private ansibleEngines: Map<string, AnsibleEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -678,17 +674,6 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
-      
-      // Initialize Ansible emulation engine for Ansible nodes
-      if (node.type === 'ansible') {
-        if (!this.ansibleEngines.has(node.id)) {
-          this.initializeAnsibleEngine(node);
-        } else {
-          // Update config if engine already exists
-          const engine = this.ansibleEngines.get(node.id)!;
-          engine.updateConfig(node);
-        }
-      }
     }
     
     // Remove metrics for deleted nodes
@@ -722,8 +707,6 @@ export class EmulationEngine {
         this.jenkinsEngines.delete(nodeId);
         this.gitlabCIEngines.delete(nodeId);
         this.argoCDEngines.delete(nodeId);
-        this.terraformEngines.delete(nodeId);
-        this.ansibleEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -1056,24 +1039,6 @@ export class EmulationEngine {
       }
     }
     
-    // Process Ansible emulation engines
-    for (const [nodeId, ansibleEngine] of this.ansibleEngines.entries()) {
-      try {
-        const node = this.nodes.find(n => n.id === nodeId);
-        ansibleEngine.performUpdate(now);
-      } catch (error) {
-        const node = this.nodes.find(n => n.id === nodeId);
-        errorCollector.addError(error as Error, {
-          severity: 'warning',
-          source: 'component-engine',
-          componentId: nodeId,
-          componentLabel: node?.data.label,
-          componentType: node?.type,
-          context: { engine: 'ansible', operation: 'performUpdate' },
-        });
-      }
-    }
-    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1213,9 +1178,6 @@ export class EmulationEngine {
           break;
         case 'terraform':
           this.simulateTerraform(node, config, metrics, hasIncomingConnections);
-          break;
-        case 'ansible':
-          this.simulateAnsible(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4829,66 +4791,6 @@ export class EmulationEngine {
   }
 
   /**
-   * Ansible emulation
-   */
-  private simulateAnsible(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
-    const engine = this.ansibleEngines.get(node.id);
-    
-    if (!engine) {
-      // If engine not initialized, use default metrics
-      metrics.throughput = 0;
-      metrics.latency = 0;
-      metrics.errorRate = 0;
-      metrics.utilization = 0;
-      return;
-    }
-    
-    // Metrics are updated in simulate() method after performUpdate()
-    // This method is called before performUpdate, so we use current metrics
-    const ansibleMetrics = engine.getMetrics();
-    
-    // Throughput: jobs per hour converted to per second
-    metrics.throughput = ansibleMetrics.jobsPerHour / 3600;
-    
-    // Latency: average job duration
-    metrics.latency = ansibleMetrics.averageJobDuration || 0;
-    
-    // Error rate: failed jobs / total jobs
-    const totalJobs = ansibleMetrics.jobsSuccess + ansibleMetrics.jobsFailed;
-    metrics.errorRate = totalJobs > 0 
-      ? ansibleMetrics.jobsFailed / totalJobs 
-      : 0;
-    
-    // Utilization: running jobs / max concurrent jobs (based on templates)
-    const maxConcurrentJobs = ansibleMetrics.jobTemplatesEnabled * 3; // Assume 3 concurrent jobs per template
-    metrics.utilization = maxConcurrentJobs > 0
-      ? Math.min(1, ansibleMetrics.jobsRunning / maxConcurrentJobs)
-      : 0;
-    
-    metrics.customMetrics = {
-      inventoriesTotal: ansibleMetrics.inventoriesTotal,
-      projectsTotal: ansibleMetrics.projectsTotal,
-      credentialsTotal: ansibleMetrics.credentialsTotal,
-      jobTemplatesTotal: ansibleMetrics.jobTemplatesTotal,
-      jobTemplatesEnabled: ansibleMetrics.jobTemplatesEnabled,
-      jobsTotal: ansibleMetrics.jobsTotal,
-      jobsSuccess: ansibleMetrics.jobsSuccess,
-      jobsFailed: ansibleMetrics.jobsFailed,
-      jobsRunning: ansibleMetrics.jobsRunning,
-      jobsPending: ansibleMetrics.jobsPending,
-      jobsPerHour: ansibleMetrics.jobsPerHour,
-      averageJobDuration: ansibleMetrics.averageJobDuration,
-      hostsTotal: ansibleMetrics.hostsTotal,
-      hostsOk: ansibleMetrics.hostsOk,
-      hostsChanged: ansibleMetrics.hostsChanged,
-      hostsFailed: ansibleMetrics.hostsFailed,
-      hostsUnreachable: ansibleMetrics.hostsUnreachable,
-      schedulesTotal: ansibleMetrics.schedulesTotal,
-      schedulesEnabled: ansibleMetrics.schedulesEnabled,
-    };
-  }
-
-  /**
    * Terraform emulation
    */
   private simulateTerraform(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5799,15 +5701,6 @@ export class EmulationEngine {
   }
 
   /**
-   * Initialize Ansible Emulation Engine for Ansible node
-   */
-  private initializeAnsibleEngine(node: CanvasNode): void {
-    const engine = new AnsibleEmulationEngine();
-    engine.initializeConfig(node);
-    this.ansibleEngines.set(node.id, engine);
-  }
-
-  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -6237,13 +6130,6 @@ export class EmulationEngine {
    */
   public getTerraformEmulationEngine(nodeId: string): TerraformEmulationEngine | undefined {
     return this.terraformEngines.get(nodeId);
-  }
-
-  /**
-   * Get Ansible emulation engine for a node
-   */
-  public getAnsibleEmulationEngine(nodeId: string): AnsibleEmulationEngine | undefined {
-    return this.ansibleEngines.get(nodeId);
   }
 
   /**
