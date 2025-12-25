@@ -12,6 +12,18 @@ import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { showSuccess, showError, showValidationError, showWarning } from '@/utils/toast';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import {
   Package,
   Folder,
   Tag,
@@ -111,6 +123,11 @@ interface HarborConfig {
 export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
+  
+  // Get component metrics from emulation store
+  const componentMetrics = useEmulationStore((state) => 
+    state.componentMetrics.get(componentId)
+  );
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
@@ -121,122 +138,32 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
   const enableVulnerabilityScanning = config.enableVulnerabilityScanning ?? true;
   const enableContentTrust = config.enableContentTrust ?? false;
   const enableImageScanning = config.enableImageScanning ?? true;
-  const projects = config.projects || [
-    {
-      id: '1',
-      name: 'archiphoenix',
-      public: false,
-      repositories: 12,
-      tags: 45,
-      vulnerabilityCount: 3,
-      storageUsed: 2.5,
-      accessLevel: 'private'
-    },
-    {
-      id: '2',
-      name: 'public-images',
-      public: true,
-      repositories: 8,
-      tags: 23,
-      vulnerabilityCount: 0,
-      storageUsed: 1.2,
-      accessLevel: 'public'
-    }
-  ];
-  const repositories = config.repositories || [
-    {
-      id: '1',
-      name: 'archiphoenix/web-app',
-      project: 'archiphoenix',
-      tags: 5,
-      pullCount: 1250,
-      lastPush: '2 hours ago',
-      size: 450
-    },
-    {
-      id: '2',
-      name: 'archiphoenix/api-server',
-      project: 'archiphoenix',
-      tags: 8,
-      pullCount: 890,
-      lastPush: '1 day ago',
-      size: 320
-    }
-  ];
-  const tags = config.tags || [
-    {
-      id: '1',
-      name: 'latest',
-      repository: 'archiphoenix/web-app',
-      digest: 'sha256:abc123...',
-      size: 125,
-      created: '2024-01-15T10:30:00Z',
-      vulnerabilityScan: {
-        status: 'completed',
-        severity: 'medium',
-        totalVulnerabilities: 5,
-        critical: 0,
-        high: 1,
-        medium: 3,
-        low: 1,
-        scannedAt: '2024-01-15T11:00:00Z'
-      },
-      signed: true
-    },
-    {
-      id: '2',
-      name: 'v1.2.3',
-      repository: 'archiphoenix/web-app',
-      digest: 'sha256:def456...',
-      size: 120,
-      created: '2024-01-14T15:20:00Z',
-      vulnerabilityScan: {
-        status: 'completed',
-        severity: 'low',
-        totalVulnerabilities: 2,
-        critical: 0,
-        high: 0,
-        medium: 1,
-        low: 1,
-        scannedAt: '2024-01-14T16:00:00Z'
-      },
-      signed: false
-    }
-  ];
-  const replicationPolicies = config.replicationPolicies || [
-    {
-      id: '1',
-      name: 'prod-replication',
-      sourceRegistry: 'harbor-prod',
-      destinationRegistry: 'harbor-backup',
-      trigger: 'event-based',
-      enabled: true,
-      filters: ['archiphoenix/**']
-    }
-  ];
-  const users = config.users || [
-    {
-      id: '1',
-      username: 'admin',
-      email: 'admin@archiphoenix.com',
-      role: 'admin',
-      enabled: true
-    },
-    {
-      id: '2',
-      username: 'developer1',
-      email: 'dev1@archiphoenix.com',
-      role: 'developer',
-      enabled: true
-    }
-  ];
-  const selectedProject = config.selectedProject || projects[0]?.name || '';
+  const projects = config.projects || [];
+  const repositories = config.repositories || [];
+  const tags = config.tags || [];
+  const replicationPolicies = config.replicationPolicies || [];
+  const users = config.users || [];
+  const selectedProject = config.selectedProject || 'all';
 
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [showCreateReplication, setShowCreateReplication] = useState(false);
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [selectedRepository, setSelectedRepository] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Form states
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newUsername, setNewUsername] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newReplicationName, setNewReplicationName] = useState('');
+  const [newReplicationSource, setNewReplicationSource] = useState('');
+  const [newReplicationDest, setNewReplicationDest] = useState('');
+  const [newReplicationTrigger, setNewReplicationTrigger] = useState<'manual' | 'event-based' | 'scheduled'>('manual');
+  
+  // Delete confirmations
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null);
+  const [userToDelete, setUserToDelete] = useState<string | null>(null);
+  const [replicationToDelete, setReplicationToDelete] = useState<string | null>(null);
 
   const updateConfig = (updates: Partial<HarborConfig>) => {
     updateNode(componentId, {
@@ -247,97 +174,184 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
     });
   };
 
+  // Validation helpers
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validateProjectName = (name: string): boolean => {
+    return name.trim().length > 0 && !projects.some(p => p.name === name.trim());
+  };
+
+  const validateUsername = (username: string): boolean => {
+    return username.trim().length > 0 && !users.some(u => u.username === username.trim());
+  };
+
+  const generateId = (): string => {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  };
+
+  // Project operations
   const addProject = () => {
+    const trimmedName = newProjectName.trim();
+    if (!trimmedName) {
+      showValidationError('Project name is required');
+      return;
+    }
+    if (!validateProjectName(trimmedName)) {
+      showValidationError('Project name must be unique');
+      return;
+    }
     const newProject: Project = {
-      id: String(projects.length + 1),
-      name: 'new-project',
+      id: generateId(),
+      name: trimmedName,
       public: false,
       repositories: 0,
       tags: 0,
       accessLevel: 'private'
     };
     updateConfig({ projects: [...projects, newProject] });
+    setNewProjectName('');
     setShowCreateProject(false);
+    showSuccess(`Project "${trimmedName}" created successfully`);
   };
 
-  const removeProject = (index: number) => {
-    updateConfig({ projects: projects.filter((_, i) => i !== index) });
+  const removeProject = (projectId: string) => {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    
+    // Count actual repositories from the repositories array
+    const projectRepositoriesCount = repositories.filter(repo => repo.project === project.name).length;
+    
+    if (projectRepositoriesCount > 0) {
+      showError(`Cannot delete project "${project.name}" because it contains ${projectRepositoriesCount} repositories`);
+      return;
+    }
+    
+    updateConfig({ projects: projects.filter(p => p.id !== projectId) });
+    setProjectToDelete(null);
+    showSuccess(`Project "${project.name}" deleted successfully`);
   };
 
-  const updateProject = (index: number, field: keyof Project, value: any) => {
-    const updated = [...projects];
-    updated[index] = { ...updated[index], [field]: value };
+  const updateProject = (projectId: string, field: keyof Project, value: any) => {
+    const updated = projects.map(p => 
+      p.id === projectId ? { ...p, [field]: value } : p
+    );
     updateConfig({ projects: updated });
   };
 
+  // Replication policy operations
   const addReplicationPolicy = () => {
+    const trimmedName = newReplicationName.trim();
+    if (!trimmedName) {
+      showValidationError('Policy name is required');
+      return;
+    }
+    if (!newReplicationSource.trim() || !newReplicationDest.trim()) {
+      showValidationError('Source and destination registries are required');
+      return;
+    }
     const newPolicy: ReplicationPolicy = {
-      id: String(replicationPolicies.length + 1),
-      name: 'new-replication',
-      sourceRegistry: 'source-registry',
-      destinationRegistry: 'dest-registry',
-      trigger: 'manual',
+      id: generateId(),
+      name: trimmedName,
+      sourceRegistry: newReplicationSource.trim(),
+      destinationRegistry: newReplicationDest.trim(),
+      trigger: newReplicationTrigger,
       enabled: true
     };
     updateConfig({ replicationPolicies: [...replicationPolicies, newPolicy] });
+    setNewReplicationName('');
+    setNewReplicationSource('');
+    setNewReplicationDest('');
+    setNewReplicationTrigger('manual');
     setShowCreateReplication(false);
+    showSuccess(`Replication policy "${trimmedName}" created successfully`);
   };
 
-  const removeReplicationPolicy = (index: number) => {
-    updateConfig({ replicationPolicies: replicationPolicies.filter((_, i) => i !== index) });
+  const removeReplicationPolicy = (policyId: string) => {
+    const policy = replicationPolicies.find(p => p.id === policyId);
+    if (!policy) return;
+    updateConfig({ replicationPolicies: replicationPolicies.filter(p => p.id !== policyId) });
+    setReplicationToDelete(null);
+    showSuccess(`Replication policy "${policy.name}" deleted successfully`);
   };
 
+  // User operations
   const addUser = () => {
+    const trimmedUsername = newUsername.trim();
+    const trimmedEmail = newUserEmail.trim();
+    if (!trimmedUsername) {
+      showValidationError('Username is required');
+      return;
+    }
+    if (!trimmedEmail) {
+      showValidationError('Email is required');
+      return;
+    }
+    if (!validateEmail(trimmedEmail)) {
+      showValidationError('Invalid email format');
+      return;
+    }
+    if (!validateUsername(trimmedUsername)) {
+      showValidationError('Username must be unique');
+      return;
+    }
     const newUser: User = {
-      id: String(users.length + 1),
-      username: 'new-user',
-      email: 'user@example.com',
+      id: generateId(),
+      username: trimmedUsername,
+      email: trimmedEmail,
       role: 'guest',
       enabled: true
     };
     updateConfig({ users: [...users, newUser] });
+    setNewUsername('');
+    setNewUserEmail('');
     setShowCreateUser(false);
+    showSuccess(`User "${trimmedUsername}" created successfully`);
   };
 
-  const removeUser = (index: number) => {
-    updateConfig({ users: users.filter((_, i) => i !== index) });
+  const removeUser = (userId: string) => {
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
+    updateConfig({ users: users.filter(u => u.id !== userId) });
+    setUserToDelete(null);
+    showSuccess(`User "${user.username}" deleted successfully`);
   };
 
-  const updateUser = (index: number, field: keyof User, value: any) => {
-    const updated = [...users];
-    updated[index] = { ...updated[index], [field]: value };
+  const updateUser = (userId: string, field: keyof User, value: any) => {
+    if (field === 'email' && typeof value === 'string' && !validateEmail(value)) {
+      showValidationError('Invalid email format');
+      return;
+    }
+    const updated = users.map(u => 
+      u.id === userId ? { ...u, [field]: value } : u
+    );
     updateConfig({ users: updated });
   };
 
   const scanVulnerability = (tagId: string) => {
-    const updated = [...tags];
-    const tagIndex = updated.findIndex(t => t.id === tagId);
-    if (tagIndex !== -1) {
-      updated[tagIndex].vulnerabilityScan = {
-        status: 'running',
-        severity: 'none',
-        scannedAt: new Date().toISOString()
-      };
-      updateConfig({ tags: updated });
-      // Simulate scan completion
-      setTimeout(() => {
-        const completed = [...tags];
-        const completedIndex = completed.findIndex(t => t.id === tagId);
-        if (completedIndex !== -1) {
-          completed[completedIndex].vulnerabilityScan = {
-            status: 'completed',
-            severity: 'medium',
-            totalVulnerabilities: Math.floor(Math.random() * 10),
-            critical: Math.floor(Math.random() * 2),
-            high: Math.floor(Math.random() * 3),
-            medium: Math.floor(Math.random() * 4),
-            low: Math.floor(Math.random() * 3),
-            scannedAt: new Date().toISOString()
-          };
-          updateConfig({ tags: completed });
-        }
-      }, 2000);
+    const tag = tags.find(t => t.id === tagId);
+    if (!tag) return;
+    
+    if (tag.vulnerabilityScan?.status === 'running') {
+      showWarning('Scan already in progress');
+      return;
     }
+
+    const updated = tags.map(t => 
+      t.id === tagId ? {
+        ...t,
+        vulnerabilityScan: {
+          status: 'pending' as const,
+          severity: 'none' as const,
+          scannedAt: new Date().toISOString()
+        }
+      } : t
+    );
+    updateConfig({ tags: updated });
+    showSuccess(`Vulnerability scan queued for ${tag.repository}:${tag.name}`);
+    // Scan will be processed by HarborEmulationEngine during simulation
   };
 
   const getSeverityColor = (severity: string) => {
@@ -351,10 +365,37 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
   };
 
   const filteredRepositories = repositories.filter(repo => {
-    if (selectedProject && repo.project !== selectedProject) return false;
+    if (selectedProject && selectedProject !== 'all' && repo.project !== selectedProject) return false;
     if (searchQuery && !repo.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     return true;
   });
+
+  // Get Harbor-specific metrics
+  const harborMetrics = componentMetrics?.customMetrics || {};
+  const pushOpsPerSec = harborMetrics.harbor_push_ops_per_sec || 0;
+  const pullOpsPerSec = harborMetrics.harbor_pull_ops_per_sec || 0;
+  const scanOpsPerSec = harborMetrics.harbor_scan_ops_per_sec || 0;
+  const storageUsed = harborMetrics.harbor_storage_used || 0;
+  const storageTotal = harborMetrics.harbor_storage_total || 100;
+  const scansRunning = harborMetrics.harbor_scans_running || 0;
+  const vulnerabilitiesTotal = harborMetrics.harbor_vulnerabilities_total || 0;
+
+  // Get component status based on metrics
+  const getComponentStatus = () => {
+    if (!componentMetrics) return { status: 'stopped', color: 'gray', label: 'Stopped' };
+    
+    if (componentMetrics.errorRate > 0.5) {
+      return { status: 'error', color: 'red', label: 'Error' };
+    }
+    
+    if (componentMetrics.utilization > 0 || componentMetrics.throughput > 0 || scansRunning > 0) {
+      return { status: 'running', color: 'green', label: 'Running' };
+    }
+    
+    return { status: 'stopped', color: 'gray', label: 'Stopped' };
+  };
+
+  const status = getComponentStatus();
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -372,9 +413,14 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline">v2.10</Badge>
-            <Badge variant="secondary" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+            <Badge 
+              variant={status.status === 'error' ? 'destructive' : status.status === 'running' ? 'default' : 'secondary'} 
+              className="gap-2"
+            >
+              <div 
+                className={`h-2 w-2 rounded-full ${status.status === 'running' ? 'bg-green-500 animate-pulse' : status.status === 'error' ? 'bg-red-500' : 'bg-gray-500'}`}
+              />
+              {status.label}
             </Badge>
           </div>
         </div>
@@ -409,6 +455,64 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                 value={adminPassword}
                 onChange={(e) => updateConfig({ adminPassword: e.target.value })}
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Metrics Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Metrics</CardTitle>
+            <CardDescription>Real-time Harbor metrics</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <div className="space-y-2">
+                <div className="text-sm text-muted-foreground">Push Ops/sec</div>
+                <div className="text-2xl font-bold">{pushOpsPerSec.toFixed(2)}</div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm text-muted-foreground">Pull Ops/sec</div>
+                <div className="text-2xl font-bold">{pullOpsPerSec.toFixed(2)}</div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-sm text-muted-foreground">Scan Ops/sec</div>
+                <div className="text-2xl font-bold">{scanOpsPerSec.toFixed(2)}</div>
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Storage Used</span>
+                  <span className="font-medium">{storageUsed.toFixed(2)} GB / {storageTotal.toFixed(2)} GB</span>
+                </div>
+                <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{ width: `${Math.min(100, (storageUsed / storageTotal) * 100)}%` }}
+                  />
+                </div>
+              </div>
+              {componentMetrics && (
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Average Latency: </span>
+                    <span className="font-medium">{componentMetrics.latency.toFixed(0)} ms</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Throughput: </span>
+                    <span className="font-medium">{componentMetrics.throughput.toFixed(2)} ops/sec</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Scans Running: </span>
+                    <span className="font-medium">{scansRunning}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Total Vulnerabilities: </span>
+                    <span className="font-medium">{vulnerabilitiesTotal}</span>
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -496,37 +600,61 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Project Name</Label>
-                      <Input placeholder="new-project" />
+                      <Input 
+                        placeholder="new-project" 
+                        value={newProjectName}
+                        onChange={(e) => setNewProjectName(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={addProject}>Create Project</Button>
-                      <Button variant="outline" onClick={() => setShowCreateProject(false)}>Cancel</Button>
+                      <Button onClick={addProject} disabled={!newProjectName.trim()}>Create Project</Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateProject(false);
+                        setNewProjectName('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
               )}
               <CardContent className="space-y-3">
-                {projects.map((project, index) => (
-                  <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="font-semibold">{project.name}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {project.repositories} repositories • {project.tags} tags
-                          {project.storageUsed && ` • ${project.storageUsed} GB`}
-                        </div>
-                      </div>
+                {projects.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No projects yet. Create your first project to get started.
+                  </div>
+                ) : (
+                  projects.map((project) => {
+                    // Calculate real counts from repositories and tags arrays
+                    const projectRepos = repositories.filter(repo => repo.project === project.name);
+                    const projectTags = tags.filter(tag => 
+                      projectRepos.some(repo => tag.repository === repo.name)
+                    );
+                    const projectRepoCount = projectRepos.length;
+                    const projectTagCount = projectTags.length;
+                    const projectVulnCount = projectTags.reduce((sum, tag) => 
+                      sum + (tag.vulnerabilityScan?.totalVulnerabilities || 0), 0
+                    );
+                    
+                    return (
+                      <div key={project.id} className="p-4 border border-border rounded-lg bg-card space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1">
+                            <div className="font-semibold">{project.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {projectRepoCount} repositories • {projectTagCount} tags
+                              {project.storageUsed && ` • ${project.storageUsed} GB`}
+                            </div>
+                          </div>
                       <div className="flex items-center gap-2">
                         <Badge variant={project.public ? 'default' : 'secondary'}>
                           {project.accessLevel || (project.public ? 'Public' : 'Private')}
                         </Badge>
-                        {project.vulnerabilityCount !== undefined && project.vulnerabilityCount > 0 && (
+                        {projectVulnCount > 0 && (
                           <Badge variant="destructive">
                             <AlertTriangle className="h-3 w-3 mr-1" />
-                            {project.vulnerabilityCount}
+                            {projectVulnCount}
                           </Badge>
                         )}
-                        <Button variant="ghost" size="icon" onClick={() => removeProject(index)}>
+                        <Button variant="ghost" size="icon" onClick={() => setProjectToDelete(project.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -534,12 +662,14 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                     <div className="flex items-center gap-4">
                       <Switch
                         checked={project.public}
-                        onCheckedChange={(checked) => updateProject(index, 'public', checked)}
+                        onCheckedChange={(checked) => updateProject(project.id, 'public', checked)}
                       />
                       <Label>Public Project</Label>
                     </div>
                   </div>
-                ))}
+                    );
+                  })
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -553,14 +683,20 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                   <CardDescription>Container image repositories</CardDescription>
                 </div>
                 <div className="flex gap-2">
-                  <Select value={selectedProject} onValueChange={(value) => updateConfig({ selectedProject: value })}>
+                  <Select 
+                    value={selectedProject} 
+                    onValueChange={(value) => {
+                      const newValue = value === 'all' ? undefined : value;
+                      updateConfig({ selectedProject: newValue });
+                    }}
+                  >
                     <SelectTrigger className="w-48">
                       <SelectValue placeholder="All Projects" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">All Projects</SelectItem>
-                      {projects.map((proj, idx) => (
-                        <SelectItem key={idx} value={proj.name}>{proj.name}</SelectItem>
+                      <SelectItem value="all">All Projects</SelectItem>
+                      {projects.map((proj) => (
+                        <SelectItem key={proj.id} value={proj.name}>{proj.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -576,17 +712,28 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
-                {filteredRepositories.map((repo, index) => (
-                  <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="space-y-1">
-                        <div className="font-semibold font-mono">{repo.name}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {repo.tags} tags • {repo.pullCount} pulls
-                          {repo.size && ` • ${repo.size} MB`}
-                          {repo.lastPush && ` • Last push: ${repo.lastPush}`}
-                        </div>
-                      </div>
+                {filteredRepositories.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No repositories yet. Repositories will appear when images are pushed to projects.
+                  </div>
+                ) : (
+                  filteredRepositories.map((repo) => {
+                    // Calculate real tag count from tags array
+                    const repoTags = tags.filter(tag => tag.repository === repo.name);
+                    const repoTagCount = repoTags.length;
+                    
+                    return (
+                      <div key={repo.id} className="p-4 border border-border rounded-lg bg-card space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="space-y-1">
+                            <div className="font-semibold font-mono">{repo.name}</div>
+                            <div className="text-sm text-muted-foreground">
+                              {repoTagCount} tags
+                              {repo.pullCount > 0 && ` • ${repo.pullCount} pulls`}
+                              {repo.size && ` • ${repo.size} MB`}
+                              {repo.lastPush && ` • Last push: ${repo.lastPush}`}
+                            </div>
+                          </div>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -597,8 +744,8 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                     </div>
                     {selectedRepository === repo.name && (
                       <div className="pt-2 border-t space-y-2">
-                        {tags.filter(t => t.repository === repo.name).map((tag, tagIdx) => (
-                          <div key={tagIdx} className="p-2 border rounded bg-muted/50 flex items-center justify-between">
+                        {tags.filter(t => t.repository === repo.name).map((tag) => (
+                          <div key={tag.id} className="p-2 border rounded bg-muted/50 flex items-center justify-between">
                             <div className="space-y-1">
                               <div className="font-mono text-sm">{tag.name}</div>
                               <div className="text-xs text-muted-foreground">
@@ -623,7 +770,9 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                       </div>
                     )}
                   </div>
-                ))}
+                    );
+                  })
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -636,8 +785,13 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                 <CardDescription>Manage and scan container image tags</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {tags.map((tag, index) => (
-                  <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
+                {tags.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No image tags yet. Tags will appear when images are pushed to repositories.
+                  </div>
+                ) : (
+                  tags.map((tag) => (
+                  <div key={tag.id} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="space-y-1">
                         <div className="font-semibold font-mono">{tag.repository}:{tag.name}</div>
@@ -704,7 +858,8 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                       </div>
                     )}
                   </div>
-                ))}
+                  ))
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -727,18 +882,69 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Policy Name</Label>
-                      <Input placeholder="replication-policy" />
+                      <Input 
+                        placeholder="replication-policy" 
+                        value={newReplicationName}
+                        onChange={(e) => setNewReplicationName(e.target.value)}
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label>Source Registry</Label>
+                        <Input 
+                          placeholder="source-registry" 
+                          value={newReplicationSource}
+                          onChange={(e) => setNewReplicationSource(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Destination Registry</Label>
+                        <Input 
+                          placeholder="dest-registry" 
+                          value={newReplicationDest}
+                          onChange={(e) => setNewReplicationDest(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Trigger</Label>
+                      <Select value={newReplicationTrigger} onValueChange={(value: 'manual' | 'event-based' | 'scheduled') => setNewReplicationTrigger(value)}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="manual">Manual</SelectItem>
+                          <SelectItem value="event-based">Event-based</SelectItem>
+                          <SelectItem value="scheduled">Scheduled</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={addReplicationPolicy}>Create Policy</Button>
-                      <Button variant="outline" onClick={() => setShowCreateReplication(false)}>Cancel</Button>
+                      <Button 
+                        onClick={addReplicationPolicy} 
+                        disabled={!newReplicationName.trim() || !newReplicationSource.trim() || !newReplicationDest.trim()}
+                      >
+                        Create Policy
+                      </Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateReplication(false);
+                        setNewReplicationName('');
+                        setNewReplicationSource('');
+                        setNewReplicationDest('');
+                        setNewReplicationTrigger('manual');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
               )}
               <CardContent className="space-y-3">
-                {replicationPolicies.map((policy, index) => (
-                  <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
+                {replicationPolicies.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No replication policies yet. Create a policy to replicate images between registries.
+                  </div>
+                ) : (
+                  replicationPolicies.map((policy) => (
+                  <div key={policy.id} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="space-y-1">
                         <div className="font-semibold">{policy.name}</div>
@@ -751,7 +957,7 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                           {policy.enabled ? 'Enabled' : 'Disabled'}
                         </Badge>
                         <Badge variant="outline">{policy.trigger}</Badge>
-                        <Button variant="ghost" size="icon" onClick={() => removeReplicationPolicy(index)}>
+                        <Button variant="ghost" size="icon" onClick={() => setReplicationToDelete(policy.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -767,7 +973,8 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                       </div>
                     )}
                   </div>
-                ))}
+                  ))
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -790,18 +997,45 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                   <div className="space-y-4">
                     <div className="space-y-2">
                       <Label>Username</Label>
-                      <Input placeholder="new-user" />
+                      <Input 
+                        placeholder="new-user" 
+                        value={newUsername}
+                        onChange={(e) => setNewUsername(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Email</Label>
+                      <Input 
+                        type="email"
+                        placeholder="user@example.com" 
+                        value={newUserEmail}
+                        onChange={(e) => setNewUserEmail(e.target.value)}
+                      />
                     </div>
                     <div className="flex gap-2">
-                      <Button onClick={addUser}>Add User</Button>
-                      <Button variant="outline" onClick={() => setShowCreateUser(false)}>Cancel</Button>
+                      <Button 
+                        onClick={addUser} 
+                        disabled={!newUsername.trim() || !newUserEmail.trim()}
+                      >
+                        Add User
+                      </Button>
+                      <Button variant="outline" onClick={() => {
+                        setShowCreateUser(false);
+                        setNewUsername('');
+                        setNewUserEmail('');
+                      }}>Cancel</Button>
                     </div>
                   </div>
                 </CardContent>
               )}
               <CardContent className="space-y-3">
-                {users.map((user, index) => (
-                  <div key={index} className="p-4 border border-border rounded-lg bg-card space-y-3">
+                {users.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No users yet. Add users to manage access to Harbor registry.
+                  </div>
+                ) : (
+                  users.map((user) => (
+                  <div key={user.id} className="p-4 border border-border rounded-lg bg-card space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="space-y-1">
                         <div className="font-semibold">{user.username}</div>
@@ -813,9 +1047,9 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                         </Badge>
                         <Switch
                           checked={user.enabled}
-                          onCheckedChange={(checked) => updateUser(index, 'enabled', checked)}
+                          onCheckedChange={(checked) => updateUser(user.id, 'enabled', checked)}
                         />
-                        <Button variant="ghost" size="icon" onClick={() => removeUser(index)}>
+                        <Button variant="ghost" size="icon" onClick={() => setUserToDelete(user.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
@@ -825,7 +1059,7 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                         <Label>Role</Label>
                         <Select
                           value={user.role}
-                          onValueChange={(value) => updateUser(index, 'role', value as any)}
+                          onValueChange={(value) => updateUser(user.id, 'role', value as any)}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -837,13 +1071,77 @@ export function HarborConfigAdvanced({ componentId }: HarborConfigProps) {
                           </SelectContent>
                         </Select>
                       </div>
+                      <div className="space-y-2">
+                        <Label>Email</Label>
+                        <Input
+                          type="email"
+                          value={user.email}
+                          onChange={(e) => updateUser(user.id, 'email', e.target.value)}
+                        />
+                      </div>
                     </div>
                   </div>
-                ))}
+                  ))
+                )}
               </CardContent>
             </Card>
           </TabsContent>
         </Tabs>
+
+        {/* Delete Confirmation Dialogs */}
+        <AlertDialog open={projectToDelete !== null} onOpenChange={(open) => !open && setProjectToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Project</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete project "{projects.find(p => p.id === projectToDelete)?.name}"? 
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => projectToDelete && removeProject(projectToDelete)}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={userToDelete !== null} onOpenChange={(open) => !open && setUserToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete User</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete user "{users.find(u => u.id === userToDelete)?.username}"? 
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => userToDelete && removeUser(userToDelete)}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog open={replicationToDelete !== null} onOpenChange={(open) => !open && setReplicationToDelete(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete Replication Policy</AlertDialogTitle>
+              <AlertDialogDescription>
+                Are you sure you want to delete replication policy "{replicationPolicies.find(p => p.id === replicationToDelete)?.name}"? 
+                This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => replicationToDelete && removeReplicationPolicy(replicationToDelete)}>
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </div>
   );

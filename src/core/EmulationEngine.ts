@@ -35,6 +35,7 @@ import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 import { TerraformEmulationEngine } from './TerraformEmulationEngine';
+import { HarborEmulationEngine } from './HarborEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -227,6 +228,9 @@ export class EmulationEngine {
 
   // Terraform emulation engines per node
   private terraformEngines: Map<string, TerraformEmulationEngine> = new Map();
+
+  // Harbor emulation engines per node
+  private harborEngines: Map<string, HarborEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -464,6 +468,16 @@ export class EmulationEngine {
         }
         if (node.type === 'terraform') {
           this.initializeTerraformEngine(node);
+        }
+        // Initialize Harbor emulation engine for Harbor nodes
+        if (node.type === 'harbor') {
+          if (!this.harborEngines.has(node.id)) {
+            this.initializeHarborEngine(node);
+          } else {
+            // Update config if engine already exists
+            const engine = this.harborEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
         }
       }
       
@@ -707,6 +721,8 @@ export class EmulationEngine {
         this.jenkinsEngines.delete(nodeId);
         this.gitlabCIEngines.delete(nodeId);
         this.argoCDEngines.delete(nodeId);
+        this.terraformEngines.delete(nodeId);
+        this.harborEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -1039,6 +1055,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Harbor updates (push/pull operations, scans, replication, GC)
+    for (const [nodeId, harborEngine] of this.harborEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        harborEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateHarbor method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'harbor', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1178,6 +1218,9 @@ export class EmulationEngine {
           break;
         case 'terraform':
           this.simulateTerraform(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'harbor':
+          this.simulateHarbor(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -4841,6 +4884,65 @@ export class EmulationEngine {
   }
 
   /**
+   * Harbor emulation
+   */
+  private simulateHarbor(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.harborEngines.get(node.id);
+
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const harborMetrics = engine.getMetrics();
+
+    // Throughput = все операции в секунду (push, pull, scan, replication)
+    metrics.throughput = load.throughput;
+
+    // Latency = средняя латентность операций
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных операций
+    metrics.errorRate = load.errorRate;
+
+    // Utilization = среднее использование ресурсов (CPU, память, хранилище, сеть)
+    metrics.utilization = (load.cpuUtilization + load.memoryUtilization + load.storageUtilization + load.networkUtilization) / 4;
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      harbor_push_ops_per_sec: harborMetrics.pushOperationsPerSecond,
+      harbor_pull_ops_per_sec: harborMetrics.pullOperationsPerSecond,
+      harbor_scan_ops_per_sec: harborMetrics.scanOperationsPerSecond,
+      harbor_replication_ops_per_sec: harborMetrics.replicationOperationsPerSecond,
+      harbor_avg_push_latency: harborMetrics.averagePushLatency,
+      harbor_avg_pull_latency: harborMetrics.averagePullLatency,
+      harbor_avg_scan_latency: harborMetrics.averageScanLatency,
+      harbor_storage_used: harborMetrics.storageUsed,
+      harbor_storage_total: harborMetrics.storageTotal,
+      harbor_projects_total: harborMetrics.totalProjects,
+      harbor_repositories_total: harborMetrics.totalRepositories,
+      harbor_tags_total: harborMetrics.totalTags,
+      harbor_vulnerabilities_total: harborMetrics.totalVulnerabilities,
+      harbor_scans_completed: harborMetrics.scansCompleted,
+      harbor_scans_running: harborMetrics.scansRunning,
+      harbor_scans_failed: harborMetrics.scansFailed,
+      harbor_replication_policies_enabled: harborMetrics.replicationPoliciesEnabled,
+      harbor_active_replications: harborMetrics.activeReplications,
+      harbor_gc_operations_total: harborMetrics.gcOperationsTotal,
+      harbor_gc_storage_freed: harborMetrics.gcStorageFreed,
+      harbor_cpu_utilization: load.cpuUtilization,
+      harbor_memory_utilization: load.memoryUtilization,
+      harbor_storage_utilization: load.storageUtilization,
+      harbor_network_utilization: load.networkUtilization,
+    };
+  }
+
+  /**
    * IDS/IPS emulation
    */
   private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5701,6 +5803,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Harbor Emulation Engine for Harbor node
+   */
+  private initializeHarborEngine(node: CanvasNode): void {
+    const engine = new HarborEmulationEngine();
+    engine.initializeConfig(node);
+    this.harborEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -6130,6 +6241,13 @@ export class EmulationEngine {
    */
   public getTerraformEmulationEngine(nodeId: string): TerraformEmulationEngine | undefined {
     return this.terraformEngines.get(nodeId);
+  }
+
+  /**
+   * Get Harbor emulation engine for a node
+   */
+  public getHarborEmulationEngine(nodeId: string): HarborEmulationEngine | undefined {
+    return this.harborEngines.get(nodeId);
   }
 
   /**

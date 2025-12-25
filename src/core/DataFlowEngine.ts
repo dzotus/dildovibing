@@ -136,6 +136,7 @@ export class DataFlowEngine {
     this.registerHandler('gitlab-ci', this.createGitLabCIHandler());
     this.registerHandler('argo-cd', this.createArgoCDHandler());
     this.registerHandler('terraform', this.createTerraformHandler());
+    this.registerHandler('harbor', this.createHarborHandler());
   }
 
   /**
@@ -3414,6 +3415,85 @@ export class DataFlowEngine {
       },
 
       getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  /**
+   * Create handler for Harbor (Container Registry)
+   * Обрабатывает push/pull операций, сканирование уязвимостей, репликацию
+   */
+  private createHarborHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getHarborEmulationEngine(node.id);
+
+        if (!engine) {
+          message.status = 'failed';
+          message.error = 'Harbor engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'pull';
+
+        // Harbor operations: push, pull, scan
+        if (operation === 'push') {
+          // Push operation - store image
+          message.status = 'delivered';
+          message.latency = 500 + Math.random() * 1500; // 500-2000ms
+          message.payload = {
+            ...(payload || {}),
+            harbor: {
+              operation: 'push',
+              repository: payload.repository || 'unknown',
+              tag: payload.tag || 'latest',
+              size: payload.size || 0,
+              status: 'completed',
+            },
+          };
+        } else if (operation === 'pull') {
+          // Pull operation - retrieve image
+          message.status = 'delivered';
+          message.latency = 200 + Math.random() * 800; // 200-1000ms
+          message.payload = {
+            ...(payload || {}),
+            harbor: {
+              operation: 'pull',
+              repository: payload.repository || 'unknown',
+              tag: payload.tag || 'latest',
+              status: 'completed',
+            },
+          };
+        } else if (operation === 'scan') {
+          // Scan operation - vulnerability scan
+          message.status = 'delivered';
+          message.latency = 5000 + Math.random() * 15000; // 5-20 seconds
+          message.payload = {
+            ...(payload || {}),
+            harbor: {
+              operation: 'scan',
+              repository: payload.repository || 'unknown',
+              tag: payload.tag || 'latest',
+              status: 'completed',
+            },
+          };
+        } else {
+          // Unknown operation
+          message.status = 'delivered';
+          message.latency = 100 + Math.random() * 200;
+          message.payload = {
+            ...(payload || {}),
+            harbor: {
+              operation: operation || 'unknown',
+              status: 'completed',
+            },
+          };
+        }
+
+        return message;
+      },
+      getSupportedFormats: () => ['json', 'binary'],
     };
   }
 

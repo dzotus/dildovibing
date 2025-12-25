@@ -1,5 +1,276 @@
 # Patch Notes
 
+## Версия 0.1.7zj - Harbor Registry: Базовая эмуляция и исправление UI
+
+### Обзор изменений
+**Критическое обновление**: Реализован базовый компонент Harbor Registry с эмуляцией операций и исправленным UI. Создан HarborEmulationEngine для симуляции работы container registry с поддержкой push/pull операций, сканирования уязвимостей, репликации и garbage collection. Исправлены все критические проблемы UI: формы создания сущностей теперь работают корректно, добавлена валидация, toast-уведомления и диалоги подтверждения для критичных действий.
+
+**Harbor Registry компонент**: Базовая реализация симуляции Container Registry. Поддержка основных операций: push/pull образов, сканирование уязвимостей, репликация между реестрами, garbage collection. Реалистичная симуляция метрик (throughput, latency, utilization, error rate). Исправлен UI: работающие формы создания проектов/пользователей/политик репликации, валидация полей, toast-уведомления, диалоги подтверждения удаления, использование ID вместо индексов для корректной работы CRUD операций.
+
+### Ключевые изменения
+
+#### HarborEmulationEngine - Базовая реализация симуляции
+- ✅ **HarborEmulationEngine** (`src/core/HarborEmulationEngine.ts`): Создан эмуляционный движок
+  - Симуляция push операций (500-2000ms latency, обновление storage)
+  - Симуляция pull операций (200-1000ms latency)
+  - Симуляция сканирования уязвимостей (5-20 секунд, генерация результатов)
+  - Симуляция репликации (event-based, scheduled триггеры)
+  - Симуляция garbage collection (30-90 секунд, освобождение storage)
+  - Расчет метрик в реальном времени (operations per second, latency, utilization)
+  - Управление активными операциями
+  - История операций для расчета метрик
+  - Расчет storage utilization на основе проектов и операций
+  - Подсчет уязвимостей из сканирований
+  - ~650 строк кода
+
+#### Интеграция в EmulationEngine
+- ✅ **Инициализация Harbor движка**: Добавлена поддержка Harbor нод
+  - Метод `initializeHarborEngine()` для создания и настройки движка
+  - Автоматическая инициализация при добавлении Harbor ноды
+  - Хранилище `harborEngines: Map<string, HarborEmulationEngine>`
+- ✅ **Симуляция метрик**: Метод `simulateHarbor()` для расчета метрик
+  - Throughput: все операции в секунду (push + pull + scan + replication)
+  - Latency: средняя задержка операций
+  - Error rate: доля неуспешных операций
+  - Utilization: среднее использование ресурсов (CPU, память, хранилище, сеть)
+  - Custom metrics: все детальные метрики Harbor (push/pull/scan ops/sec, storage, projects, vulnerabilities, etc.)
+- ✅ **Обновление в цикле симуляции**: Вызов `performUpdate()` для Harbor движков
+  - Симуляция push/pull операций на основе входящих соединений
+  - Симуляция сканирования уязвимостей
+  - Симуляция репликации
+  - Симуляция garbage collection
+  - Обновление активных операций
+  - Пересчет метрик
+- ✅ **Метод доступа**: `getHarborEmulationEngine()` для использования в DataFlowEngine
+
+#### Исправление UI компонента
+- ✅ **Формы создания сущностей**: Исправлены все формы
+  - Форма создания проекта: поля связаны с state, валидация имени
+  - Форма создания пользователя: поля username и email связаны с state, валидация email и уникальности
+  - Форма создания репликации: все поля связаны с state (name, source, destination, trigger), валидация обязательных полей
+  - Очистка полей после создания
+  - Disabled состояния для кнопок при пустых обязательных полях
+- ✅ **Использование ID вместо индексов**: Исправлены все map operations
+  - Все map keys используют ID сущностей вместо индексов
+  - Все операции поиска и обновления используют ID
+  - Корректная работа удаления элементов из списков
+- ✅ **Toast-уведомления**: Добавлены для всех операций
+  - Успешное создание проектов/пользователей/политик репликации
+  - Успешное удаление сущностей
+  - Ошибки валидации (пустые поля, невалидный email, неуникальные имена)
+  - Старт и завершение сканирования уязвимостей
+- ✅ **Диалоги подтверждения**: AlertDialog для критичных действий
+  - Подтверждение удаления проектов (с проверкой наличия репозиториев)
+  - Подтверждение удаления пользователей
+  - Подтверждение удаления политик репликации
+  - Информативные сообщения с названиями сущностей
+- ✅ **Валидация полей**: Полная валидация всех форм
+  - Проверка обязательных полей (name, username, email, source/destination registries)
+  - Валидация формата email (regex проверка)
+  - Проверка уникальности имен проектов и username пользователей
+  - Сообщения об ошибках через toast
+- ✅ **Улучшенные формы**: Расширенные поля для создания репликации
+  - Поля для source и destination registries
+  - Выбор trigger типа (manual, event-based, scheduled)
+  - Все поля правильно связаны с state
+
+#### Интеграция в DataFlowEngine
+- ✅ **Обработчик Harbor**: Создан handler для обработки операций
+  - Поддержка операций: push, pull, scan
+  - Обработка payload с информацией о repository, tag, size
+  - Расчет latency в зависимости от типа операции
+  - Установка статуса 'delivered' для успешных операций
+  - Поддержка JSON и binary форматов
+
+### Технические изменения
+
+#### Новые файлы
+- ✅ `src/core/HarborEmulationEngine.ts` (~650 строк)
+  - Полная реализация логики симуляции Harbor Registry
+  - Интерфейсы для всех сущностей (Project, Repository, ImageTag, VulnerabilityScan, ReplicationPolicy, User)
+  - Методы для управления операциями и получения данных
+  - Расчет метрик (HarborMetrics, HarborLoad)
+  - Симуляция всех основных операций
+
+#### Измененные файлы
+- ✅ `src/core/EmulationEngine.ts`
+  - Добавлен импорт HarborEmulationEngine
+  - Добавлено хранилище `harborEngines: Map<string, HarborEmulationEngine>`
+  - Добавлен метод `initializeHarborEngine()`
+  - Добавлен метод `simulateHarbor()`
+  - Добавлен метод `getHarborEmulationEngine()`
+  - Добавлен case 'harbor' в updateComponentMetrics
+  - Добавлен вызов performUpdate для Harbor движков в цикле симуляции
+- ✅ `src/components/config/devops/HarborConfigAdvanced.tsx` (~950 строк)
+  - Исправлены все формы создания (связаны с state)
+  - Добавлена валидация всех полей
+  - Добавлены toast-уведомления для всех операций
+  - Исправлено использование индексов на ID во всех map operations
+  - Добавлены AlertDialog для подтверждения удаления
+  - Добавлена валидация email и уникальности имен
+  - Расширена форма создания репликации (source, destination, trigger)
+  - Добавлена форма редактирования email пользователей
+- ✅ `src/core/DataFlowEngine.ts`
+  - Добавлен handler для 'harbor' типа
+  - Реализована обработка push/pull/scan операций
+  - Поддержка различных форматов данных
+
+### Детальные изменения
+
+#### HarborEmulationEngine - Интерфейсы и типы
+- ✅ `HarborProject`: Проекты с метаданными (repositories, tags, storage, vulnerabilities)
+- ✅ `HarborRepository`: Репозитории с статистикой (pull count, size, last push)
+- ✅ `HarborImageTag`: Теги образов с информацией о сканировании уязвимостей
+- ✅ `HarborVulnerabilityScan`: Результаты сканирования (status, severity, counts по уровням)
+- ✅ `HarborReplicationPolicy`: Политики репликации (source, destination, trigger, filters)
+- ✅ `HarborUser`: Пользователи с ролями (admin, developer, guest)
+- ✅ `HarborOperation`: Операции для отслеживания (push, pull, scan, replication, gc)
+- ✅ `HarborMetrics`: Метрики компонента (ops/sec, latency, storage, counts)
+- ✅ `HarborLoad`: Нагрузка для расчета метрик компонента
+
+#### HarborEmulationEngine - Методы симуляции
+- ✅ `simulatePushPullOperations()`: Симуляция push/pull на основе входящих соединений
+- ✅ `simulatePush()`: Push операция с обновлением storage (500-2000ms latency)
+- ✅ `simulatePull()`: Pull операция (200-1000ms latency)
+- ✅ `simulateVulnerabilityScans()`: Управление сканированиями уязвимостей
+- ✅ `startVulnerabilityScan()`: Запуск сканирования (5-20 секунд)
+- ✅ `completeVulnerabilityScan()`: Завершение сканирования с генерацией результатов
+- ✅ `simulateReplication()`: Симуляция репликации по триггерам
+- ✅ `simulateGarbageCollection()`: Периодический запуск GC (24 часа)
+- ✅ `runGarbageCollection()`: Выполнение GC с освобождением storage
+- ✅ `calculateLoad()`: Расчет нагрузки для метрик компонента
+- ✅ `updateMetrics()`: Обновление всех метрик из истории операций
+
+#### UI улучшения - Формы и валидация
+- ✅ **State management**: Добавлены state для всех форм
+  - `newProjectName`, `newUsername`, `newUserEmail`
+  - `newReplicationName`, `newReplicationSource`, `newReplicationDest`, `newReplicationTrigger`
+  - `projectToDelete`, `userToDelete`, `replicationToDelete` для диалогов
+- ✅ **Валидация**: Функции валидации
+  - `validateEmail()`: Проверка формата email через regex
+  - `validateProjectName()`: Проверка уникальности имен проектов
+  - `validateUsername()`: Проверка уникальности username
+  - `generateId()`: Генерация уникальных ID для сущностей
+- ✅ **Операции с ID**: Все операции используют ID
+  - `removeProject(projectId)`, `removeUser(userId)`, `removeReplicationPolicy(policyId)`
+  - `updateProject(projectId, field, value)`, `updateUser(userId, field, value)`
+  - Map keys используют `project.id`, `user.id`, `policy.id`
+
+#### UI улучшения - Toast и диалоги
+- ✅ **Toast-уведомления**: Информация о всех операциях
+  - `showSuccess()`: Успешное создание/удаление сущностей
+  - `showError()`: Ошибки операций
+  - `showValidationError()`: Ошибки валидации
+  - Контекстные сообщения с названиями сущностей
+- ✅ **AlertDialog**: Подтверждения для критичных действий
+  - Диалог удаления проекта (с информацией о проекте)
+  - Диалог удаления пользователя (с именем пользователя)
+  - Диалог удаления политики репликации (с названием политики)
+  - Кнопки Cancel и Delete с правильными обработчиками
+
+### Статистика изменений
+- ✅ Создан HarborEmulationEngine (~650 строк нового кода)
+- ✅ Интегрирован в EmulationEngine (~80 строк)
+- ✅ Обновлен DataFlowEngine (~60 строк)
+- ✅ Исправлен UI компонент (~200 строк изменений)
+- **Всего: ~990 строк нового/измененного кода**
+
+### Улучшения
+- ✅ Harbor Registry теперь работает как полноценный container registry с эмуляцией
+- ✅ Все формы создания сущностей работают корректно
+- ✅ Полная валидация всех полей ввода
+- ✅ Toast-уведомления для обратной связи пользователю
+- ✅ Диалоги подтверждения для безопасности
+- ✅ Корректная работа CRUD операций благодаря использованию ID
+- ✅ Симуляция основных операций (push, pull, scan, replication, GC)
+- ✅ Расчет реалистичных метрик
+
+### ✅ Исправления и улучшения (обновление 0.1.7zj):
+
+#### Исправление setTimeout в HarborEmulationEngine
+- ✅ **Замена setTimeout на систему состояний**: Все операции теперь используют `completionTime` вместо `setTimeout`
+  - Добавлено поле `completionTime` в интерфейс `HarborOperation`
+  - Операции push, pull, scan, replication, gc используют `completionTime` для отслеживания завершения
+  - Метод `updateActiveOperations()` завершает операции по `completionTime`
+  - Добавлен метод `completeOperation()` для обработки завершения всех типов операций
+  - История латентности обновляется при завершении операций
+
+#### Синхронизация конфигурации
+- ✅ **Метод updateConfig**: Добавлен метод `updateConfig()` в HarborEmulationEngine
+  - Обновляет конфигурацию без полной переинициализации
+  - Автоматически обновляет метрики из новой конфигурации
+- ✅ **Интеграция в EmulationEngine**: Обновлен `updateNodesAndConnections()`
+  - Вызывает `updateConfig()` при изменении узла Harbor
+  - Добавлена очистка `harborEngines` при удалении узлов
+
+#### Синхронизация UI с эмуляцией
+- ✅ **Интеграция useEmulationStore**: UI получает метрики из эмуляции
+  - Добавлен импорт `useEmulationStore` в HarborConfigAdvanced
+  - Компонент получает `componentMetrics` из store
+  - Добавлена секция "Metrics" с отображением реальных метрик
+  - Отображаются: push/pull/scan ops/sec, storage usage, latency, throughput, scans running, vulnerabilities
+- ✅ **Динамический статус компонента**: Статус обновляется на основе метрик
+  - Функция `getComponentStatus()` определяет статус (Running/Stopped/Error)
+  - Badge отображает правильный статус и цвет
+  - Статус "Running" когда есть активность или running scans
+  - Статус "Error" при высокой error rate
+
+#### Удаление статических данных
+- ✅ **Чистая симуляция**: Убраны все статические дефолтные значения
+  - `projects`, `repositories`, `tags`, `replicationPolicies`, `users` теперь пустые массивы по умолчанию
+  - Данные берутся только из конфига (нет "архитектурных" примеров)
+  - Добавлены пустые состояния для всех списков с информативными сообщениями
+- ✅ **Реальная статистика**: Исправлена логика подсчета
+  - Удаление проекта проверяет реальное количество репозиториев из массива `repositories`
+  - Статистика проектов вычисляется из реальных данных (репозитории, теги, уязвимости)
+  - Статистика репозиториев (количество тегов) вычисляется из массива `tags`
+- ✅ **Исправление scanVulnerability**: Убран setTimeout, сканирование обрабатывается через эмуляцию
+  - Статус сканирования ставится в 'pending'
+  - Завершение сканирования обрабатывается `HarborEmulationEngine` через `updateActiveOperations`
+
+#### Исправление UI багов
+- ✅ **Исправлена ошибка SelectItem**: Заменено пустое значение `""` на `"all"` для опции "All Projects"
+  - Радикс UI Select не поддерживает пустые строки в SelectItem
+  - Используется специальное значение "all" с преобразованием в `undefined` при сохранении
+  - Обновлена логика фильтрации для учета значения "all"
+
+### Технические детали исправлений
+
+#### Изменения в HarborEmulationEngine
+- ✅ Добавлено поле `completionTime?: number` в `HarborOperation`
+- ✅ Методы `simulatePush()`, `simulatePull()`, `startVulnerabilityScan()`, `simulateReplicationOperation()`, `runGarbageCollection()` используют `completionTime`
+- ✅ Метод `updateActiveOperations()` проверяет `completionTime` и завершает операции
+- ✅ Метод `completeOperation()` обрабатывает завершение всех типов операций с обновлением метрик
+- ✅ Добавлен метод `updateConfig(node: CanvasNode)` для синхронизации конфигурации
+- ✅ История латентности обновляется в `completeOperation()` вместо создания операции
+
+#### Изменения в EmulationEngine
+- ✅ Обновлен `updateNodesAndConnections()` для вызова `engine.updateConfig(node)` при изменении Harbor узла
+- ✅ Добавлено удаление `harborEngines` при удалении узлов
+
+#### Изменения в HarborConfigAdvanced
+- ✅ Добавлен импорт `useEmulationStore` и получение `componentMetrics`
+- ✅ Добавлена секция "Metrics" с отображением реальных метрик эмуляции
+- ✅ Добавлена функция `getComponentStatus()` для определения статуса на основе метрик
+- ✅ Убраны все статические дефолтные значения (projects, repositories, tags, etc.)
+- ✅ Исправлена логика `removeProject()` для использования реального подсчета репозиториев
+- ✅ Обновлена статистика проектов и репозиториев для использования реальных данных
+- ✅ Убран `setTimeout` из `scanVulnerability()`
+- ✅ Исправлена ошибка с `SelectItem value=""` (заменено на `"all"`)
+- ✅ Добавлены пустые состояния для всех списков
+
+### Статистика исправлений
+- ✅ Исправлено использование setTimeout (заменено на completionTime)
+- ✅ Добавлен метод updateConfig в HarborEmulationEngine
+- ✅ Интегрирован updateConfig в EmulationEngine
+- ✅ Добавлена синхронизация UI с метриками эмуляции
+- ✅ Убраны все статические данные (~150 строк удалено)
+- ✅ Исправлена логика подсчета статистики
+- ✅ Исправлены UI баги (SelectItem, пустые состояния)
+- **Всего: ~250 строк изменений/улучшений**
+
+---
+
 ## Версия 0.1.7zi - Полноценная интеграция Ansible компонента
 
 ### Обзор изменений
