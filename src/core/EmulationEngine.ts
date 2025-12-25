@@ -38,6 +38,7 @@ import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 import { TerraformEmulationEngine } from './TerraformEmulationEngine';
 import { HarborEmulationEngine } from './HarborEmulationEngine';
 import { DockerEmulationEngine } from './DockerEmulationEngine';
+import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -239,6 +240,9 @@ export class EmulationEngine {
 
   // Docker emulation engines per node
   private dockerEngines: Map<string, DockerEmulationEngine> = new Map();
+
+  // Kubernetes emulation engines per node
+  private kubernetesEngines: Map<string, KubernetesEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -496,6 +500,15 @@ export class EmulationEngine {
           } else {
             // Update config if engine already exists
             const engine = this.dockerEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        }
+        if (node.type === 'kubernetes') {
+          if (!this.kubernetesEngines.has(node.id)) {
+            this.initializeKubernetesEngine(node);
+          } else {
+            // Update config if engine already exists
+            const engine = this.kubernetesEngines.get(node.id)!;
             engine.updateConfig(node);
           }
         }
@@ -1129,6 +1142,29 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Kubernetes updates (pod lifecycle, deployment reconciliation, node metrics)
+    for (const [nodeId, kubernetesEngine] of this.kubernetesEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        kubernetesEngine.simulateStep();
+        
+        // Metrics are already updated in simulateKubernetes method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'kubernetes', operation: 'simulateStep' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1215,8 +1251,10 @@ export class EmulationEngine {
           this.simulateNginx(node, config, metrics, hasIncomingConnections);
           break;
         case 'docker':
+          this.simulateDocker(node, config, metrics, hasIncomingConnections);
+          break;
         case 'kubernetes':
-          this.simulateInfrastructure(node, config, metrics, hasIncomingConnections);
+          this.simulateKubernetes(node, config, metrics, hasIncomingConnections);
           break;
         case 'rest':
         case 'grpc':
@@ -5102,6 +5140,67 @@ export class EmulationEngine {
   }
 
   /**
+   * Kubernetes emulation
+   */
+  private simulateKubernetes(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.kubernetesEngines.get(node.id);
+
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.getLoad();
+    const kubernetesMetrics = engine.getMetrics();
+
+    // Throughput = pod operations per second
+    metrics.throughput = load.throughput;
+
+    // Latency = average scheduling and pod creation latency
+    metrics.latency = load.averageLatency;
+
+    // Error rate = failed pods / total pods
+    metrics.errorRate = load.errorRate;
+
+    // Utilization = average resource utilization (CPU, memory, pods, network, disk)
+    metrics.utilization = (load.cpuUtilization + load.memoryUtilization + load.podUtilization + load.networkUtilization + load.diskUtilization) / 5;
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      k8s_pods_total: kubernetesMetrics.podsTotal,
+      k8s_pods_running: kubernetesMetrics.podsRunning,
+      k8s_pods_pending: kubernetesMetrics.podsPending,
+      k8s_pods_failed: kubernetesMetrics.podsFailed,
+      k8s_pods_succeeded: kubernetesMetrics.podsSucceeded,
+      k8s_deployments_total: kubernetesMetrics.deploymentsTotal,
+      k8s_deployments_ready: kubernetesMetrics.deploymentsReady,
+      k8s_deployments_not_ready: kubernetesMetrics.deploymentsNotReady,
+      k8s_services_total: kubernetesMetrics.servicesTotal,
+      k8s_services_clusterip: kubernetesMetrics.servicesClusterIP,
+      k8s_services_nodeport: kubernetesMetrics.servicesNodePort,
+      k8s_services_loadbalancer: kubernetesMetrics.servicesLoadBalancer,
+      k8s_nodes_total: kubernetesMetrics.nodesTotal,
+      k8s_nodes_ready: kubernetesMetrics.nodesReady,
+      k8s_nodes_not_ready: kubernetesMetrics.nodesNotReady,
+      k8s_namespaces_total: kubernetesMetrics.namespacesTotal,
+      k8s_configmaps_total: kubernetesMetrics.configMapsTotal,
+      k8s_secrets_total: kubernetesMetrics.secretsTotal,
+      k8s_total_cpu_usage: kubernetesMetrics.totalCpuUsage,
+      k8s_total_memory_usage: kubernetesMetrics.totalMemoryUsage,
+      k8s_total_memory_capacity: kubernetesMetrics.totalMemoryCapacity,
+      k8s_cpu_utilization: load.cpuUtilization,
+      k8s_memory_utilization: load.memoryUtilization,
+      k8s_pod_utilization: load.podUtilization,
+      k8s_network_utilization: load.networkUtilization,
+      k8s_disk_utilization: load.diskUtilization,
+    };
+  }
+
+  /**
    * IDS/IPS emulation
    */
   private simulateIDSIPS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -6003,6 +6102,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Kubernetes Emulation Engine for Kubernetes node
+   */
+  private initializeKubernetesEngine(node: CanvasNode): void {
+    const engine = new KubernetesEmulationEngine();
+    engine.initializeConfig(node);
+    this.kubernetesEngines.set(node.id, engine);
+  }
+
+  /**
    * Проверяет доступность Prometheus для Grafana
    */
   /**
@@ -6453,6 +6561,10 @@ export class EmulationEngine {
    */
   public getDockerEmulationEngine(nodeId: string): DockerEmulationEngine | undefined {
     return this.dockerEngines.get(nodeId);
+  }
+
+  public getKubernetesEmulationEngine(nodeId: string): KubernetesEmulationEngine | undefined {
+    return this.kubernetesEngines.get(nodeId);
   }
 
   /**

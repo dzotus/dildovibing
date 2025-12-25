@@ -20,6 +20,7 @@ const GraphQLConfigAdvanced = lazy(() => import('./api/GraphQLConfigAdvanced').t
 const SOAPConfigAdvanced = lazy(() => import('./api/SOAPConfigAdvanced').then(m => ({ default: m.SOAPConfigAdvanced })));
 const WebhookConfigAdvanced = lazy(() => import('./api/WebhookConfigAdvanced').then(m => ({ default: m.WebhookConfigAdvanced })));
 const DockerK8sConfigAdvanced = lazy(() => import('./infrastructure/DockerK8sConfigAdvanced').then(m => ({ default: m.DockerK8sConfigAdvanced })));
+const KubernetesConfigAdvanced = lazy(() => import('./infrastructure/KubernetesConfigAdvanced').then(m => ({ default: m.KubernetesConfigAdvanced })));
 const HAProxyConfigAdvanced = lazy(() => import('./infrastructure/HAProxyConfigAdvanced').then(m => ({ default: m.HAProxyConfigAdvanced })));
 const TraefikConfigAdvanced = lazy(() => import('./infrastructure/TraefikConfigAdvanced').then(m => ({ default: m.TraefikConfigAdvanced })));
 const EnvoyConfigAdvanced = lazy(() => import('./infrastructure/EnvoyConfigAdvanced').then(m => ({ default: m.EnvoyConfigAdvanced })));
@@ -116,8 +117,9 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
     case 'webhook':
       return <WebhookConfigAdvanced componentId={componentId} />;
     case 'docker':
-    case 'kubernetes':
       return <DockerK8sConfigAdvanced componentId={componentId} />;
+    case 'kubernetes':
+      return <KubernetesConfigAdvanced componentId={componentId} />;
     case 'haproxy':
       return <HAProxyConfigAdvanced componentId={componentId} />;
     case 'traefik':
