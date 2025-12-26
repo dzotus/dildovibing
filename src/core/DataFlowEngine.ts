@@ -116,6 +116,7 @@ export class DataFlowEngine {
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
     this.registerHandler('nginx', this.createIntegrationHandler('nginx'));
     this.registerHandler('haproxy', this.createIntegrationHandler('haproxy'));
+    this.registerHandler('envoy', this.createIntegrationHandler('envoy'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
@@ -2306,6 +2307,79 @@ export class DataFlowEngine {
         },
         
         getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
+    if (type === 'envoy') {
+      return {
+        processData: (node, message, config) => {
+          // Get Envoy routing engine from emulation engine
+          const routingEngine = emulationEngine.getEnvoyRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const protocol = headers['X-Forwarded-Proto'] === 'https' || message.metadata?.protocol === 'https' ? 'https' : 'http';
+          const host = headers['Host'] || message.metadata?.host;
+
+          // Route request through Envoy Proxy
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            protocol,
+            host,
+          });
+
+          if (routeResult.response.status >= 200 && routeResult.response.status < 300) {
+            message.status = 'delivered';
+            message.latency = (message.latency || 0) + (routeResult.response.latency || 0);
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              envoyListener: routeResult.listener?.name,
+              envoyRoute: routeResult.route?.name,
+              envoyCluster: routeResult.cluster?.name,
+              envoyEndpoint: routeResult.endpointTarget,
+              envoyResponseStatus: routeResult.response.status,
+            };
+            // Update payload if response has body
+            if (routeResult.response.body) {
+              message.payload = routeResult.response.body;
+            }
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.response.error || `HTTP ${routeResult.response.status}`;
+            message.latency = (message.latency || 0) + (routeResult.response.latency || 0);
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Envoy can transform requests/responses (protocol upgrades, etc.)
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text', 'grpc'],
       };
     }
 

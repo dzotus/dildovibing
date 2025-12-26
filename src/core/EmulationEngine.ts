@@ -11,6 +11,7 @@ import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { NginxRoutingEngine } from './NginxRoutingEngine';
 import { HAProxyRoutingEngine } from './HAProxyRoutingEngine';
+import { EnvoyRoutingEngine } from './EnvoyRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
@@ -157,6 +158,9 @@ export class EmulationEngine {
   
   // HAProxy routing engines per node
   private haproxyRoutingEngines: Map<string, HAProxyRoutingEngine> = new Map();
+  
+  // Envoy Proxy routing engines per node
+  private envoyRoutingEngines: Map<string, EnvoyRoutingEngine> = new Map();
   
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
@@ -361,6 +365,9 @@ export class EmulationEngine {
         }
         if (node.type === 'haproxy') {
           this.initializeHAProxyRoutingEngine(node);
+        }
+        if (node.type === 'envoy') {
+          this.initializeEnvoyRoutingEngine(node);
         }
         if (node.type === 'apigee') {
           this.initializeApigeeRoutingEngine(node);
@@ -610,6 +617,11 @@ export class EmulationEngine {
         this.initializeHAProxyRoutingEngine(node);
       }
       
+      // Initialize Envoy routing engine for Envoy Proxy nodes
+      if (node.type === 'envoy') {
+        this.initializeEnvoyRoutingEngine(node);
+      }
+      
       // Initialize Apigee routing engine for Apigee Gateway nodes
       if (node.type === 'apigee') {
         this.initializeApigeeRoutingEngine(node);
@@ -777,6 +789,7 @@ export class EmulationEngine {
         this.kongRoutingEngines.delete(nodeId);
         this.nginxRoutingEngines.delete(nodeId);
         this.haproxyRoutingEngines.delete(nodeId);
+        this.envoyRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
@@ -1320,6 +1333,9 @@ export class EmulationEngine {
           break;
         case 'haproxy':
           this.simulateHAProxy(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'envoy':
+          this.simulateEnvoy(node, config, metrics, hasIncomingConnections);
           break;
         case 'docker':
           this.simulateDocker(node, config, metrics, hasIncomingConnections);
@@ -4374,6 +4390,89 @@ export class EmulationEngine {
   }
 
   /**
+   * Envoy Proxy emulation
+   */
+  private simulateEnvoy(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Get Envoy routing engine
+    const routingEngine = this.envoyRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default behavior
+      const maxConnections = (config as any).maxConnections || 1024;
+      const throughputReqs = (config as any).requestsPerSecond || 10000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 1 + (1 - loadVariation) * 4;
+      metrics.errorRate = 0.00001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (maxConnections / 1024));
+      
+      metrics.customMetrics = {
+        'max_connections': maxConnections,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+      };
+      return;
+    }
+
+    // Get Envoy config
+    const envoyConfig = (config as any) || {};
+    const maxConnections = envoyConfig.maxConnections || 1024;
+    const requestsPerSecond = envoyConfig.requestsPerSecond || 10000;
+    
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+    
+    // Calculate throughput with load variation
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+    
+    // Adjust based on healthy endpoints
+    const healthyRatio = stats.totalEndpoints > 0 ? stats.healthyEndpoints / stats.totalEndpoints : 1;
+    baseThroughput = baseThroughput * healthyRatio;
+    
+    metrics.throughput = baseThroughput;
+    
+    // Latency calculation (1-10ms base + upstream latency)
+    const baseLatency = 1 + (1 - loadVariation) * 4;
+    const upstreamLatency = 10 + Math.random() * 90; // Simulated upstream latency
+    metrics.latency = baseLatency + (upstreamLatency * 0.2); // Envoy adds ~20% of upstream latency
+    
+    // Error rate based on stats
+    metrics.errorRate = stats.errorRate || 0.00001;
+    
+    // Utilization based on connections
+    const connectionUtilization = Math.min(1, stats.activeConnections / maxConnections);
+    metrics.utilization = connectionUtilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'max_connections': maxConnections,
+      'active_connections': stats.activeConnections,
+      'clusters': stats.clusters,
+      'listeners': stats.listeners,
+      'routes': stats.routes,
+      'total_endpoints': stats.totalEndpoints,
+      'healthy_endpoints': stats.healthyEndpoints,
+      'unhealthy_endpoints': stats.unhealthyEndpoints,
+      'total_requests': stats.totalRequests,
+      'total_responses': stats.totalResponses,
+      'total_bytes_in': stats.totalBytesIn,
+      'total_bytes_out': stats.totalBytesOut,
+      'rate_limit_blocks': stats.rateLimitBlocks || 0,
+      'timeout_errors': stats.timeoutErrors || 0,
+      'circuit_breaker_trips': stats.circuitBreakerTrips || 0,
+    };
+  }
+
+  /**
    * Docker/Kubernetes infrastructure emulation
    */
   private simulateInfrastructure(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5887,6 +5986,100 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Envoy routing engine for a node
+   */
+  private initializeEnvoyRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new EnvoyRoutingEngine();
+    
+    // Transform config format from UI to routing engine format
+    const clusters = (config.clusters || []).map((cluster: any) => ({
+      name: cluster.name,
+      type: cluster.type || 'STRICT_DNS',
+      endpoints: (cluster.hosts || []).map((host: any) => ({
+        address: host.address,
+        port: host.port,
+        weight: host.weight || 1,
+        healthStatus: host.healthStatus || 'unknown',
+      })),
+      connectTimeout: cluster.connectTimeout || 5000,
+      healthCheck: cluster.healthChecks ? {
+        enabled: true,
+        interval: cluster.healthCheckInterval || 10000,
+        timeout: cluster.healthCheckTimeout || 5000,
+        path: cluster.healthCheckPath || '/health',
+        healthyThreshold: cluster.healthCheckHealthyThreshold || 1,
+        unhealthyThreshold: cluster.healthCheckUnhealthyThreshold || 2,
+      } : undefined,
+      circuitBreaker: cluster.circuitBreaker ? {
+        enabled: true,
+        maxConnections: cluster.circuitBreakerMaxConnections,
+        maxRequests: cluster.circuitBreakerMaxRequests,
+        maxRetries: cluster.circuitBreakerMaxRetries,
+        consecutiveErrors: cluster.circuitBreakerConsecutiveErrors || 5,
+      } : undefined,
+      loadBalancingPolicy: cluster.loadBalancingPolicy || 'ROUND_ROBIN',
+      outlierDetection: cluster.outlierDetection ? {
+        enabled: true,
+        consecutiveErrors: cluster.outlierDetectionConsecutiveErrors || 5,
+        interval: cluster.outlierDetectionInterval || 10000,
+        baseEjectionTime: cluster.outlierDetectionBaseEjectionTime || 30000,
+        maxEjectionPercent: cluster.outlierDetectionMaxEjectionPercent || 50,
+      } : undefined,
+    }));
+    
+    const listeners = (config.listeners || []).map((listener: any) => ({
+      name: listener.name,
+      address: listener.address || '0.0.0.0',
+      port: listener.port,
+      protocol: listener.protocol || 'HTTP',
+      filters: (listener.filters || []).map((filter: string | any) => 
+        typeof filter === 'string' ? {
+          name: filter,
+          type: filter,
+        } : filter
+      ),
+    }));
+    
+    const routes = (config.routes || []).map((route: any) => ({
+      name: route.name,
+      match: {
+        prefix: route.match?.startsWith('/') ? route.match : undefined,
+        path: route.match && !route.match.includes('*') && !route.match.startsWith('/') ? route.match : undefined,
+        regex: route.match?.includes('*') ? route.match.replace(/\*/g, '.*') : undefined,
+      },
+      cluster: route.cluster,
+      priority: route.priority || 0,
+      timeout: route.timeout,
+      retryPolicy: route.retryPolicy,
+    }));
+    
+    routingEngine.initialize({
+      clusters,
+      listeners,
+      routes,
+      globalConfig: {
+        maxConnections: config.maxConnections || 1024,
+        connectTimeout: config.connectTimeout || 5000,
+        requestTimeout: config.requestTimeout || 15000,
+        drainTime: config.drainTime || 600,
+        rateLimit: config.enableRateLimiting ? {
+          enabled: true,
+          rate: config.rateLimitPerSecond || 100,
+          burst: config.rateLimitBurst || 10,
+        } : undefined,
+        tracing: config.enableTracing ? {
+          enabled: true,
+          provider: config.tracingProvider || 'jaeger',
+        } : undefined,
+      },
+    });
+    
+    this.envoyRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Apigee routing engine for a node
    */
   private initializeApigeeRoutingEngine(node: CanvasNode): void {
@@ -6741,6 +6934,13 @@ export class EmulationEngine {
    */
   public getHAProxyRoutingEngine(nodeId: string): HAProxyRoutingEngine | undefined {
     return this.haproxyRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Envoy routing engine for a node
+   */
+  public getEnvoyRoutingEngine(nodeId: string): EnvoyRoutingEngine | undefined {
+    return this.envoyRoutingEngines.get(nodeId);
   }
 
   /**
