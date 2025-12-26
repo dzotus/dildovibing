@@ -10,6 +10,7 @@ import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
 import { NginxRoutingEngine } from './NginxRoutingEngine';
+import { HAProxyRoutingEngine } from './HAProxyRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
@@ -39,6 +40,7 @@ import { TerraformEmulationEngine } from './TerraformEmulationEngine';
 import { HarborEmulationEngine } from './HarborEmulationEngine';
 import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
+import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -153,6 +155,9 @@ export class EmulationEngine {
   // NGINX routing engines per node
   private nginxRoutingEngines: Map<string, NginxRoutingEngine> = new Map();
   
+  // HAProxy routing engines per node
+  private haproxyRoutingEngines: Map<string, HAProxyRoutingEngine> = new Map();
+  
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
   
@@ -243,6 +248,9 @@ export class EmulationEngine {
 
   // Kubernetes emulation engines per node
   private kubernetesEngines: Map<string, KubernetesEmulationEngine> = new Map();
+
+  // Ansible emulation engines per node
+  private ansibleEngines: Map<string, AnsibleEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -350,6 +358,9 @@ export class EmulationEngine {
         }
         if (node.type === 'nginx') {
           this.initializeNginxRoutingEngine(node);
+        }
+        if (node.type === 'haproxy') {
+          this.initializeHAProxyRoutingEngine(node);
         }
         if (node.type === 'apigee') {
           this.initializeApigeeRoutingEngine(node);
@@ -484,6 +495,15 @@ export class EmulationEngine {
         if (node.type === 'terraform') {
           this.initializeTerraformEngine(node);
         }
+        if (node.type === 'ansible') {
+          if (!this.ansibleEngines.has(node.id)) {
+            this.initializeAnsibleEngine(node);
+          } else {
+            // Update config if engine already exists
+            const engine = this.ansibleEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        }
         // Initialize Harbor emulation engine for Harbor nodes
         if (node.type === 'harbor') {
           if (!this.harborEngines.has(node.id)) {
@@ -583,6 +603,11 @@ export class EmulationEngine {
       // Initialize NGINX routing engine for NGINX nodes
       if (node.type === 'nginx') {
         this.initializeNginxRoutingEngine(node);
+      }
+      
+      // Initialize HAProxy routing engine for HAProxy nodes
+      if (node.type === 'haproxy') {
+        this.initializeHAProxyRoutingEngine(node);
       }
       
       // Initialize Apigee routing engine for Apigee Gateway nodes
@@ -726,6 +751,17 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
+      
+      // Initialize Ansible emulation engine for Ansible nodes
+      if (node.type === 'ansible') {
+        if (!this.ansibleEngines.has(node.id)) {
+          this.initializeAnsibleEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.ansibleEngines.get(node.id)!;
+          engine.updateConfig(node);
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -740,6 +776,7 @@ export class EmulationEngine {
         this.pubSubRoutingEngines.delete(nodeId);
         this.kongRoutingEngines.delete(nodeId);
         this.nginxRoutingEngines.delete(nodeId);
+        this.haproxyRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
@@ -761,6 +798,7 @@ export class EmulationEngine {
         this.gitlabCIEngines.delete(nodeId);
         this.argoCDEngines.delete(nodeId);
         this.terraformEngines.delete(nodeId);
+        this.ansibleEngines.delete(nodeId);
         this.harborEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -1165,6 +1203,36 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Ansible updates (jobs, schedules, metrics)
+    for (const [nodeId, ansibleEngine] of this.ansibleEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        ansibleEngine.performUpdate(now);
+        
+        // Update component metrics based on Ansible metrics
+        const ansibleMetrics = ansibleEngine.getMetrics();
+        const componentMetrics = this.metrics.get(nodeId);
+        if (componentMetrics && ansibleMetrics) {
+          // Update throughput based on jobs per hour
+          componentMetrics.throughput = ansibleMetrics.jobsPerHour / 3600; // jobs per second
+          // Update latency based on average job duration
+          componentMetrics.latency = ansibleMetrics.averageJobDuration * 1000; // convert to ms
+        }
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'ansible', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1250,6 +1318,9 @@ export class EmulationEngine {
         case 'nginx':
           this.simulateNginx(node, config, metrics, hasIncomingConnections);
           break;
+        case 'haproxy':
+          this.simulateHAProxy(node, config, metrics, hasIncomingConnections);
+          break;
         case 'docker':
           this.simulateDocker(node, config, metrics, hasIncomingConnections);
           break;
@@ -1306,6 +1377,9 @@ export class EmulationEngine {
           break;
         case 'terraform':
           this.simulateTerraform(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'ansible':
+          this.simulateAnsible(node, config, metrics, hasIncomingConnections);
           break;
         case 'harbor':
           this.simulateHarbor(node, config, metrics, hasIncomingConnections);
@@ -1575,6 +1649,7 @@ export class EmulationEngine {
       case 'redis':
         return config.maxConnections ? (config.maxConnections * 10) : 1000;
       case 'nginx':
+      case 'haproxy':
       case 'rest':
       case 'grpc':
       case 'websocket':
@@ -4220,6 +4295,85 @@ export class EmulationEngine {
   }
 
   /**
+   * HAProxy load balancer emulation
+   */
+  private simulateHAProxy(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Get HAProxy routing engine
+    const routingEngine = this.haproxyRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default behavior
+      const maxConnections = (config as any).maxConnections || 4096;
+      const throughputReqs = (config as any).requestsPerSecond || 10000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 1 + (1 - loadVariation) * 4;
+      metrics.errorRate = 0.00001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (maxConnections / 4096));
+      
+      metrics.customMetrics = {
+        'max_connections': maxConnections,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+      };
+      return;
+    }
+
+    // Get HAProxy config
+    const haproxyConfig = (config as any) || {};
+    const maxConnections = haproxyConfig.maxConnections || 4096;
+    const requestsPerSecond = haproxyConfig.requestsPerSecond || 10000;
+    
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+    
+    // Calculate throughput with load variation
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+    
+    // Adjust based on healthy servers
+    const healthyRatio = stats.totalServers > 0 ? stats.upServers / stats.totalServers : 1;
+    baseThroughput = baseThroughput * healthyRatio;
+    
+    metrics.throughput = baseThroughput;
+    
+    // Latency calculation (1-10ms base + upstream latency)
+    const baseLatency = 1 + (1 - loadVariation) * 4;
+    const upstreamLatency = 10 + Math.random() * 90; // Simulated upstream latency
+    metrics.latency = baseLatency + (upstreamLatency * 0.3); // HAProxy adds ~30% of upstream latency
+    
+    // Error rate based on stats
+    metrics.errorRate = stats.errorRate || 0.00001;
+    
+    // Utilization based on connections
+    const connectionUtilization = Math.min(1, stats.activeConnections / maxConnections);
+    metrics.utilization = connectionUtilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'max_connections': maxConnections,
+      'active_connections': stats.activeConnections,
+      'frontends': stats.frontends,
+      'backends': stats.backends,
+      'total_servers': stats.totalServers,
+      'up_servers': stats.upServers,
+      'down_servers': stats.downServers,
+      'total_requests': stats.totalRequests,
+      'total_responses': stats.totalResponses,
+      'total_bytes_in': stats.totalBytesIn,
+      'total_bytes_out': stats.totalBytesOut,
+    };
+  }
+
+  /**
    * Docker/Kubernetes infrastructure emulation
    */
   private simulateInfrastructure(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5023,6 +5177,66 @@ export class EmulationEngine {
   }
 
   /**
+   * Ansible emulation
+   */
+  private simulateAnsible(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.ansibleEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const ansibleMetrics = engine.getMetrics();
+    
+    // Throughput: jobs per hour converted to per second
+    metrics.throughput = ansibleMetrics.jobsPerHour / 3600;
+    
+    // Latency: average job duration in milliseconds
+    metrics.latency = ansibleMetrics.averageJobDuration * 1000;
+    
+    // Error rate: failed jobs / total jobs
+    const totalJobs = ansibleMetrics.jobsSuccess + ansibleMetrics.jobsFailed;
+    metrics.errorRate = totalJobs > 0 
+      ? ansibleMetrics.jobsFailed / totalJobs 
+      : 0;
+    
+    // Utilization: running jobs / enabled templates (or total templates if no enabled)
+    const enabledTemplates = ansibleMetrics.jobTemplatesEnabled || ansibleMetrics.jobTemplatesTotal || 1;
+    metrics.utilization = Math.min(1, ansibleMetrics.jobsRunning / enabledTemplates);
+    
+    metrics.customMetrics = {
+      inventoriesTotal: ansibleMetrics.inventoriesTotal,
+      projectsTotal: ansibleMetrics.projectsTotal,
+      credentialsTotal: ansibleMetrics.credentialsTotal,
+      jobTemplatesTotal: ansibleMetrics.jobTemplatesTotal,
+      jobTemplatesEnabled: ansibleMetrics.jobTemplatesEnabled,
+      jobsTotal: ansibleMetrics.jobsTotal,
+      jobsSuccess: ansibleMetrics.jobsSuccess,
+      jobsFailed: ansibleMetrics.jobsFailed,
+      jobsRunning: ansibleMetrics.jobsRunning,
+      jobsPending: ansibleMetrics.jobsPending,
+      jobsPerHour: ansibleMetrics.jobsPerHour,
+      averageJobDuration: ansibleMetrics.averageJobDuration,
+      hostsTotal: ansibleMetrics.hostsTotal,
+      hostsOk: ansibleMetrics.hostsOk,
+      hostsChanged: ansibleMetrics.hostsChanged,
+      hostsFailed: ansibleMetrics.hostsFailed,
+      hostsUnreachable: ansibleMetrics.hostsUnreachable,
+      schedulesTotal: ansibleMetrics.schedulesTotal,
+      schedulesEnabled: ansibleMetrics.schedulesEnabled,
+      requestsTotal: ansibleMetrics.requestsTotal,
+      requestsErrors: ansibleMetrics.requestsErrors,
+    };
+  }
+
+  /**
    * Harbor emulation
    */
   private simulateHarbor(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5632,6 +5846,47 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize HAProxy routing engine for a node
+   */
+  private initializeHAProxyRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new HAProxyRoutingEngine();
+    
+    // Transform config format from UI to routing engine format
+    const frontends = (config.frontends || []).map((fe: any) => ({
+      id: fe.id,
+      name: fe.name,
+      bind: fe.bind,
+      mode: fe.mode,
+      defaultBackend: fe.backends && fe.backends.length > 0 ? fe.backends[0] : undefined,
+      backends: fe.backends,
+      ssl: fe.ssl,
+      requests: fe.requests || 0,
+      responses: fe.responses || 0,
+      bytesIn: fe.bytesIn || 0,
+      bytesOut: fe.bytesOut || 0,
+    }));
+    
+    const backends = (config.backends || []).map((be: any) => ({
+      id: be.id,
+      name: be.name,
+      mode: be.mode,
+      balance: be.balance,
+      servers: be.servers || [],
+      healthCheck: be.healthCheck,
+      stickTable: be.stickTable,
+    }));
+    
+    routingEngine.initialize({
+      frontends,
+      backends,
+    });
+    
+    this.haproxyRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Apigee routing engine for a node
    */
   private initializeApigeeRoutingEngine(node: CanvasNode): void {
@@ -6084,6 +6339,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Ansible Emulation Engine for Ansible node
+   */
+  private initializeAnsibleEngine(node: CanvasNode): void {
+    const engine = new AnsibleEmulationEngine();
+    engine.initializeConfig(node);
+    this.ansibleEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize Harbor Emulation Engine for Harbor node
    */
   private initializeHarborEngine(node: CanvasNode): void {
@@ -6473,6 +6737,13 @@ export class EmulationEngine {
   }
 
   /**
+   * Get HAProxy routing engine for a node
+   */
+  public getHAProxyRoutingEngine(nodeId: string): HAProxyRoutingEngine | undefined {
+    return this.haproxyRoutingEngines.get(nodeId);
+  }
+
+  /**
    * Get Apigee routing engine for a node
    */
   public getApigeeRoutingEngine(nodeId: string): ApigeeRoutingEngine | undefined {
@@ -6547,6 +6818,13 @@ export class EmulationEngine {
    */
   public getTerraformEmulationEngine(nodeId: string): TerraformEmulationEngine | undefined {
     return this.terraformEngines.get(nodeId);
+  }
+
+  /**
+   * Get Ansible emulation engine for a node
+   */
+  public getAnsibleEmulationEngine(nodeId: string): AnsibleEmulationEngine | undefined {
+    return this.ansibleEngines.get(nodeId);
   }
 
   /**

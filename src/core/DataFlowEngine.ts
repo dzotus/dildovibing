@@ -115,6 +115,7 @@ export class DataFlowEngine {
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
     this.registerHandler('nginx', this.createIntegrationHandler('nginx'));
+    this.registerHandler('haproxy', this.createIntegrationHandler('haproxy'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
@@ -370,7 +371,8 @@ export class DataFlowEngine {
     // Try to find a compatible format
     const compatibleFormat = targetFormats.find(f => sourceFormats.includes(f));
     if (compatibleFormat) {
-      message.format = compatibleFormat;
+      // Type assertion: getSupportedFormats should only return valid format types
+      message.format = compatibleFormat as DataMessage['format'];
       message.status = 'transformed';
       return message;
     }
@@ -2294,6 +2296,80 @@ export class DataFlowEngine {
               contentEncoding: 'gzip',
             };
           }
+          
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
+    if (type === 'haproxy') {
+      return {
+        processData: (node, message, config) => {
+          // Get HAProxy routing engine from emulation engine
+          const routingEngine = emulationEngine.getHAProxyRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const protocol = headers['X-Forwarded-Proto'] === 'https' || message.metadata?.protocol === 'https' ? 'https' : 'http';
+          const host = headers['Host'] || message.metadata?.host;
+
+          // Route request through HAProxy
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            protocol,
+            host,
+          });
+
+          if (routeResult.response.status >= 200 && routeResult.response.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.response.latency;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              haproxyFrontend: routeResult.frontend?.name,
+              haproxyBackend: routeResult.backendTarget,
+              haproxyServer: routeResult.serverTarget,
+              haproxyResponseStatus: routeResult.response.status,
+            };
+            // Update payload if response has body
+            if (routeResult.response.body) {
+              message.payload = routeResult.response.body;
+            }
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.response.error || `HTTP ${routeResult.response.status}`;
+            message.latency = routeResult.response.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // HAProxy can transform requests/responses
+          const haproxyConfig = (node.data.config as any) || {};
           
           const targetFormats = this.getTargetFormats(targetType);
           if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
