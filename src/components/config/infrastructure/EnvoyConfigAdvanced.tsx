@@ -806,10 +806,6 @@ export function EnvoyConfigAdvanced({ componentId }: EnvoyConfigProps) {
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
-            <Button variant="outline" size="sm" disabled>
-              <Globe className="h-4 w-4 mr-2" />
-              Admin UI
-            </Button>
           </div>
         </div>
 

@@ -42,6 +42,7 @@ import { HarborEmulationEngine } from './HarborEmulationEngine';
 import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
+import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -255,6 +256,9 @@ export class EmulationEngine {
 
   // Ansible emulation engines per node
   private ansibleEngines: Map<string, AnsibleEmulationEngine> = new Map();
+
+  // Traefik emulation engines per node
+  private traefikEngines: Map<string, TraefikEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -774,6 +778,17 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
+      
+      // Initialize Traefik emulation engine for Traefik nodes
+      if (node.type === 'traefik') {
+        if (!this.traefikEngines.has(node.id)) {
+          this.initializeTraefikEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.traefikEngines.get(node.id)!;
+          engine.updateConfig(node);
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -812,6 +827,7 @@ export class EmulationEngine {
         this.argoCDEngines.delete(nodeId);
         this.terraformEngines.delete(nodeId);
         this.ansibleEngines.delete(nodeId);
+        this.traefikEngines.delete(nodeId);
         this.harborEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
@@ -1333,6 +1349,9 @@ export class EmulationEngine {
           break;
         case 'haproxy':
           this.simulateHAProxy(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'traefik':
+          this.simulateTraefik(node, config, metrics, hasIncomingConnections);
           break;
         case 'envoy':
           this.simulateEnvoy(node, config, metrics, hasIncomingConnections);
@@ -5276,6 +5295,75 @@ export class EmulationEngine {
   }
 
   /**
+   * Traefik emulation
+   */
+  private simulateTraefik(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    const engine = this.traefikEngines.get(node.id);
+    
+    if (!engine) {
+      // No engine, use default behavior
+      const maxConnections = (config as any).maxConnections || 10000;
+      const throughputReqs = (config as any).requestsPerSecond || 10000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 1 + (1 - loadVariation) * 4;
+      metrics.errorRate = 0.00001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (maxConnections / 10000));
+      
+      metrics.customMetrics = {
+        'max_connections': maxConnections,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+      };
+      return;
+    }
+
+    // Get stats from routing engine
+    const stats = engine.getStats();
+    const load = engine.getLoad();
+    
+    // Simulate requests if no real traffic
+    if (hasIncomingConnections && stats.totalRequests === 0) {
+      const traefikConfig = (config as any) || {};
+      const simulatedRPS = traefikConfig.requestsPerSecond || 100;
+      engine.simulateRequests(simulatedRPS);
+    }
+    
+    // Use load metrics
+    metrics.throughput = load.requestsPerSecond;
+    metrics.latency = load.averageLatency;
+    metrics.errorRate = load.errorRate;
+    metrics.utilization = load.utilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'routers': stats.routers,
+      'active_routers': stats.activeRouters,
+      'services': stats.services,
+      'middlewares': stats.middlewares,
+      'entry_points': stats.entryPoints,
+      'total_servers': stats.totalServers,
+      'healthy_servers': stats.healthyServers,
+      'total_requests': stats.totalRequests,
+      'total_responses': stats.totalResponses,
+      'active_connections': stats.activeConnections,
+      'total_bytes_in': stats.totalBytesIn,
+      'total_bytes_out': stats.totalBytesOut,
+      'error_rate': stats.errorRate,
+      'average_latency': stats.averageLatency,
+    };
+  }
+
+  /**
    * Ansible emulation
    */
   private simulateAnsible(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -6541,6 +6629,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Traefik Emulation Engine for Traefik node
+   */
+  private initializeTraefikEngine(node: CanvasNode): void {
+    const engine = new TraefikEmulationEngine();
+    engine.initializeConfig(node);
+    this.traefikEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize Harbor Emulation Engine for Harbor node
    */
   private initializeHarborEngine(node: CanvasNode): void {
@@ -6934,6 +7031,10 @@ export class EmulationEngine {
    */
   public getHAProxyRoutingEngine(nodeId: string): HAProxyRoutingEngine | undefined {
     return this.haproxyRoutingEngines.get(nodeId);
+  }
+
+  public getTraefikEmulationEngine(nodeId: string): TraefikEmulationEngine | undefined {
+    return this.traefikEngines.get(nodeId);
   }
 
   /**

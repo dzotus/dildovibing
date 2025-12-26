@@ -116,6 +116,7 @@ export class DataFlowEngine {
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
     this.registerHandler('nginx', this.createIntegrationHandler('nginx'));
     this.registerHandler('haproxy', this.createIntegrationHandler('haproxy'));
+    this.registerHandler('traefik', this.createIntegrationHandler('traefik'));
     this.registerHandler('envoy', this.createIntegrationHandler('envoy'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
@@ -2444,6 +2445,82 @@ export class DataFlowEngine {
         transformData: (node, message, targetType, config) => {
           // HAProxy can transform requests/responses
           const haproxyConfig = (node.data.config as any) || {};
+          
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
+    if (type === 'traefik') {
+      return {
+        processData: (node, message, config) => {
+          // Get Traefik emulation engine from emulation engine
+          const traefikEngine = emulationEngine.getTraefikEmulationEngine(node.id);
+          
+          if (!traefikEngine) {
+            // No engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const protocol = headers['X-Forwarded-Proto'] === 'https' || message.metadata?.protocol === 'https' ? 'https' : 'http';
+          const host = headers['Host'] || message.metadata?.host;
+          const entryPoint = message.metadata?.entryPoint || (protocol === 'https' ? 'websecure' : 'web');
+
+          // Process request through Traefik
+          const routeResult = traefikEngine.processRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            protocol,
+            host,
+            entryPoint,
+          });
+
+          if (routeResult.success) {
+            message.status = 'delivered';
+            message.latency = routeResult.latency;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              traefikRouter: routeResult.routerMatched,
+              traefikService: routeResult.serviceTarget,
+              traefikServer: routeResult.serverTarget,
+              traefikResponseStatus: routeResult.status,
+            };
+            // Update payload if response has body
+            if (payload?.body) {
+              message.payload = payload.body;
+            }
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.error || `HTTP ${routeResult.status}`;
+            message.latency = routeResult.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Traefik can transform requests/responses through middlewares
+          const traefikConfig = (node.data.config as any) || {};
           
           const targetFormats = this.getTargetFormats(targetType);
           if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {

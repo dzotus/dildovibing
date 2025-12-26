@@ -9,7 +9,10 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { showSuccess, showError } from '@/utils/toast';
 import { 
   Settings, 
   Activity,
@@ -21,7 +24,9 @@ import {
   Globe,
   CheckCircle,
   AlertCircle,
-  Network
+  Network,
+  Edit,
+  X
 } from 'lucide-react';
 
 interface TraefikConfigProps {
@@ -60,7 +65,9 @@ interface Service {
 interface Middleware {
   id: string;
   name: string;
-  type: 'auth' | 'rateLimit' | 'headers' | 'redirect' | 'stripPrefix';
+  type: 'auth' | 'rateLimit' | 'headers' | 'redirect' | 'stripPrefix' | 'addPrefix' | 
+        'compress' | 'retry' | 'circuitBreaker' | 'ipAllowList' | 'ipWhiteList' |
+        'basicAuth' | 'digestAuth' | 'forwardAuth' | 'chain';
   config?: Record<string, any>;
 }
 
@@ -83,84 +90,56 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
+  const componentMetrics = useEmulationStore((state) => 
+    state.componentMetrics.get(componentId)
+  );
+  
   const config = (node.data.config as any) || {} as TraefikConfig;
-  const routers = config.routers || [
-    {
-      id: '1',
-      name: 'web-router',
-      rule: 'Host(`example.com`)',
-      service: 'web-service',
-      entryPoints: ['web'],
-      tls: true,
-      priority: 1,
-      requests: 45000,
-      responses: 44800,
-    },
-  ];
-  const services = config.services || [
-    {
-      id: '1',
-      name: 'web-service',
-      servers: [
-        { url: 'http://192.168.1.10:8080', weight: 1 },
-        { url: 'http://192.168.1.11:8080', weight: 1 },
-      ],
-      loadBalancer: 'roundrobin',
-      healthCheck: {
-        enabled: true,
-        path: '/health',
-        interval: 10,
-      },
-    },
-  ];
-  const middlewares = config.middlewares || [
-    {
-      id: '1',
-      name: 'auth-middleware',
-      type: 'auth',
-      config: { headerField: 'X-User' },
-    },
-    {
-      id: '2',
-      name: 'rate-limit',
-      type: 'rateLimit',
-      config: { average: 100, burst: 50 },
-    },
-  ];
+  const routers = config.routers || [];
+  const services = config.services || [];
+  const middlewares = config.middlewares || [];
   const entryPoints = config.entryPoints || ['web', 'websecure'];
-  const totalRequests = config.totalRequests || routers.reduce((sum, r) => sum + (r.requests || 0), 0);
-  const totalResponses = config.totalResponses || routers.reduce((sum, r) => sum + (r.responses || 0), 0);
-  const activeRouters = config.activeRouters || routers.length;
+  
+  // Get metrics from emulation engine
+  const traefikEngine = emulationEngine.getTraefikEmulationEngine(componentId);
+  const stats = traefikEngine?.getStats();
+  const totalRequests = stats?.totalRequests || config.totalRequests || 0;
+  const totalResponses = stats?.totalResponses || config.totalResponses || 0;
+  const activeRouters = stats?.activeRouters || config.activeRouters || routers.length;
 
-  const [editingRouterIndex, setEditingRouterIndex] = useState<number | null>(null);
-  const [showCreateRouter, setShowCreateRouter] = useState(false);
-  const [showCreateService, setShowCreateService] = useState(false);
-  const [showCreateMiddleware, setShowCreateMiddleware] = useState(false);
 
   const updateConfig = (updates: Partial<TraefikConfig>) => {
+    const newConfig = { ...config, ...updates };
     updateNode(componentId, {
       data: {
         ...node.data,
-        config: { ...config, ...updates },
+        config: newConfig,
       },
     });
+    
+    // Update emulation engine if it exists
+    if (traefikEngine) {
+      const updatedNode = { ...node, data: { ...node.data, config: newConfig } };
+      traefikEngine.updateConfig(updatedNode);
+    }
   };
 
   const addRouter = () => {
     const newRouter: Router = {
       id: `router-${Date.now()}`,
-      name: 'new-router',
+      name: `router-${routers.length + 1}`,
       rule: 'Host(`example.com`)',
       service: services[0]?.name || '',
       entryPoints: ['web'],
       priority: 1,
     };
     updateConfig({ routers: [...routers, newRouter] });
-    setShowCreateRouter(false);
+    showSuccess('Router created successfully');
   };
 
   const removeRouter = (id: string) => {
     updateConfig({ routers: routers.filter((r) => r.id !== id) });
+    showSuccess('Router removed successfully');
   };
 
   const updateRouter = (id: string, field: string, value: any) => {
@@ -173,16 +152,41 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
   const addService = () => {
     const newService: Service = {
       id: `service-${Date.now()}`,
-      name: 'new-service',
+      name: `service-${services.length + 1}`,
       servers: [{ url: 'http://localhost:8080', weight: 1 }],
       loadBalancer: 'roundrobin',
     };
     updateConfig({ services: [...services, newService] });
-    setShowCreateService(false);
+    showSuccess('Service created successfully');
+  };
+  
+  const addServerToService = (serviceId: string) => {
+    const service = services.find(s => s.id === serviceId);
+    if (!service) return;
+    
+    const newServers = [...(service.servers || []), { url: 'http://localhost:8080', weight: 1 }];
+    updateService(serviceId, 'servers', newServers);
+    showSuccess('Server added successfully');
+  };
+  
+  const removeServerFromService = (serviceId: string, serverIndex: number) => {
+    const service = services.find(s => s.id === serviceId);
+    if (!service || !service.servers) return;
+    
+    const newServers = service.servers.filter((_, idx) => idx !== serverIndex);
+    updateService(serviceId, 'servers', newServers);
+    showSuccess('Server removed successfully');
   };
 
   const removeService = (id: string) => {
+    // Check if service is used by any router
+    const usedBy = routers.filter(r => r.service === services.find(s => s.id === id)?.name);
+    if (usedBy.length > 0) {
+      showError(`Cannot remove service: used by ${usedBy.length} router(s)`);
+      return;
+    }
     updateConfig({ services: services.filter((s) => s.id !== id) });
+    showSuccess('Service removed successfully');
   };
 
   const updateService = (id: string, field: string, value: any) => {
@@ -195,16 +199,38 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
   const addMiddleware = () => {
     const newMiddleware: Middleware = {
       id: `middleware-${Date.now()}`,
-      name: 'new-middleware',
+      name: `middleware-${middlewares.length + 1}`,
       type: 'headers',
       config: {},
     };
     updateConfig({ middlewares: [...middlewares, newMiddleware] });
-    setShowCreateMiddleware(false);
+    showSuccess('Middleware created successfully');
+  };
+  
+  const updateMiddleware = (id: string, field: string, value: any) => {
+    const newMiddlewares = middlewares.map((m) =>
+      m.id === id ? { ...m, [field]: value } : m
+    );
+    updateConfig({ middlewares: newMiddlewares });
+  };
+  
+  const updateMiddlewareConfig = (id: string, configKey: string, value: any) => {
+    const middleware = middlewares.find(m => m.id === id);
+    if (!middleware) return;
+    
+    const newConfig = { ...(middleware.config || {}), [configKey]: value };
+    updateMiddleware(id, 'config', newConfig);
   };
 
   const removeMiddleware = (id: string) => {
+    // Check if middleware is used by any router
+    const usedBy = routers.filter(r => r.middlewares?.includes(middlewares.find(m => m.id === id)?.name || ''));
+    if (usedBy.length > 0) {
+      showError(`Cannot remove middleware: used by ${usedBy.length} router(s)`);
+      return;
+    }
     updateConfig({ middlewares: middlewares.filter((m) => m.id !== id) });
+    showSuccess('Middleware removed successfully');
   };
 
   return (
@@ -219,7 +245,19 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                if (traefikEngine) {
+                  const updatedNode = nodes.find(n => n.id === componentId);
+                  if (updatedNode) {
+                    traefikEngine.updateConfig(updatedNode);
+                    showSuccess('Configuration refreshed');
+                  }
+                }
+              }}
+            >
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
@@ -403,6 +441,51 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                               min={1}
                             />
                           </div>
+                          <div className="space-y-2 col-span-2">
+                            <Label>Entry Points</Label>
+                            <div className="flex flex-wrap gap-2">
+                              {['web', 'websecure'].map((ep) => (
+                                <Badge
+                                  key={ep}
+                                  variant={router.entryPoints.includes(ep) ? 'default' : 'outline'}
+                                  className="cursor-pointer"
+                                  onClick={() => {
+                                    const current = router.entryPoints || [];
+                                    const updated = current.includes(ep)
+                                      ? current.filter(e => e !== ep)
+                                      : [...current, ep];
+                                    updateRouter(router.id, 'entryPoints', updated);
+                                  }}
+                                >
+                                  {ep}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="space-y-2 col-span-2">
+                            <Label>Middlewares</Label>
+                            <div className="flex flex-wrap gap-2">
+                              {middlewares.map((mw) => (
+                                <Badge
+                                  key={mw.id}
+                                  variant={(router.middlewares || []).includes(mw.name) ? 'default' : 'outline'}
+                                  className="cursor-pointer"
+                                  onClick={() => {
+                                    const current = router.middlewares || [];
+                                    const updated = current.includes(mw.name)
+                                      ? current.filter(m => m !== mw.name)
+                                      : [...current, mw.name];
+                                    updateRouter(router.id, 'middlewares', updated);
+                                  }}
+                                >
+                                  {mw.name}
+                                </Badge>
+                              ))}
+                              {middlewares.length === 0 && (
+                                <span className="text-sm text-muted-foreground">No middlewares available</span>
+                              )}
+                            </div>
+                          </div>
                         </div>
                         {router.requests !== undefined && (
                           <div className="grid grid-cols-2 gap-4 text-sm pt-2 border-t">
@@ -502,11 +585,22 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                             </Select>
                           </div>
                         </div>
-                        {service.servers && service.servers.length > 0 && (
-                          <div className="space-y-2">
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
                             <Label>Servers</Label>
-                            <div className="space-y-2">
-                              {service.servers.map((server, idx) => (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => addServerToService(service.id)}
+                            >
+                              <Plus className="h-4 w-4 mr-2" />
+                              Add Server
+                            </Button>
+                          </div>
+                          <div className="space-y-2">
+                            {(service.servers && service.servers.length > 0) ? (
+                              service.servers.map((server, idx) => (
                                 <div key={idx} className="flex items-center gap-2">
                                   <Input
                                     value={server.url}
@@ -516,6 +610,7 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                                       updateService(service.id, 'servers', newServers);
                                     }}
                                     className="flex-1"
+                                    placeholder="http://localhost:8080"
                                   />
                                   <Input
                                     type="number"
@@ -527,12 +622,72 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                                     }}
                                     className="w-20"
                                     min={1}
+                                    placeholder="Weight"
                                   />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => removeServerFromService(service.id, idx)}
+                                    className="hover:bg-destructive/10 hover:text-destructive"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
                                 </div>
-                              ))}
-                            </div>
+                              ))
+                            ) : (
+                              <div className="text-sm text-muted-foreground py-2">
+                                No servers configured. Click "Add Server" to add one.
+                              </div>
+                            )}
                           </div>
-                        )}
+                        </div>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label>Health Check</Label>
+                            <Switch
+                              checked={service.healthCheck?.enabled ?? false}
+                              onCheckedChange={(checked) => {
+                                updateService(service.id, 'healthCheck', {
+                                  enabled: checked,
+                                  path: service.healthCheck?.path || '/health',
+                                  interval: service.healthCheck?.interval || 10,
+                                });
+                              }}
+                            />
+                          </div>
+                          {service.healthCheck?.enabled && (
+                            <div className="grid grid-cols-2 gap-4 pl-6">
+                              <div className="space-y-2">
+                                <Label>Path</Label>
+                                <Input
+                                  value={service.healthCheck.path || '/health'}
+                                  onChange={(e) => {
+                                    updateService(service.id, 'healthCheck', {
+                                      ...service.healthCheck,
+                                      path: e.target.value,
+                                    });
+                                  }}
+                                  placeholder="/health"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Interval (seconds)</Label>
+                                <Input
+                                  type="number"
+                                  value={service.healthCheck.interval || 10}
+                                  onChange={(e) => {
+                                    updateService(service.id, 'healthCheck', {
+                                      ...service.healthCheck,
+                                      interval: Number(e.target.value),
+                                    });
+                                  }}
+                                  min={1}
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
                   ))}
@@ -565,9 +720,39 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                             <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
                               <Shield className="h-5 w-5 text-purple-600 dark:text-purple-400" />
                             </div>
-                            <div>
-                              <CardTitle className="text-lg font-semibold">{middleware.name}</CardTitle>
-                              <Badge variant="outline" className="mt-2">{middleware.type}</Badge>
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  value={middleware.name}
+                                  onChange={(e) => updateMiddleware(middleware.id, 'name', e.target.value)}
+                                  className="font-semibold border-0 p-0 h-auto"
+                                />
+                                <Select
+                                  value={middleware.type}
+                                  onValueChange={(value: Middleware['type']) => updateMiddleware(middleware.id, 'type', value)}
+                                >
+                                  <SelectTrigger className="w-40">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="headers">Headers</SelectItem>
+                                    <SelectItem value="rateLimit">Rate Limit</SelectItem>
+                                    <SelectItem value="auth">Auth</SelectItem>
+                                    <SelectItem value="basicAuth">Basic Auth</SelectItem>
+                                    <SelectItem value="digestAuth">Digest Auth</SelectItem>
+                                    <SelectItem value="forwardAuth">Forward Auth</SelectItem>
+                                    <SelectItem value="redirect">Redirect</SelectItem>
+                                    <SelectItem value="stripPrefix">Strip Prefix</SelectItem>
+                                    <SelectItem value="addPrefix">Add Prefix</SelectItem>
+                                    <SelectItem value="compress">Compress</SelectItem>
+                                    <SelectItem value="retry">Retry</SelectItem>
+                                    <SelectItem value="circuitBreaker">Circuit Breaker</SelectItem>
+                                    <SelectItem value="ipAllowList">IP Allow List</SelectItem>
+                                    <SelectItem value="ipWhiteList">IP White List</SelectItem>
+                                    <SelectItem value="chain">Chain</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
                             </div>
                           </div>
                           <Button
@@ -580,6 +765,92 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
                           </Button>
                         </div>
                       </CardHeader>
+                      <CardContent className="space-y-4">
+                        {/* Middleware configuration based on type */}
+                        {middleware.type === 'rateLimit' && (
+                          <div className="grid grid-cols-3 gap-4">
+                            <div className="space-y-2">
+                              <Label>Average</Label>
+                              <Input
+                                type="number"
+                                value={middleware.config?.average || 100}
+                                onChange={(e) => updateMiddlewareConfig(middleware.id, 'average', Number(e.target.value))}
+                                min={1}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Burst</Label>
+                              <Input
+                                type="number"
+                                value={middleware.config?.burst || 50}
+                                onChange={(e) => updateMiddlewareConfig(middleware.id, 'burst', Number(e.target.value))}
+                                min={1}
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Period</Label>
+                              <Input
+                                value={middleware.config?.period || '1s'}
+                                onChange={(e) => updateMiddlewareConfig(middleware.id, 'period', e.target.value)}
+                                placeholder="1s"
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {middleware.type === 'auth' && (
+                          <div className="space-y-2">
+                            <Label>Header Field</Label>
+                            <Input
+                              value={middleware.config?.headerField || 'X-User'}
+                              onChange={(e) => updateMiddlewareConfig(middleware.id, 'headerField', e.target.value)}
+                              placeholder="X-User"
+                            />
+                          </div>
+                        )}
+                        {middleware.type === 'redirect' && (
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label>Scheme</Label>
+                              <Input
+                                value={middleware.config?.scheme || 'https'}
+                                onChange={(e) => updateMiddlewareConfig(middleware.id, 'scheme', e.target.value)}
+                                placeholder="https"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <Label>Permanent</Label>
+                              <Switch
+                                checked={middleware.config?.permanent ?? false}
+                                onCheckedChange={(checked) => updateMiddlewareConfig(middleware.id, 'permanent', checked)}
+                              />
+                            </div>
+                          </div>
+                        )}
+                        {(middleware.type === 'stripPrefix' || middleware.type === 'addPrefix') && (
+                          <div className="space-y-2">
+                            <Label>Prefix</Label>
+                            <Input
+                              value={middleware.config?.prefix || ''}
+                              onChange={(e) => updateMiddlewareConfig(middleware.id, 'prefix', e.target.value)}
+                              placeholder="/api"
+                            />
+                          </div>
+                        )}
+                        {middleware.type === 'ipAllowList' || middleware.type === 'ipWhiteList' ? (
+                          <div className="space-y-2">
+                            <Label>Source Ranges (one per line)</Label>
+                            <textarea
+                              className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              value={Array.isArray(middleware.config?.sourceRange) ? middleware.config.sourceRange.join('\n') : ''}
+                              onChange={(e) => {
+                                const ranges = e.target.value.split('\n').filter(line => line.trim());
+                                updateMiddlewareConfig(middleware.id, 'sourceRange', ranges);
+                              }}
+                              placeholder="192.168.1.0/24&#10;10.0.0.0/8"
+                            />
+                          </div>
+                        ) : null}
+                      </CardContent>
                     </Card>
                   ))}
                 </div>
@@ -595,11 +866,54 @@ export function TraefikConfigAdvanced({ componentId }: TraefikConfigProps) {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label>Entry Points</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {entryPoints.map((ep, idx) => (
-                      <Badge key={idx} variant="outline">{ep}</Badge>
-                    ))}
+                  <div className="flex items-center justify-between">
+                    <Label>Entry Points</Label>
+                    <div className="flex gap-2">
+                      {['web', 'websecure'].map((ep) => (
+                        <Badge
+                          key={ep}
+                          variant={entryPoints.includes(ep) ? 'default' : 'outline'}
+                          className="cursor-pointer"
+                          onClick={() => {
+                            const updated = entryPoints.includes(ep)
+                              ? entryPoints.filter(e => e !== ep)
+                              : [...entryPoints, ep];
+                            updateConfig({ entryPoints: updated });
+                          }}
+                        >
+                          {ep}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Click on entry points to toggle them. 'web' is HTTP (port 80), 'websecure' is HTTPS (port 443).
+                  </div>
+                </div>
+                <Separator />
+                <div className="space-y-2">
+                  <Label>Global Settings</Label>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="flex items-center justify-between">
+                      <Label>Max Connections</Label>
+                      <Input
+                        type="number"
+                        value={config.maxConnections || 10000}
+                        onChange={(e) => updateConfig({ maxConnections: Number(e.target.value) })}
+                        className="w-32"
+                        min={1}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <Label>Response Timeout (ms)</Label>
+                      <Input
+                        type="number"
+                        value={config.responseTimeout || 30000}
+                        onChange={(e) => updateConfig({ responseTimeout: Number(e.target.value) })}
+                        className="w-32"
+                        min={1000}
+                      />
+                    </div>
                   </div>
                 </div>
                 <Separator />
