@@ -1,0 +1,1 @@
+import{a7 as i}from"./index-Cdjj0m0I.js";function r(o){i.success(o,{duration:3e3,position:"top-right"})}function t(o){i.error(o,{duration:4e3,position:"top-right"})}function s(o){i(o,{duration:3e3,position:"top-right",icon:"ℹ️"})}function a(o){i(o,{duration:4e3,position:"top-right",icon:"⚠️"})}function c(o){t(`Ошибка валидации: ${o}`)}export{t as a,s as b,c,a as d,r as s};

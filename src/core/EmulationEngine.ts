@@ -43,6 +43,7 @@ import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { TraefikEmulationEngine } from './TraefikEmulationEngine';
+import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -162,6 +163,9 @@ export class EmulationEngine {
   
   // Envoy Proxy routing engines per node
   private envoyRoutingEngines: Map<string, EnvoyRoutingEngine> = new Map();
+  
+  // Istio Service Mesh routing engines per node
+  private istioRoutingEngines: Map<string, IstioRoutingEngine> = new Map();
   
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
@@ -372,6 +376,9 @@ export class EmulationEngine {
         }
         if (node.type === 'envoy') {
           this.initializeEnvoyRoutingEngine(node);
+        }
+        if (node.type === 'istio') {
+          this.initializeIstioRoutingEngine(node);
         }
         if (node.type === 'apigee') {
           this.initializeApigeeRoutingEngine(node);
@@ -626,6 +633,11 @@ export class EmulationEngine {
         this.initializeEnvoyRoutingEngine(node);
       }
       
+      // Initialize Istio routing engine for Istio Service Mesh nodes
+      if (node.type === 'istio') {
+        this.initializeIstioRoutingEngine(node);
+      }
+      
       // Initialize Apigee routing engine for Apigee Gateway nodes
       if (node.type === 'apigee') {
         this.initializeApigeeRoutingEngine(node);
@@ -805,6 +817,7 @@ export class EmulationEngine {
         this.nginxRoutingEngines.delete(nodeId);
         this.haproxyRoutingEngines.delete(nodeId);
         this.envoyRoutingEngines.delete(nodeId);
+        this.istioRoutingEngines.delete(nodeId);
         this.apigeeRoutingEngines.delete(nodeId);
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
@@ -1355,6 +1368,9 @@ export class EmulationEngine {
           break;
         case 'envoy':
           this.simulateEnvoy(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'istio':
+          this.simulateIstio(node, config, metrics, hasIncomingConnections);
           break;
         case 'docker':
           this.simulateDocker(node, config, metrics, hasIncomingConnections);
@@ -4492,6 +4508,94 @@ export class EmulationEngine {
   }
 
   /**
+   * Istio Service Mesh emulation
+   */
+  private simulateIstio(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Get Istio routing engine
+    const routingEngine = this.istioRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default behavior
+      const maxConnections = (config as any).maxConnections || 10000;
+      const throughputReqs = (config as any).requestsPerSecond || 5000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 5 + (1 - loadVariation) * 10;
+      metrics.errorRate = 0.0001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (maxConnections / 10000));
+      
+      metrics.customMetrics = {
+        'max_connections': maxConnections,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+        'services': (config as any).services?.length || 0,
+      };
+      return;
+    }
+
+    // Get Istio config
+    const istioConfig = (config as any) || {};
+    const maxConnections = istioConfig.maxConnections || 10000;
+    const requestsPerSecond = istioConfig.requestsPerSecond || 5000;
+    
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+    
+    // Calculate throughput with load variation
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+    
+    // Adjust based on service health
+    const serviceCount = stats.services;
+    const healthyRatio = serviceCount > 0 ? Math.min(1, serviceCount / Math.max(1, (istioConfig.services?.length || serviceCount))) : 1;
+    baseThroughput = baseThroughput * healthyRatio;
+    
+    metrics.throughput = baseThroughput;
+    
+    // Latency calculation (5-15ms base + upstream latency + mTLS overhead)
+    const baseLatency = 5 + (1 - loadVariation) * 10;
+    const upstreamLatency = 10 + Math.random() * 90; // Simulated upstream latency
+    const mtlsOverhead = istioConfig.enableMTLS ? 2 : 0; // mTLS adds ~2ms overhead
+    metrics.latency = baseLatency + (upstreamLatency * 0.15) + mtlsOverhead; // Istio adds ~15% of upstream latency
+    
+    // Error rate based on stats
+    metrics.errorRate = stats.errorRate || 0.0001;
+    
+    // Utilization based on connections
+    const connectionUtilization = Math.min(1, stats.activeConnections / maxConnections);
+    metrics.utilization = connectionUtilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'max_connections': maxConnections,
+      'active_connections': stats.activeConnections,
+      'services': stats.services,
+      'virtual_services': stats.virtualServices,
+      'destination_rules': stats.destinationRules,
+      'gateways': stats.gateways,
+      'total_requests': stats.totalRequests,
+      'total_responses': stats.totalResponses,
+      'total_errors': stats.totalErrors,
+      'total_bytes_in': stats.totalBytesIn,
+      'total_bytes_out': stats.totalBytesOut,
+      'mtls_connections': stats.mtlsConnections,
+      'circuit_breaker_trips': stats.circuitBreakerTrips,
+      'retry_attempts': stats.retryAttempts,
+      'timeout_errors': stats.timeoutErrors,
+      'rate_limit_blocks': stats.rateLimitBlocks,
+      'average_latency': Math.round(stats.averageLatency),
+    };
+  }
+
+  /**
    * Docker/Kubernetes infrastructure emulation
    */
   private simulateInfrastructure(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -6168,6 +6272,122 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Istio routing engine for a node
+   */
+  private initializeIstioRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new IstioRoutingEngine();
+    
+    // Transform config format from UI to routing engine format
+    const services = (config.services || []).map((service: any) => ({
+      id: service.id || service.name,
+      name: service.name,
+      namespace: service.namespace || 'default',
+      host: service.host || `${service.name}.${service.namespace || 'default'}.svc.cluster.local`,
+      ports: service.ports || [{ number: 80, protocol: 'HTTP' as const }],
+      labels: service.labels || {},
+      requests: service.requests || 0,
+      errors: service.errors || 0,
+      latency: service.latency || 0,
+      pods: service.pods || 1,
+      healthyPods: service.healthyPods || service.pods || 1,
+    }));
+    
+    const virtualServices = (config.virtualServices || []).map((vs: any) => ({
+      id: vs.id || vs.name,
+      name: vs.name,
+      namespace: vs.namespace || 'default',
+      hosts: vs.hosts || [],
+      gateways: vs.gateways || [],
+      http: vs.http || [],
+      tcp: vs.tcp || [],
+      tls: vs.tls || [],
+    }));
+    
+    const destinationRules = (config.destinationRules || []).map((dr: any) => ({
+      id: dr.id || dr.name,
+      name: dr.name,
+      namespace: dr.namespace || 'default',
+      host: dr.host,
+      subsets: dr.subsets || [],
+      trafficPolicy: dr.trafficPolicy || {},
+    }));
+    
+    const gateways = (config.gateways || []).map((gw: any) => ({
+      id: gw.id || gw.name,
+      name: gw.name,
+      namespace: gw.namespace || 'default',
+      selector: gw.selector || {},
+      servers: gw.servers || [],
+    }));
+    
+    const peerAuthentications = (config.peerAuthentications || []).map((pa: any) => ({
+      id: pa.id || pa.name,
+      name: pa.name,
+      namespace: pa.namespace || 'default',
+      selector: pa.selector || {},
+      mtls: pa.mtls || { mode: 'PERMISSIVE' as const },
+      portLevelMtls: pa.portLevelMtls || {},
+    }));
+    
+    const authorizationPolicies = (config.authorizationPolicies || []).map((ap: any) => ({
+      id: ap.id || ap.name,
+      name: ap.name,
+      namespace: ap.namespace || 'default',
+      selector: ap.selector || {},
+      action: ap.action || 'ALLOW' as const,
+      rules: ap.rules || [],
+    }));
+    
+    const serviceEntries = (config.serviceEntries || []).map((se: any) => ({
+      id: se.id || se.name,
+      name: se.name,
+      namespace: se.namespace || 'default',
+      hosts: se.hosts || [],
+      addresses: se.addresses || [],
+      ports: se.ports || [],
+      location: se.location || 'MESH_EXTERNAL' as const,
+      resolution: se.resolution || 'DNS' as const,
+      endpoints: se.endpoints || [],
+    }));
+    
+    const sidecars = (config.sidecars || []).map((sc: any) => ({
+      id: sc.id || sc.name,
+      name: sc.name,
+      namespace: sc.namespace || 'default',
+      workloadSelector: sc.workloadSelector || {},
+      egress: sc.egress || [],
+      ingress: sc.ingress || [],
+    }));
+    
+    routingEngine.initialize({
+      services,
+      virtualServices,
+      destinationRules,
+      gateways,
+      peerAuthentications,
+      authorizationPolicies,
+      serviceEntries,
+      sidecars,
+      globalConfig: {
+        enableMTLS: config.enableMTLS ?? true,
+        mtlsMode: config.mtlsMode || 'PERMISSIVE',
+        enableTracing: config.enableTracing ?? true,
+        tracingProvider: config.tracingProvider || 'jaeger',
+        enableMetrics: config.enableMetrics ?? true,
+        metricsProvider: config.metricsProvider || 'prometheus',
+        enableAccessLog: config.enableAccessLog ?? true,
+        maxConnections: config.maxConnections || 10000,
+        defaultTimeout: config.defaultTimeout || '30s',
+        defaultRetryAttempts: config.defaultRetryAttempts || 3,
+      },
+    });
+    
+    this.istioRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Apigee routing engine for a node
    */
   private initializeApigeeRoutingEngine(node: CanvasNode): void {
@@ -7042,6 +7262,13 @@ export class EmulationEngine {
    */
   public getEnvoyRoutingEngine(nodeId: string): EnvoyRoutingEngine | undefined {
     return this.envoyRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Istio routing engine for a node
+   */
+  public getIstioRoutingEngine(nodeId: string): IstioRoutingEngine | undefined {
+    return this.istioRoutingEngines.get(nodeId);
   }
 
   /**

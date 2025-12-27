@@ -2534,6 +2534,103 @@ export class DataFlowEngine {
       };
     }
 
+    if (type === 'istio') {
+      return {
+        processData: (node, message, config) => {
+          // Get Istio routing engine from emulation engine
+          const routingEngine = emulationEngine.getIstioRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const protocol = headers['X-Forwarded-Proto'] === 'https' || message.metadata?.protocol === 'https' ? 'https' : 'http';
+          const host = headers['Host'] || message.metadata?.host;
+          const authority = headers['Host'] || message.metadata?.authority;
+          const sourcePrincipal = headers['X-Source-Principal'] || message.metadata?.sourcePrincipal;
+          const destinationPrincipal = headers['X-Destination-Principal'] || message.metadata?.destinationPrincipal;
+
+          // Route request through Istio
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            protocol: protocol === 'https' ? 'https' : (protocol === 'grpc' ? 'grpc' : 'http'),
+            host,
+            authority,
+            sourcePrincipal,
+            destinationPrincipal,
+          });
+
+          if (routeResult.response.status >= 200 && routeResult.response.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.response.latency;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              istioVirtualService: routeResult.virtualService?.name,
+              istioDestinationRule: routeResult.destinationRule?.name,
+              istioService: routeResult.serviceTarget,
+              istioSubset: routeResult.subsetTarget,
+              istioEndpoint: routeResult.endpointTarget,
+              istioResponseStatus: routeResult.response.status,
+              istioRetryAttempts: routeResult.response.retryAttempts,
+              istioCircuitBreakerOpen: routeResult.response.circuitBreakerOpen,
+            };
+            // Update payload if response has body
+            if (routeResult.response.body) {
+              message.payload = routeResult.response.body;
+            }
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.response.error || `HTTP ${routeResult.response.status}`;
+            message.latency = routeResult.response.latency;
+            // Update metadata even on failure
+            message.metadata = {
+              ...message.metadata,
+              istioVirtualService: routeResult.virtualService?.name,
+              istioDestinationRule: routeResult.destinationRule?.name,
+              istioService: routeResult.serviceTarget,
+              istioSubset: routeResult.subsetTarget,
+              istioEndpoint: routeResult.endpointTarget,
+              istioResponseStatus: routeResult.response.status,
+              istioError: routeResult.response.error,
+              istioRetryAttempts: routeResult.response.retryAttempts,
+              istioCircuitBreakerOpen: routeResult.response.circuitBreakerOpen,
+            };
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Istio can transform requests/responses through VirtualService rewrites
+          const istioConfig = (node.data.config as any) || {};
+          
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text', 'grpc'],
+      };
+    }
+
     if (type === 'apigee') {
       return {
         processData: (node, message, config) => {

@@ -1,5 +1,108 @@
 # Patch Notes
 
+## Версия 0.1.7zq - Istio Mesh: Улучшения UI и симуляции Traffic Policy
+
+### Обзор изменений
+**Обновление компонента Istio Mesh**: Улучшен UI для управления Gateway и Destination Rules, добавлены настройки Traffic Policy (Connection Pool, Outlier Detection), исправлены ошибки редактирования, добавлена интеграция Connection Pool в симуляцию. Все настройки Traffic Policy теперь полностью симулятивны и влияют на метрики системы.
+
+**Istio Mesh компонент**: Расширены возможности конфигурации Gateway с настройкой servers (портов, протоколов, хостов), добавлены настройки Traffic Policy для Destination Rules (Connection Pool с maxConnections и connectTimeout, Outlier Detection с consecutiveErrors, baseEjectionTime, interval, maxEjectionPercent). Исправлены проблемы с редактированием Peer Authentication и Authorization Policy. Добавлена полная интеграция Connection Pool в симуляцию с отслеживанием активных соединений и блокировкой при превышении лимита.
+
+### Ключевые изменения
+
+#### Gateway - Расширенное управление
+- ✅ **Функция создания Gateway**: Добавлена функция `addGateway()` для создания новых Gateway
+- ✅ **Кнопка "Create Gateway"**: Добавлена кнопка создания в заголовке таба Gateways
+- ✅ **Расширенное модальное окно Gateway**: Полностью переработано модальное окно редактирования
+  - Поддержка создания и редактирования Gateway
+  - Настройка Name, Namespace, Selector (JSON формат)
+  - **Управление Servers**: добавление, редактирование, удаление серверов
+    - Port Number (числовое значение)
+    - Protocol (HTTP, HTTPS, TCP, TLS, gRPC, HTTP2, MongoDB)
+    - Port Name (текстовое значение)
+    - Hosts (через запятую, поддержка wildcards: *, example.com, *.example.com)
+  - Кнопка "Add Server" для добавления нескольких серверов
+  - Кнопка удаления для каждого сервера
+- ✅ **Функция удаления**: Добавлена функция `removeGateway()` для удаления Gateway
+
+#### Destination Rules - Traffic Policy настройки
+- ✅ **Расширенный интерфейс DestinationRule**: Добавлены все поля Traffic Policy
+  - `connectionPool` с настройками TCP (maxConnections, connectTimeout) и HTTP
+  - `outlierDetection` с настройками (consecutiveErrors, interval, baseEjectionTime, maxEjectionPercent, minHealthPercent)
+  - `tls` с настройками режима
+- ✅ **Модальное окно DestinationRule**: Добавлены секции Traffic Policy
+  - **Load Balancer**: выбор алгоритма (Round Robin, Least Connections, Random)
+  - **Connection Pool**: настройка Max Connections и Connect Timeout
+  - **Outlier Detection (Circuit Breaker)**:
+    - Consecutive Errors (число ошибок до открытия circuit breaker)
+    - Base Ejection Time (время до повторной попытки)
+    - Interval (интервал проверки)
+    - Max Ejection Percent (максимальный процент исключенных endpoint'ов)
+  - Подсказки и описания для каждого поля
+  - Визуальное разделение секций через Separator
+
+#### IstioRoutingEngine - Интеграция Connection Pool
+- ✅ **Connection Pool State**: Добавлено отслеживание активных соединений
+  - `connectionPoolCounts: Map<string, number>` для хранения количества соединений по service:subset
+  - Инициализация и очистка при reset
+- ✅ **Проверка лимитов Connection Pool**: Добавлена проверка maxConnections перед обработкой запроса
+  - Если текущие соединения >= maxConnections, возвращается ошибка 503 "Connection pool exhausted"
+  - Увеличение счетчика соединений при начале обработки
+  - Уменьшение счетчика при завершении (успех или ошибка)
+- ✅ **Использование connectTimeout**: Добавлено использование connectTimeout из Connection Pool
+  - Если указан connectTimeout в trafficPolicy, он используется как таймаут подключения
+  - Fallback на defaultTimeout из globalConfig или 30000ms
+- ✅ **Интеграция с существующей логикой**: Connection Pool интегрирован в метод `routeToService()`
+  - Проверка выполняется после выбора endpoint'а
+  - Влияет на метрики error rate и throughput
+
+#### Исправления UI
+- ✅ **Исправление синтаксической ошибки**: Исправлена ошибка с лишней закрывающей скобкой в map() для services
+- ✅ **Исправление дубликатов модальных окон**: Удалены дубликаты модальных окон для Peer Authentication и Authorization Policy
+- ✅ **Исправление работы кнопок Edit**: Исправлены кнопки редактирования для Peer Authentication и Authorization Policy
+- ✅ **Перевод на английский**: Переведен текст Alert "Автоматическое добавление сервисов" на английский ("Automatic Service Discovery")
+- ✅ **Улучшение структуры**: Улучшена структура модальных окон с использованием Separator для визуального разделения секций
+
+#### Симулятивность
+- ✅ **Load Balancer**: Полностью симулятивен, влияет на выбор endpoint'а
+- ✅ **Outlier Detection**: Полностью симулятивен, влияет на circuit breaker и error rate
+  - `consecutiveErrors` определяет порог открытия circuit breaker
+  - `baseEjectionTime` определяет время блокировки
+- ✅ **Connection Pool**: Полностью симулятивен, влияет на throughput и error rate
+  - `maxConnections` ограничивает число одновременных соединений
+  - `connectTimeout` используется как таймаут подключения
+  - При превышении лимита возвращается ошибка 503
+
+### Технические детали
+
+#### Файлы изменены:
+- `src/components/config/edge/IstioConfigAdvanced.tsx`:
+  - Добавлена функция `addGateway()` и `removeGateway()`
+  - Расширено модальное окно Gateway с настройками servers
+  - Добавлены настройки Traffic Policy в модальное окно DestinationRule
+  - Обновлен интерфейс DestinationRule с полными полями Traffic Policy
+  - Исправлены синтаксические ошибки и дубликаты
+  - Переведен текст Alert на английский
+- `src/core/IstioRoutingEngine.ts`:
+  - Добавлено отслеживание Connection Pool (`connectionPoolCounts`)
+  - Добавлена проверка maxConnections перед обработкой запроса
+  - Добавлено использование connectTimeout из Connection Pool
+  - Интеграция Connection Pool в метод `routeToService()`
+
+#### Влияние на метрики:
+- **Throughput**: Уменьшается при превышении Connection Pool лимита
+- **Error Rate**: Увеличивается при превышении Connection Pool лимита (ошибка 503)
+- **Latency**: Влияет через connectTimeout
+- **Utilization**: Влияет через ограничение активных соединений
+
+### Проверка качества
+
+Все изменения проверены линтером - ошибок не обнаружено.  
+Все настройки Traffic Policy полностью симулятивны и влияют на метрики системы.  
+Gateway теперь поддерживает полную настройку servers с портами, протоколами и хостами.  
+Connection Pool интегрирован в симуляцию с отслеживанием активных соединений.
+
+---
+
 ## Версия 0.1.7zp - Traefik: Полная реализация уровня 10/10
 
 ### Обзор изменений
