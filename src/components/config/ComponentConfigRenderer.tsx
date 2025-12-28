@@ -20,6 +20,7 @@ const GraphQLConfigAdvanced = lazy(() => import('./api/GraphQLConfigAdvanced').t
 const SOAPConfigAdvanced = lazy(() => import('./api/SOAPConfigAdvanced').then(m => ({ default: m.SOAPConfigAdvanced })));
 const WebhookConfigAdvanced = lazy(() => import('./api/WebhookConfigAdvanced').then(m => ({ default: m.WebhookConfigAdvanced })));
 const DockerK8sConfigAdvanced = lazy(() => import('./infrastructure/DockerK8sConfigAdvanced').then(m => ({ default: m.DockerK8sConfigAdvanced })));
+const InfrastructureConfig = lazy(() => import('./InfrastructureConfig').then(m => ({ default: m.InfrastructureConfig })));
 const KubernetesConfigAdvanced = lazy(() => import('./infrastructure/KubernetesConfigAdvanced').then(m => ({ default: m.KubernetesConfigAdvanced })));
 const HAProxyConfigAdvanced = lazy(() => import('./infrastructure/HAProxyConfigAdvanced').then(m => ({ default: m.HAProxyConfigAdvanced })));
 const TraefikConfigAdvanced = lazy(() => import('./infrastructure/TraefikConfigAdvanced').then(m => ({ default: m.TraefikConfigAdvanced })));
