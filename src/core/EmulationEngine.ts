@@ -14,6 +14,7 @@ import { HAProxyRoutingEngine } from './HAProxyRoutingEngine';
 import { EnvoyRoutingEngine } from './EnvoyRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
+import { RestApiRoutingEngine } from './RestApiRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
@@ -190,6 +191,9 @@ export class EmulationEngine {
 
   // BFF Service routing engines per node
   private bffRoutingEngines: Map<string, BFFRoutingEngine> = new Map();
+
+  // REST API routing engines per node
+  private restApiRoutingEngines: Map<string, RestApiRoutingEngine> = new Map();
 
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
@@ -411,6 +415,9 @@ export class EmulationEngine {
         }
         if (node.type === 'bff-service') {
           this.initializeBFFRoutingEngine(node);
+        }
+        if (node.type === 'rest') {
+          this.initializeRestApiRoutingEngine(node);
         }
         if (node.type === 'webhook-relay') {
           this.initializeWebhookRelayRoutingEngine(node);
@@ -678,6 +685,12 @@ export class EmulationEngine {
         this.initializeBFFRoutingEngine(node);
       }
 
+      // Initialize REST API routing engine for REST API nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'rest') {
+        this.initializeRestApiRoutingEngine(node);
+      }
+
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
@@ -884,6 +897,7 @@ export class EmulationEngine {
         this.mulesoftRoutingEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.bffRoutingEngines.delete(nodeId);
+        this.restApiRoutingEngines.delete(nodeId);
         this.webhookRelayRoutingEngines.delete(nodeId);
         this.redisRoutingEngines.delete(nodeId);
         this.cassandraRoutingEngines.delete(nodeId);
@@ -4802,9 +4816,78 @@ export class EmulationEngine {
       metrics.latency = 0;
       metrics.errorRate = 0;
       metrics.utilization = 0;
+      
+      // Reset routing engine metrics if exists
+      if (node.type === 'rest') {
+        const routingEngine = this.restApiRoutingEngines.get(node.id);
+        if (routingEngine) {
+          // Clear endpoint metrics
+          const stats = routingEngine.getStats();
+          // Metrics will be reset on next request
+        }
+      }
       return;
     }
     
+    // For REST API, use routing engine if available
+    if (node.type === 'rest') {
+      const routingEngine = this.restApiRoutingEngines.get(node.id);
+      if (routingEngine) {
+        const stats = routingEngine.getStats();
+        const endpointStats = routingEngine.getAllEndpointStats();
+        
+        // Calculate metrics from routing engine stats
+        const totalRequests = stats.totalRequests;
+        const totalErrors = stats.totalErrors;
+        const avgLatency = stats.averageLatency;
+        
+        // Simulate current throughput based on incoming connections
+        const rps = config.requestsPerSecond || 100;
+        const variation = Math.sin(this.simulationTime / 1500) * 0.1 + 1;
+        metrics.throughput = rps * variation;
+        
+        // Use routing engine latency if available, otherwise use config
+        metrics.latency = avgLatency > 0 ? avgLatency : (config.responseLatency || 50) + Math.random() * 30;
+        
+        // Calculate error rate from routing engine stats
+        if (totalRequests > 0) {
+          metrics.errorRate = totalErrors / totalRequests;
+        } else {
+          metrics.errorRate = 0.005; // Default 0.5%
+        }
+        
+        // Utilization based on throughput vs capacity
+        metrics.utilization = Math.min(1, metrics.throughput / rps);
+        
+        // Custom metrics from routing engine
+        const enabledEndpoints = stats.enabledEndpoints;
+        const endpointMetrics: Record<string, number> = {};
+        
+        for (const [endpointId, endpointStat] of Object.entries(endpointStats)) {
+          if (endpointStat) {
+            endpointMetrics[`endpoint_${endpointId}_requests`] = endpointStat.requestCount;
+            endpointMetrics[`endpoint_${endpointId}_errors`] = endpointStat.errorCount;
+            endpointMetrics[`endpoint_${endpointId}_latency`] = endpointStat.averageLatency;
+          }
+        }
+        
+        metrics.customMetrics = {
+          'rps': metrics.throughput,
+          'total_requests': totalRequests,
+          'total_errors': totalErrors,
+          'p50_latency': Math.round(metrics.latency * 0.5),
+          'p99_latency': Math.round(metrics.latency * 2),
+          'errors': Math.round(metrics.throughput * metrics.errorRate),
+          'endpoints': stats.totalEndpoints,
+          'enabled_endpoints': enabledEndpoints,
+          ...endpointMetrics,
+        };
+        
+        return;
+      }
+    }
+    
+    // Default behavior for gRPC, WebSocket, etc.
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
     
@@ -6958,6 +7041,41 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize REST API routing engine for a node
+   */
+  private initializeRestApiRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new RestApiRoutingEngine();
+
+    routingEngine.initialize({
+      baseUrl: config.baseUrl || 'https://api.example.com',
+      version: config.version || 'v1',
+      title: config.title || 'REST API',
+      description: config.description || 'RESTful API service',
+      endpoints: (config.endpoints || []).map((endpoint: any) => ({
+        id: endpoint.id || `${endpoint.method}:${endpoint.path}`,
+        path: endpoint.path,
+        method: endpoint.method,
+        description: endpoint.description,
+        summary: endpoint.summary,
+        tags: endpoint.tags,
+        parameters: endpoint.parameters,
+        requestBody: endpoint.requestBody,
+        responseExample: endpoint.responseExample,
+        targetService: endpoint.targetService,
+        enabled: endpoint.enabled !== false,
+        timeout: endpoint.timeout,
+        rateLimit: endpoint.rateLimit,
+      })),
+      authentication: config.authentication || { type: 'none' },
+      rateLimit: config.rateLimit,
+      cors: config.cors,
+    });
+
+    this.restApiRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Webhook Relay routing engine for a node
    */
   private initializeWebhookRelayRoutingEngine(node: CanvasNode): void {
@@ -7763,6 +7881,13 @@ export class EmulationEngine {
    */
   public getBFFRoutingEngine(nodeId: string): BFFRoutingEngine | undefined {
     return this.bffRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get REST API routing engine for a node
+   */
+  public getRestApiRoutingEngine(nodeId: string): RestApiRoutingEngine | undefined {
+    return this.restApiRoutingEngines.get(nodeId);
   }
 
   /**

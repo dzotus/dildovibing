@@ -2121,6 +2121,83 @@ export class DataFlowEngine {
    * Create handler for APIs
    */
   private createAPIHandler(type: string): ComponentDataHandler {
+    // Special handling for REST API with routing engine
+    if (type === 'rest') {
+      return {
+        processData: (node, message, config) => {
+          // Get REST API routing engine from emulation engine
+          const routingEngine = emulationEngine.getRestApiRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, use default behavior
+            const response = {
+              status: 'success',
+              data: message.payload,
+              timestamp: Date.now(),
+            };
+            message.payload = response;
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = (payload?.method || message.metadata?.method || 'GET') as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const body = payload?.body || payload || message.payload;
+          const clientIP = payload?.clientIP || message.metadata?.clientIP;
+
+          // Route request through REST API
+          const routeResult = routingEngine.routeRequest({
+            path,
+            method,
+            headers,
+            query,
+            body,
+            clientIP,
+          });
+
+          if (routeResult.status >= 200 && routeResult.status < 300) {
+            message.status = 'delivered';
+            message.latency = routeResult.latency;
+            message.payload = routeResult.data;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              restApiEndpoint: routeResult.endpoint,
+              restApiStatus: routeResult.status,
+              restApiHeaders: routeResult.headers,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.error || `HTTP ${routeResult.status}`;
+            message.latency = routeResult.latency;
+            message.metadata = {
+              ...message.metadata,
+              restApiEndpoint: routeResult.endpoint,
+              restApiStatus: routeResult.status,
+            };
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // REST API transforms to JSON
+          if (message.format !== 'json') {
+            message.format = 'json';
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml'],
+      };
+    }
+    
+    // Default handler for other API types (gRPC, GraphQL, WebSocket)
     return {
       processData: (node, message, config) => {
         // APIs process requests and return responses
@@ -2137,10 +2214,7 @@ export class DataFlowEngine {
       
       transformData: (node, message, targetType, config) => {
         // Transform based on API type
-        if (type === 'rest' && message.format !== 'json') {
-          message.format = 'json';
-          message.status = 'transformed';
-        } else if (type === 'grpc' && message.format !== 'protobuf') {
+        if (type === 'grpc' && message.format !== 'protobuf') {
           message.format = 'protobuf';
           message.status = 'transformed';
         }
@@ -2149,8 +2223,6 @@ export class DataFlowEngine {
       
       getSupportedFormats: () => {
         switch (type) {
-          case 'rest':
-            return ['json', 'xml'];
           case 'grpc':
             return ['protobuf', 'binary'];
           case 'graphql':
