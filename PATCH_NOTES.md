@@ -1,5 +1,85 @@
 # Patch Notes
 
+## Версия 0.1.7zs - Service Mesh: Новый универсальный mesh-компонент
+
+### Обзор изменений
+**Новый компонент Service Mesh**: Добавлен универсальный сервис‑меш компонент, основанный на концепциях Istio, но не привязанный к конкретной реализации. Реализован полноценный routing engine, интеграция с EmulationEngine и DataFlowEngine, а также расширенный UI с поддержкой всех ключевых сущностей (VirtualService, DestinationRule, Gateway, PeerAuthentication, AuthorizationPolicy, ServiceEntry, Sidecar), метрик, валидации и toast‑уведомлений.
+
+**Service Mesh компонент**: Конфигурируется полностью через UI без захардкоженных данных, синхронизируется с симуляцией в реальном времени и отображает реальные метрики нагрузки, ошибок и соединений. Интерфейс повторяет лучшие практики Istio UI, включая адаптивные табы, фильтрацию, поиск и подтверждение критичных операций.
+
+### Ключевые изменения
+
+#### Routing Engine и симуляция
+- ✅ **ServiceMeshRoutingEngine**: Новый движок маршрутизации, основанный на `IstioRoutingEngine`, поддерживает:
+  - Services, VirtualServices, DestinationRules, Gateways, PeerAuthentications, AuthorizationPolicies, ServiceEntries, Sidecars
+  - Глобальные настройки: mTLS, Tracing, Metrics, Access Log, Load Balancer, maxConnections, timeouts, retries
+- ✅ **Интеграция в EmulationEngine**:
+  - Карта `serviceMeshRoutingEngines` по `node.id`
+  - `initializeServiceMeshRoutingEngine(node)` — инициализация движка из конфига ноды типа `service-mesh`
+  - `simulateServiceMesh(...)` — симуляция метрик (throughput, latency, errorRate, utilization) на основе `routingEngine.getStats()` и глобальных настроек
+  - `getServiceMeshRoutingEngine(nodeId)` — публичный метод доступа к движку
+- ✅ **Интеграция в DataFlowEngine**:
+  - Добавлен обработчик для типа `service-mesh`
+  - Использование `routingEngine.routeRequest(...)` для симуляции HTTP/gRPC трафика
+  - Запись результатов маршрутизации в `message.metadata` (virtualService, destinationRule, service, subset, endpoint, status, retries, circuitBreakerOpen)
+
+#### UI: ServiceMeshConfigAdvanced
+- ✅ **Новые табы и сущности**:
+  - Services, Virtual Services, Destination Rules, Gateways, Peer Authentication, Authorization Policy, Service Entry, Sidecar, Settings
+  - Для каждого таба: список сущностей, карточки с ключевыми полями и метриками, кнопки действий
+- ✅ **CRUD + модальные окна**:
+  - Функции `add*/remove*` для всех сущностей (VirtualService, DestinationRule, Gateway, PeerAuthentication, AuthorizationPolicy, ServiceEntry, Sidecar)
+  - Модальные окна для создания/редактирования с полями:
+    - VirtualService: name, namespace, hosts, gateways
+    - DestinationRule: host, trafficPolicy (LoadBalancer, ConnectionPool, OutlierDetection)
+    - Gateway: selector (JSON), servers (port, protocol, name, hosts)
+    - PeerAuthentication: mTLS mode, selector
+    - AuthorizationPolicy: action, selector
+    - ServiceEntry: hosts, location, resolution
+    - Sidecar: workloadSelector (JSON)
+- ✅ **Поиск и фильтрация**:
+  - Поиск по имени и namespace (общий `searchQuery`)
+  - Фильтрация по namespace (`filterNamespace`) для всех табов
+  - Мемоизированные списки `filtered*` через `useMemo`
+
+#### Метрики, валидация и UX
+- ✅ **Метрики из эмуляции**:
+  - Получение метрик из `useEmulationStore` и `routingEngine.getStats()`
+  - Верхний блок с KPI: количество сервисов, total requests, total errors, average latency
+  - Дополнительные custom‑метрики в `metrics.customMetrics` (connections, retries, circuit breaker, mTLS, bytes in/out)
+- ✅ **Синхронизация с routing engine**:
+  - `useEffect` в `ServiceMeshConfigAdvanced`, который на каждое изменение конфига/списков ресурсов:
+    - вызывает `routingEngine.updateConfig(...)` с актуальными services/virtualServices/destinationRules/... и `globalConfig`
+  - Удалены все статические/захардкоженные сервисы и политики — всё берётся из `node.data.config`
+- ✅ **Валидация и toast‑уведомления**:
+  - Использование `showSuccess()` и `showValidationError()` из `@/utils/toast`:
+    - В модальных окнах: проверка обязательных полей (name, host, hosts и т.п.)
+    - Уведомления при создании/обновлении/удалении сущностей
+  - `AlertDialog` для подтверждения удаления (services, virtualServices, destinationRules, gateways, peerAuthentications, authorizationPolicies, serviceEntries, sidecars)
+- ✅ **Адаптивный UI и устранение наложений**:
+  - Адаптивные табы:
+    - Обёртка с `overflow-x-auto` + `TabsList` с `inline-flex`, `sm:flex-wrap`, `gap-1`, `h-auto`, `py-1`
+    - `TabsTrigger` с `whitespace-nowrap flex-shrink-0`, числа в скобках вынесены в отдельные `span`
+  - Отступы контента:
+    - Для всех `TabsContent` добавлен `mt-4`, чтобы избежать наложения табов и контента (в частности Alert «Automatic Service Discovery»)
+
+#### Технические детали
+- Изменены/добавлены файлы:
+  - `src/core/ServiceMeshRoutingEngine.ts` — новый routing engine для Service Mesh
+  - `src/core/EmulationEngine.ts` — инициализация/симуляция Service Mesh, метод `getServiceMeshRoutingEngine`
+  - `src/core/DataFlowEngine.ts` — обработка трафика для нод типа `service-mesh`
+  - `src/components/config/edge/ServiceMeshConfigAdvanced.tsx` — полный переработанный UI:
+    - новые табы, CRUD, модальные окна
+    - интеграция метрик, поиск/фильтрация
+    - валидация, toast‑уведомления, AlertDialog для удаления
+
+### Проверка качества
+- Файл `ServiceMeshConfigAdvanced.tsx` проходит линтер без ошибок.
+- Визуально проверена адаптивность табов: на узких экранах — горизонтальная прокрутка, на широких — перенос на новую строку без наложений.
+- CRUD‑операции для всех сущностей корректно обновляют конфиг и синхронизируются с эмуляцией.
+
+---
+
 ## Версия 0.1.7zr - Kubernetes: Восстановление и расширение функциональности
 
 ### История восстановления

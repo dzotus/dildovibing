@@ -44,6 +44,7 @@ import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
+import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
 
 /**
@@ -166,6 +167,9 @@ export class EmulationEngine {
   
   // Istio Service Mesh routing engines per node
   private istioRoutingEngines: Map<string, IstioRoutingEngine> = new Map();
+  
+  // Service Mesh routing engines per node
+  private serviceMeshRoutingEngines: Map<string, ServiceMeshRoutingEngine> = new Map();
   
   // Apigee Gateway routing engines per node
   private apigeeRoutingEngines: Map<string, ApigeeRoutingEngine> = new Map();
@@ -1371,6 +1375,9 @@ export class EmulationEngine {
           break;
         case 'istio':
           this.simulateIstio(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'service-mesh':
+          this.simulateServiceMesh(node, config, metrics, hasIncomingConnections);
           break;
         case 'docker':
           this.simulateDocker(node, config, metrics, hasIncomingConnections);
@@ -4508,6 +4515,94 @@ export class EmulationEngine {
   }
 
   /**
+   * Service Mesh emulation
+   */
+  private simulateServiceMesh(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Get Service Mesh routing engine
+    const routingEngine = this.serviceMeshRoutingEngines.get(node.id);
+    if (!routingEngine) {
+      // No routing engine, use default behavior
+      const maxConnections = (config as any).maxConnections || 10000;
+      const throughputReqs = (config as any).requestsPerSecond || 5000;
+      
+      const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+      metrics.throughput = throughputReqs * loadVariation;
+      metrics.latency = 5 + (1 - loadVariation) * 10;
+      metrics.errorRate = 0.0001;
+      metrics.utilization = Math.min(1, (metrics.throughput / throughputReqs) * (maxConnections / 10000));
+      
+      metrics.customMetrics = {
+        'max_connections': maxConnections,
+        'active_connections': Math.floor(metrics.throughput * 0.1),
+        'services': (config as any).services?.length || 0,
+      };
+      return;
+    }
+
+    // Get Service Mesh config
+    const meshConfig = (config as any) || {};
+    const maxConnections = meshConfig.maxConnections || 10000;
+    const requestsPerSecond = meshConfig.requestsPerSecond || 5000;
+    
+    // Get stats from routing engine
+    const stats = routingEngine.getStats();
+    
+    // Calculate throughput with load variation
+    const loadVariation = 0.5 * Math.sin(this.simulationTime / 2000) + 0.5;
+    let baseThroughput = requestsPerSecond * loadVariation;
+    
+    // Adjust based on service health
+    const serviceCount = stats.services;
+    const healthyRatio = serviceCount > 0 ? Math.min(1, serviceCount / Math.max(1, (meshConfig.services?.length || serviceCount))) : 1;
+    baseThroughput = baseThroughput * healthyRatio;
+    
+    metrics.throughput = baseThroughput;
+    
+    // Latency calculation (5-15ms base + upstream latency + mTLS overhead)
+    const baseLatency = 5 + (1 - loadVariation) * 10;
+    const upstreamLatency = 10 + Math.random() * 90; // Simulated upstream latency
+    const mtlsOverhead = meshConfig.enableMTLS ? 2 : 0; // mTLS adds ~2ms overhead
+    metrics.latency = baseLatency + (upstreamLatency * 0.15) + mtlsOverhead; // Service Mesh adds ~15% of upstream latency
+    
+    // Error rate based on stats
+    metrics.errorRate = stats.errorRate || 0.0001;
+    
+    // Utilization based on connections
+    const connectionUtilization = Math.min(1, stats.activeConnections / maxConnections);
+    metrics.utilization = connectionUtilization;
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'max_connections': maxConnections,
+      'active_connections': stats.activeConnections,
+      'services': stats.services,
+      'virtual_services': stats.virtualServices,
+      'destination_rules': stats.destinationRules,
+      'gateways': stats.gateways,
+      'total_requests': stats.totalRequests,
+      'total_responses': stats.totalResponses,
+      'total_errors': stats.totalErrors,
+      'total_bytes_in': stats.totalBytesIn,
+      'total_bytes_out': stats.totalBytesOut,
+      'mtls_connections': stats.mtlsConnections,
+      'circuit_breaker_trips': stats.circuitBreakerTrips,
+      'retry_attempts': stats.retryAttempts,
+      'timeout_errors': stats.timeoutErrors,
+      'rate_limit_blocks': stats.rateLimitBlocks,
+      'average_latency': Math.round(stats.averageLatency),
+    };
+  }
+
+  /**
    * Istio Service Mesh emulation
    */
   private simulateIstio(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -6272,6 +6367,42 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Service Mesh routing engine for a node
+   */
+  private initializeServiceMeshRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    
+    const routingEngine = new ServiceMeshRoutingEngine();
+    
+    // Initialize with service mesh config
+    routingEngine.initialize({
+      services: config.services || [],
+      virtualServices: config.virtualServices || [],
+      destinationRules: config.destinationRules || [],
+      gateways: config.gateways || [],
+      peerAuthentications: config.peerAuthentications || [],
+      authorizationPolicies: config.authorizationPolicies || [],
+      serviceEntries: config.serviceEntries || [],
+      sidecars: config.sidecars || [],
+      globalConfig: {
+        enableMTLS: config.enableMTLS,
+        mtlsMode: config.mtlsMode,
+        enableTracing: config.enableTracing,
+        tracingProvider: config.tracingProvider,
+        enableMetrics: config.enableMetrics,
+        metricsProvider: config.metricsProvider,
+        enableAccessLog: config.enableAccessLog,
+        maxConnections: config.maxConnections,
+        defaultTimeout: config.defaultTimeout,
+        defaultRetryAttempts: config.defaultRetryAttempts,
+        defaultLoadBalancer: config.defaultLoadBalancer,
+      },
+    });
+    
+    this.serviceMeshRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Istio routing engine for a node
    */
   private initializeIstioRoutingEngine(node: CanvasNode): void {
@@ -7269,6 +7400,13 @@ export class EmulationEngine {
    */
   public getIstioRoutingEngine(nodeId: string): IstioRoutingEngine | undefined {
     return this.istioRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Service Mesh routing engine for a node
+   */
+  public getServiceMeshRoutingEngine(nodeId: string): ServiceMeshRoutingEngine | undefined {
+    return this.serviceMeshRoutingEngines.get(nodeId);
   }
 
   /**
