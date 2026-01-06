@@ -1,5 +1,194 @@
 # Patch Notes
 
+## Версия 0.1.7zt - Cloud API Gateway: Мультипровайдерная архитектура и полноценная симуляция
+
+### Обзор изменений
+**Cloud API Gateway компонент**: Полностью переработан с поддержкой мультипровайдерной архитектуры (AWS API Gateway, Azure API Management, GCP Cloud Endpoints). Реализован полноценный emulation engine с маршрутизацией, аутентификацией, rate limiting, кэшированием и расчетом метрик. Добавлен расширенный UI с провайдер-специфичными табами, CRUD операциями, подтверждениями удаления и улучшенным UX.
+
+**Мультипровайдерная архитектура**: Единая абстракция для всех провайдеров с провайдер-специфичными настройками и поведением в симуляции. Поддержка AWS (Stages, Usage Plans, Lambda Authorizers), Azure (Products, Subscriptions, Policies, Backends), GCP (OpenAPI Spec, Service Accounts, Quotas).
+
+### Ключевые изменения
+
+#### Типы и архитектура
+- ✅ **Мультипровайдерные типы** (`src/core/api-gateway/types.ts`):
+  - `GatewayProvider`: 'aws' | 'azure' | 'gcp'
+  - `BaseAPIGatewayConfig`: общие поля для всех провайдеров
+  - `AWSGatewayConfig`, `AzureGatewayConfig`, `GCPGatewayConfig`: провайдер-специфичные конфигурации
+  - `API`: универсальный интерфейс с поддержкой `backendUrl`, `rateLimit`, `timeout`, `caching`, `authRequired`, `authScopes`
+  - `APIKey`: универсальный интерфейс с `apiIds`, `rateLimit`, `usage` метриками
+  - Утилиты: `getDefaultProviderConfig()`, `isAWSConfig()`, `isAzureConfig()`, `isGCPConfig()`, `migrateOldConfig()`
+
+#### CloudAPIGatewayEmulationEngine
+- ✅ **Основной движок** (`src/core/api-gateway/CloudAPIGatewayEmulationEngine.ts`):
+  - Абстрактный класс `ProviderGatewayEngine` с методами: `authenticate()`, `checkRateLimit()`, `getCachedResponse()`, `generateCacheKey()`, `calculateLatency()`
+  - Три провайдер-специфичных движка:
+    - `AWSGatewayEngine`: Lambda authorizers, Usage Plans, X-Ray tracing, CloudWatch logs
+    - `AzureGatewayEngine`: Products/Subscriptions, Policies, Application Insights
+    - `GCPGatewayEngine`: OpenAPI validation, Service Accounts, Quotas, Cloud Logging
+  - `CloudAPIGatewayEmulationEngine`: основной класс с `processRequest()`:
+    - Маршрутизация по path/method
+    - Аутентификация (API Key, Lambda, Subscriptions)
+    - Rate limiting с временными окнами
+    - Кэширование ответов с TTL
+    - Расчет latency с учетом провайдера
+    - Метрики: throughput, latency (avg/p95/p99), errorRate, utilization
+
+#### Интеграция в EmulationEngine
+- ✅ **Инициализация и симуляция**:
+  - Map `cloudAPIGatewayEngines` по `node.id`
+  - `initializeCloudAPIGatewayEngine(node)` — инициализация движка из конфига ноды типа `api-gateway`
+  - `simulateAPIGateway(...)` — симуляция метрик на основе `gatewayEngine.calculateMetrics()`
+  - `getCloudAPIGatewayEngine(nodeId)` — публичный метод доступа к движку
+
+#### Интеграция в DataFlowEngine
+- ✅ **Обработка запросов**:
+  - Добавлен обработчик для типа `api-gateway`
+  - Извлечение данных запроса (path, method, headers, query, apiKey)
+  - Поддержка разных форматов API ключей (AWS: `x-api-key`, Azure: `ocp-apim-subscription-key`, GCP: `key`)
+  - Обработка через `gatewayEngine.processRequest()`
+  - Обработка cache hit (возврат кэшированного ответа без отправки на backend)
+  - Обработка ошибок gateway (401, 403, 429, 404)
+  - Обогащение metadata: `gatewayProvider`, `gatewayApiId`, `gatewayKeyId`, `gatewayCacheHit`, `gatewayRateLimitRemaining`
+
+#### UI: APIGatewayConfigAdvanced
+- ✅ **Мультипровайдерный UI**:
+  - Provider Selector: выбор между AWS, Azure, GCP с динамическим обновлением конфигурации
+  - Общие табы: APIs, Keys, Settings
+  - AWS-специфичные табы: Stages & Deployments, Usage Plans, Lambda Authorizers
+  - Azure-специфичные табы: Products, Subscriptions, Policies, Backends
+  - GCP-специфичные табы: OpenAPI Spec, Service Accounts, Quotas
+
+- ✅ **CRUD операции**:
+  - **APIs**: создание, редактирование (имя, method, path, backendUrl, rateLimit, timeout), удаление с подтверждением
+  - **API Keys**: создание с выбором API, настройкой rate limit, генерацией маскированного ключа
+  - **Stages (AWS)**: создание, редактирование имени, настройка cache cluster, throttling
+  - **Usage Plans (AWS)**: создание, редактирование имени, настройка quota и throttle
+  - **Authorizers (AWS)**: создание, редактирование имени, настройка типа (TOKEN, REQUEST, COGNITO_USER_POOLS)
+  - **Products (Azure)**: создание, редактирование состояния, subscription required
+  - **Subscriptions (Azure)**: создание, редактирование состояния, привязка к продуктам
+  - **Policies (Azure)**: создание, редактирование XML политик
+  - **Backends (Azure)**: создание, редактирование URL и протокола
+  - **Service Accounts (GCP)**: добавление, редактирование ролей
+  - **Quotas (GCP)**: создание, редактирование метрик и лимитов
+
+- ✅ **UX улучшения**:
+  - Подтверждения удаления через `AlertDialog` для всех сущностей
+  - Toast-уведомления для успешных операций и ошибок
+  - Индикаторы статуса: Active/Inactive для API, Enabled/Disabled для Keys
+  - Улучшенное отображение метрик: Requests, Errors, Latency (avg/p95/p99), Caching badge
+  - Проверка зависимостей: нельзя удалить API, если на него ссылаются API Keys
+  - Success Rate показывает "N/A" если симуляция не запущена
+
+- ✅ **Редактирование API**:
+  - Все поля редактируемы: Name, Method (Select), Path, Backend URL, Rate Limit, Timeout
+  - Метрики (Requests, Errors, Latency) только для чтения (генерируются симуляцией)
+  - Автоматическое сохранение при изменении полей
+
+#### Connection Rules
+- ✅ **Автоматическое создание API** (`src/services/connection/rules/apiGatewayRules.ts`):
+  - Правило для `api-gateway` → `rest/grpc/graphql/websocket/soap/webhook`
+  - Автоматическое создание API endpoint при соединении с backend
+  - Определение метода на основе типа компонента (gRPC → POST, WebSocket → GET)
+  - Проверка на дубликаты по `backendUrl`
+  - Поддержка обратной совместимости (`backend` → `backendUrl`)
+
+#### Технические детали
+- Изменены/добавлены файлы:
+  - `src/core/api-gateway/types.ts` — мультипровайдерные типы и утилиты
+  - `src/core/api-gateway/CloudAPIGatewayEmulationEngine.ts` — emulation engine с провайдер-специфичной логикой
+  - `src/core/EmulationEngine.ts` — интеграция Cloud API Gateway
+  - `src/core/DataFlowEngine.ts` — обработка запросов через gateway
+  - `src/components/config/edge/APIGatewayConfigAdvanced.tsx` — полностью переработанный UI:
+    - мультипровайдерные табы, CRUD операции
+    - редактирование API, подтверждения удаления
+    - toast-уведомления, индикаторы статуса
+  - `src/services/connection/rules/apiGatewayRules.ts` — автоматическое создание API
+
+### Проверка качества
+- Все файлы проходят линтер без ошибок
+- Типы выровнены между всеми компонентами
+- Обратная совместимость сохранена (поддержка старого формата `backend`)
+- Симуляция использует реальные настройки из конфигурации
+- Метрики рассчитываются на основе поведения gateway
+
+### Оценка симуляции
+**До**: 2/10 (только базовый UI, минимальная симуляция)  
+**После**: 9/10 (полноценная симуляция с мультипровайдерной поддержкой, маршрутизацией, аутентификацией, rate limiting, кэшированием)
+
+### Отличия от других gateway компонентов:
+- ✅ Мультипровайдерная архитектура (AWS/Azure/GCP)
+- ✅ Провайдер-специфичное поведение в симуляции
+- ✅ Поддержка per-API настроек (rateLimit, timeout, caching, authRequired)
+- ✅ Реалистичные метрики для каждого провайдера
+- ✅ Автоматическое создание API при соединениях
+- ✅ Полноценный CRUD для всех сущностей
+
+#### Дополнительные улучшения (последние обновления)
+- ✅ **Настройка кэширования на уровне API**:
+  - Добавлен UI для настройки кэширования для каждого API отдельно
+  - Switch для включения/выключения кэширования на уровне API
+  - Input для TTL (в секундах) с возможностью переопределения глобального значения
+  - Multi-select (Checkbox) для выбора параметров cache key (method, path, query, headers)
+  - Логика кэширования обновлена: проверяется `api.caching?.enabled` перед глобальной настройкой
+  - Используется `api.caching?.ttl` и `api.caching?.cacheKey` для каждого API
+  - Метод `setCachedResponse()` добавлен в провайдер-специфичные движки для сохранения ответов в кэш
+  - Поля кэширования добавлены в форму создания API
+
+- ✅ **Настройка аутентификации на уровне API**:
+  - Добавлен Switch для `authRequired` с возможностью переопределения глобальных настроек
+  - Input для `authScopes` (список scopes через запятую) для OAuth2/JWT
+  - Индикатор публичного/приватного API (Badge)
+  - Логика аутентификации обновлена во всех провайдер-специфичных движках:
+    - Если `api.authRequired === false`, аутентификация пропускается даже при глобально включенной
+    - Если `api.authRequired === true`, аутентификация требуется даже при глобально выключенной
+    - Проверка `api.authScopes` для OAuth2/JWT токенов
+  - Поля аутентификации добавлены в форму создания API
+
+- ✅ **Использование timeout в симуляции**:
+  - Добавлена проверка `api.timeout` в `processRequest()`
+  - Если запрос обрабатывается дольше timeout, возвращается 504 Gateway Timeout
+  - Latency увеличивается при приближении к timeout (симуляция замедления backend)
+  - Timeout ошибки учитываются в метриках (error rate)
+  - Поддержка как per-API timeout, так и глобального `requestTimeout`
+
+- ✅ **Сохранение конфигов провайдеров при переключении**:
+  - Добавлены отдельные поля в `BaseAPIGatewayConfig`: `awsConfig`, `azureConfig`, `gcpConfig`
+  - При переключении провайдера текущий конфиг сохраняется в соответствующее поле
+  - При загрузке используется сохраненный конфиг провайдера, если он существует
+  - Функция `updateConfig()` автоматически сохраняет `providerConfig` в соответствующее поле провайдера
+  - Конфиги всех провайдеров сохраняются независимо и не теряются при переключении
+
+- ✅ **Редактируемость всех полей в табах провайдеров**:
+  - **AWS**: Все поля редактируемы (Stages: name, cacheClusterEnabled, cacheClusterSize, throttling; Usage Plans: name, quota, throttle; Authorizers: name, type, authorizerUri, identitySource, providerARNs)
+  - **Azure**: Добавлено редактирование displayName и description для Products; displayName для Subscriptions; все поля Policies и Backends редактируемы
+  - **GCP**: Добавлено редактирование email и displayName для Service Accounts; все поля Quotas редактируемы
+  - Все сущности имеют полноценный CRUD с автоматическим сохранением изменений
+
+- ✅ **Адаптивность табов**:
+  - Табы теперь адаптивны и переносятся на следующую строку при нехватке места
+  - Обновлен компонент `TabsList` в `tabs.tsx`: добавлен `flex-wrap` и `gap-1`, убрана фиксированная высота
+  - `TabsList` обернут в `div` с `w-full` для полной ширины
+  - Классы: `flex-wrap`, `h-auto`, `min-h-[36px]`, `w-full`, `justify-start`, `gap-1`
+  - Подложка расширяется по высоте при переносе табов на новую строку
+  - Работает корректно на узких экранах
+
+#### Обновленные файлы (дополнительно)
+- `src/core/api-gateway/types.ts` — добавлены поля `awsConfig`, `azureConfig`, `gcpConfig` в `BaseAPIGatewayConfig`
+- `src/core/api-gateway/CloudAPIGatewayEmulationEngine.ts`:
+  - Обновлены методы `authenticate()` для проверки `api.authRequired`
+  - Обновлены методы `getCachedResponse()` для проверки `api.caching?.enabled`
+  - Добавлен метод `setCachedResponse()` в базовый класс и все провайдер-специфичные движки
+  - Добавлена проверка timeout в `processRequest()` с генерацией 504 ошибок
+- `src/components/config/edge/APIGatewayConfigAdvanced.tsx`:
+  - Добавлены UI элементы для кэширования и аутентификации на уровне API
+  - Обновлена логика `handleProviderChange()` для сохранения конфигов провайдеров
+  - Обновлена функция `updateConfig()` для автоматического сохранения `providerConfig`
+  - Добавлено редактирование всех полей в табах провайдеров
+  - Обновлена структура табов для адаптивности
+- `src/components/ui/tabs.tsx` — обновлен `TabsList` для поддержки `flex-wrap` и адаптивной высоты
+
+---
+
 ## Версия 0.1.7zs - Service Mesh: Новый универсальный mesh-компонент
 
 ### Обзор изменений
@@ -56,6 +245,17 @@
     - В модальных окнах: проверка обязательных полей (name, host, hosts и т.п.)
     - Уведомления при создании/обновлении/удалении сущностей
   - `AlertDialog` для подтверждения удаления (services, virtualServices, destinationRules, gateways, peerAuthentications, authorizationPolicies, serviceEntries, sidecars)
+- ✅ **Валидация весов маршрутов в Virtual Service**:
+  - Проверка суммы весов маршрутов: если в одном HTTP route несколько маршрутов, их веса должны суммироваться до 100%
+  - Визуальное предупреждение в карточке Virtual Service:
+    - Желтый Alert с предупреждением, если веса не суммируются до 100%
+    - Отображение текущей суммы весов (например, "Route weights sum to 150% (should be 100%)")
+  - Визуальная индикация некорректных весов:
+    - Badge с некорректным весом становится красным (variant="destructive")
+    - Показ нормализованного веса в скобках при некорректной сумме (например, "100% (67%)")
+  - Валидация при сохранении:
+    - Проверка всех HTTP routes в Virtual Service перед сохранением
+    - Блокировка сохранения с сообщением об ошибке, если веса не суммируются до 100%
 - ✅ **Адаптивный UI и устранение наложений**:
   - Адаптивные табы:
     - Обёртка с `overflow-x-auto` + `TabsList` с `inline-flex`, `sm:flex-wrap`, `gap-1`, `h-auto`, `py-1`
@@ -71,7 +271,8 @@
   - `src/components/config/edge/ServiceMeshConfigAdvanced.tsx` — полный переработанный UI:
     - новые табы, CRUD, модальные окна
     - интеграция метрик, поиск/фильтрация
-    - валидация, toast‑уведомления, AlertDialog для удаления
+    - валидация (включая валидацию весов маршрутов в Virtual Service), toast‑уведомления, AlertDialog для удаления
+    - визуальные предупреждения для некорректных конфигураций маршрутов
 
 ### Проверка качества
 - Файл `ServiceMeshConfigAdvanced.tsx` проходит линтер без ошибок.

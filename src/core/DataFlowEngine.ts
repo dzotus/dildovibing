@@ -114,6 +114,7 @@ export class DataFlowEngine {
     
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
+    this.registerHandler('api-gateway', this.createIntegrationHandler('api-gateway'));
     this.registerHandler('nginx', this.createIntegrationHandler('nginx'));
     this.registerHandler('haproxy', this.createIntegrationHandler('haproxy'));
     this.registerHandler('traefik', this.createIntegrationHandler('traefik'));
@@ -419,7 +420,7 @@ export class DataFlowEngine {
     // Check if there's an integration component in the path
     // For now, check direct connection
     const sourceNode = this.nodes.find(n => n.id === connection.source);
-    if (sourceNode && ['kong', 'apigee', 'mulesoft', 'bff-service'].includes(sourceNode.type)) {
+    if (sourceNode && ['kong', 'api-gateway', 'apigee', 'mulesoft', 'bff-service'].includes(sourceNode.type)) {
       return this.handlers.get(sourceNode.type) || null;
     }
     return null;
@@ -2220,6 +2221,101 @@ export class DataFlowEngine {
         
         transformData: (node, message, targetType, config) => {
           // Kong can transform requests/responses
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary'],
+      };
+    }
+
+    if (type === 'api-gateway') {
+      return {
+        processData: (node, message, config) => {
+          // Get Cloud API Gateway engine from emulation engine
+          const gatewayEngine = emulationEngine.getCloudAPIGatewayEngine(node.id);
+          
+          if (!gatewayEngine) {
+            // No gateway engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const apiKey = headers['x-api-key'] || 
+                        headers['X-API-Key'] || 
+                        headers['ocp-apim-subscription-key'] ||
+                        query['key'] ||
+                        query['subscription-key'] ||
+                        query['apikey'];
+
+          // Create gateway request
+          const gatewayRequest = {
+            path,
+            method: method.toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'ALL',
+            headers,
+            query,
+            body: payload?.body,
+            apiKey,
+          };
+
+          // Process request through gateway
+          const gatewayResponse = gatewayEngine.processRequest(gatewayRequest);
+
+          // Handle gateway response
+          if (gatewayResponse.status >= 200 && gatewayResponse.status < 300) {
+            message.status = 'delivered';
+            message.latency = (message.latency || 0) + gatewayResponse.latency;
+            
+            // Update metadata with gateway info
+            message.metadata = {
+              ...message.metadata,
+              gatewayProvider: gatewayResponse.metadata?.gatewayProvider,
+              gatewayApiId: gatewayResponse.metadata?.apiId,
+              gatewayKeyId: gatewayResponse.metadata?.keyId,
+              gatewayCacheHit: gatewayResponse.metadata?.cacheHit || false,
+              gatewayRateLimitRemaining: gatewayResponse.metadata?.rateLimitRemaining,
+              gatewayResponseStatus: gatewayResponse.status,
+            };
+
+            // If cache hit, don't forward to backend
+            if (gatewayResponse.metadata?.cacheHit) {
+              message.status = 'delivered';
+              message.payload = gatewayResponse.body || message.payload;
+              return message;
+            }
+          } else {
+            // Gateway rejected request (auth, rate limit, etc.)
+            message.status = 'failed';
+            message.error = gatewayResponse.error || `HTTP ${gatewayResponse.status}`;
+            message.latency = (message.latency || 0) + gatewayResponse.latency;
+            
+            // Add gateway error metadata
+            message.metadata = {
+              ...message.metadata,
+              gatewayProvider: gatewayResponse.metadata?.gatewayProvider,
+              gatewayApiId: gatewayResponse.metadata?.apiId,
+              gatewayError: gatewayResponse.error,
+              gatewayResponseStatus: gatewayResponse.status,
+            };
+
+            return message;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // Cloud API Gateway can transform requests/responses
           const targetFormats = this.getTargetFormats(targetType);
           if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
             message.format = targetFormats[0];

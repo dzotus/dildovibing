@@ -816,26 +816,60 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
                       <CardContent>
                         {vs.http && vs.http.length > 0 && (
                           <div className="space-y-2">
-                            {vs.http.map((http, idx) => (
-                              <div key={idx} className="p-3 border rounded">
-                                {http.route && (
-                                  <div className="space-y-1">
-                                    {http.route.map((route, rIdx) => (
-                                      <div key={rIdx} className="text-sm">
-                                        <span className="text-muted-foreground">→</span>
-                                        <span className="ml-2 font-medium">{route.destination.host}</span>
-                                        {route.destination.subset && (
-                                          <Badge variant="outline" className="ml-2">{route.destination.subset}</Badge>
-                                        )}
-                                        {route.weight && (
-                                          <Badge variant="outline" className="ml-2">{route.weight}%</Badge>
-                                        )}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
+                            {vs.http.map((http, idx) => {
+                              // Calculate total weight for this HTTP route
+                              const totalWeight = http.route?.reduce((sum, route) => sum + (route.weight || 0), 0) || 0;
+                              const hasMultipleRoutes = (http.route?.length || 0) > 1;
+                              const weightsValid = totalWeight === 100 || (hasMultipleRoutes === false && totalWeight <= 100);
+                              
+                              return (
+                                <div key={idx} className="p-3 border rounded">
+                                  {hasMultipleRoutes && !weightsValid && (
+                                    <Alert className="mb-2 border-yellow-200 bg-yellow-50 dark:border-yellow-800 dark:bg-yellow-950/30">
+                                      <AlertTriangle className="h-4 w-4 text-yellow-600 dark:text-yellow-400" />
+                                      <AlertTitle className="text-yellow-900 dark:text-yellow-100 text-xs">Invalid Route Weights</AlertTitle>
+                                      <AlertDescription className="text-yellow-800 dark:text-yellow-200 text-xs">
+                                        Route weights sum to {totalWeight}% (should be 100%)
+                                      </AlertDescription>
+                                    </Alert>
+                                  )}
+                                  {http.route && (
+                                    <div className="space-y-1">
+                                      {http.route.map((route, rIdx) => {
+                                        // Calculate normalized weight if multiple routes
+                                        const normalizedWeight = hasMultipleRoutes && totalWeight > 0 
+                                          ? Math.round((route.weight || 0) / totalWeight * 100) 
+                                          : route.weight;
+                                        
+                                        return (
+                                          <div key={rIdx} className="text-sm">
+                                            <span className="text-muted-foreground">→</span>
+                                            <span className="ml-2 font-medium">{route.destination.host}</span>
+                                            {route.destination.subset && (
+                                              <Badge variant="outline" className="ml-2">{route.destination.subset}</Badge>
+                                            )}
+                                            {route.weight !== undefined && (
+                                              <Badge 
+                                                variant={hasMultipleRoutes && !weightsValid ? "destructive" : "outline"} 
+                                                className="ml-2"
+                                                title={hasMultipleRoutes && !weightsValid 
+                                                  ? `Actual: ${route.weight}%, Normalized: ${normalizedWeight}%` 
+                                                  : undefined}
+                                              >
+                                                {route.weight}%
+                                                {hasMultipleRoutes && !weightsValid && normalizedWeight !== route.weight && (
+                                                  <span className="ml-1 text-xs opacity-75">({normalizedWeight}%)</span>
+                                                )}
+                                              </Badge>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </CardContent>
@@ -1595,6 +1629,19 @@ export function ServiceMeshConfigAdvanced({ componentId }: ServiceMeshConfigProp
                   if (!editingVirtualService.hosts || editingVirtualService.hosts.length === 0) {
                     showValidationError('At least one host is required');
                     return;
+                  }
+                  
+                  // Validate route weights
+                  if (editingVirtualService.http) {
+                    for (const httpRule of editingVirtualService.http) {
+                      if (httpRule.route && httpRule.route.length > 1) {
+                        const totalWeight = httpRule.route.reduce((sum, route) => sum + (route.weight || 0), 0);
+                        if (totalWeight !== 100) {
+                          showValidationError(`Route weights must sum to 100% (currently ${totalWeight}%)`);
+                          return;
+                        }
+                      }
+                    }
                   }
                   
                   const existingIndex = virtualServices.findIndex(vs => vs.id === editingVirtualService.id);

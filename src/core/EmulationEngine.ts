@@ -46,6 +46,8 @@ import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
+import { CloudAPIGatewayEmulationEngine } from './api-gateway/CloudAPIGatewayEmulationEngine';
+import type { BaseAPIGatewayConfig } from './api-gateway/types';
 
 /**
  * Component runtime state with real-time metrics
@@ -155,6 +157,9 @@ export class EmulationEngine {
   
   // Kong Gateway routing engines per node
   private kongRoutingEngines: Map<string, KongRoutingEngine> = new Map();
+  
+  // Cloud API Gateway emulation engines per node
+  private cloudAPIGatewayEngines: Map<string, CloudAPIGatewayEmulationEngine> = new Map();
   
   // NGINX routing engines per node
   private nginxRoutingEngines: Map<string, NginxRoutingEngine> = new Map();
@@ -371,6 +376,9 @@ export class EmulationEngine {
         }
         if (node.type === 'kong') {
           this.initializeKongRoutingEngine(node);
+        }
+        if (node.type === 'api-gateway') {
+          this.initializeCloudAPIGatewayEngine(node);
         }
         if (node.type === 'nginx') {
           this.initializeNginxRoutingEngine(node);
@@ -1393,7 +1401,9 @@ export class EmulationEngine {
         case 'kong':
           this.simulateKong(node, config, metrics, hasIncomingConnections);
           break;
-        
+        case 'api-gateway':
+          this.simulateAPIGateway(node, config, metrics, hasIncomingConnections);
+          break;
         case 'apigee':
           this.simulateApigee(node, config, metrics, hasIncomingConnections);
           break;
@@ -4833,6 +4843,61 @@ export class EmulationEngine {
   }
 
   /**
+   * Cloud API Gateway emulation
+   */
+  private simulateAPIGateway(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      
+      // Reset engine metrics
+      const engine = this.cloudAPIGatewayEngines.get(node.id);
+      if (engine) {
+        engine.resetMetrics();
+      }
+      return;
+    }
+
+    // Get Cloud API Gateway engine
+    const gatewayEngine = this.cloudAPIGatewayEngines.get(node.id);
+    if (!gatewayEngine) {
+      // No engine initialized, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+
+    // Get gateway config
+    const gatewayConfig = (node.data.config || {}) as BaseAPIGatewayConfig;
+    const apis = gatewayConfig.apis || [];
+    
+    // Calculate metrics from engine
+    const engineMetrics = gatewayEngine.calculateMetrics();
+    
+    // Apply metrics
+    metrics.throughput = engineMetrics.throughput;
+    metrics.latency = engineMetrics.latency;
+    metrics.latencyP50 = engineMetrics.latencyP50;
+    metrics.latencyP95 = engineMetrics.latencyP95;
+    metrics.latencyP99 = engineMetrics.latencyP99;
+    metrics.errorRate = engineMetrics.errorRate;
+    metrics.utilization = engineMetrics.utilization;
+    
+    // Add custom metrics
+    metrics.customMetrics = {
+      ...engineMetrics.customMetrics,
+      'apis_count': apis.length,
+      'keys_count': gatewayConfig.keys?.length || 0,
+      'provider': gatewayConfig.provider === 'aws' ? 1 : gatewayConfig.provider === 'azure' ? 2 : 3,
+      'auth_enabled': gatewayConfig.enableAuthentication ? 1 : 0,
+      'rate_limiting_enabled': gatewayConfig.enableRateLimiting ? 1 : 0,
+      'caching_enabled': gatewayConfig.enableCaching ? 1 : 0,
+    };
+  }
+
+  /**
    * Apigee Gateway emulation
    */
   private simulateApigee(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -6209,6 +6274,21 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Cloud API Gateway emulation engine for a node
+   */
+  private initializeCloudAPIGatewayEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as BaseAPIGatewayConfig;
+    
+    // Ensure provider is set
+    if (!config.provider) {
+      config.provider = 'aws'; // Default provider
+    }
+    
+    const gatewayEngine = new CloudAPIGatewayEmulationEngine(config);
+    this.cloudAPIGatewayEngines.set(node.id, gatewayEngine);
+  }
+
+  /**
    * Initialize NGINX routing engine for a node
    */
   private initializeNginxRoutingEngine(node: CanvasNode): void {
@@ -7368,6 +7448,13 @@ export class EmulationEngine {
    */
   public getKongRoutingEngine(nodeId: string): KongRoutingEngine | undefined {
     return this.kongRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Cloud API Gateway emulation engine for a node
+   */
+  public getCloudAPIGatewayEngine(nodeId: string): CloudAPIGatewayEmulationEngine | undefined {
+    return this.cloudAPIGatewayEngines.get(nodeId);
   }
 
   /**

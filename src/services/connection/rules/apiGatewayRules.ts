@@ -1,6 +1,7 @@
 import { CanvasNode, CanvasConnection } from '@/types';
 import { ConnectionRule, ConnectionMetadata } from '../types';
 import { ServiceDiscovery } from '../ServiceDiscovery';
+import type { API } from '@/core/api-gateway/types';
 
 /**
  * Правило для API Gateway -> Backend Service
@@ -18,12 +19,19 @@ export function createAPIGatewayRule(discovery: ServiceDiscovery): ConnectionRul
       }
 
       const config = gateway.data.config || {};
-      const apis = config.apis || [];
+      const apis: API[] = (config.apis || []) as API[];
       
-      // Проверяем, есть ли уже API для этого компонента
+      // Определяем протокол и backend URL
+      const protocol = metadata.protocol === 'grpc' ? 'http' : 'http';
+      const backendUrl = `${protocol}://${metadata.targetHost}:${metadata.targetPort}`;
+      const backendUrlHttps = `https://${metadata.targetHost}:${metadata.targetPort}`;
+      
+      // Проверяем, есть ли уже API для этого компонента (поддерживаем оба формата: backendUrl и backend)
       const existingAPI = apis.find((api: any) => 
-        api.backendUrl === `http://${metadata.targetHost}:${metadata.targetPort}` ||
-        api.backendUrl === `https://${metadata.targetHost}:${metadata.targetPort}`
+        api.backendUrl === backendUrl ||
+        api.backendUrl === backendUrlHttps ||
+        api.backend === backendUrl || // Обратная совместимость
+        api.backend === backendUrlHttps
       );
 
       if (existingAPI) {
@@ -36,18 +44,15 @@ export function createAPIGatewayRule(discovery: ServiceDiscovery): ConnectionRul
       const apiPath = `/api/${target.type}`;
       
       // Определяем метод на основе типа компонента
-      let method = 'GET';
+      let method: API['method'] = 'GET';
       if (target.type === 'grpc') {
         method = 'POST'; // gRPC обычно через POST
       } else if (target.type === 'websocket') {
         method = 'GET'; // WebSocket upgrade
       }
 
-      // Определяем протокол
-      const protocol = metadata.protocol === 'grpc' ? 'http' : 'http';
-      const backendUrl = `${protocol}://${metadata.targetHost}:${metadata.targetPort}`;
-
-      const newAPI = {
+      const newAPI: API = {
+        id: `api-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         name: apiName,
         path: apiPath,
         method: method,
@@ -55,6 +60,7 @@ export function createAPIGatewayRule(discovery: ServiceDiscovery): ConnectionRul
         enabled: true,
         requests: 0,
         errors: 0,
+        providerMetadata: {},
       };
 
       return {
