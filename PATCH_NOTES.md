@@ -1,5 +1,163 @@
 # Patch Notes
 
+## Версия 0.1.7zu - VPN Concentrator: Полноценная эмуляция и расширенный UI
+
+### Обзор изменений
+**VPN Concentrator компонент**: Полностью переработан с созданием полноценной эмуляции работы VPN Concentrator. Реализованы VPNRoutingEngine и VPNEmulationEngine для обработки VPN трафика, управления соединениями и туннелями. Добавлен расширенный UI с CRUD операциями для connections и tunnels, модальными окнами, поиском, фильтрацией и синхронизацией с эмуляцией в реальном времени.
+
+**Эмуляция VPN**: Полноценная симуляция работы VPN Concentrator с поддержкой шифрования/дешифрования пакетов, управления соединениями и туннелями, расчета метрик (throughput, latency, utilization, error rate). Интеграция с EmulationEngine и DataFlowEngine для обработки трафика через VPN.
+
+### Ключевые изменения
+
+#### VPNRoutingEngine
+- ✅ **Основной routing engine** (`src/core/VPNRoutingEngine.ts`):
+  - Управление VPN соединениями: создание, обновление статуса, удаление
+  - Управление VPN туннелями: создание, обновление статуса, удаление
+  - Обработка пакетов через VPN: шифрование/дешифрование, компрессия
+  - Расчет latency на основе алгоритма шифрования (AES-128, AES-256, ChaCha20-Poly1305)
+  - Отслеживание статистики: bytes in/out, packets in/out, encryption operations
+  - Автоматическая очистка устаревших соединений по timeout
+  - Поддержка протоколов: OpenVPN, IPsec, WireGuard, L2TP, PPTP
+
+#### VPNEmulationEngine
+- ✅ **Emulation engine** (`src/core/VPNEmulationEngine.ts`):
+  - Инициализация конфигурации из узла VPN
+  - Обработка пакетов через VPNRoutingEngine
+  - Расчет нагрузки: connectionsPerSecond, packetsPerSecond, bytesPerSecond
+  - Расчет utilization на основе активных соединений, туннелей, трафика и операций шифрования
+  - Расчет error rate на основе неуспешных соединений
+  - Симуляция входящего трафика для расчета метрик без реальных пакетов
+  - Методы для управления connections и tunnels: create, update, remove
+
+#### Интеграция в EmulationEngine
+- ✅ **Инициализация и симуляция**:
+  - Map `vpnEngines` по `node.id`
+  - `initializeVPNEngine(node)` — инициализация движка из конфига ноды типа `vpn`
+  - `simulateVPN(...)` — симуляция метрик на основе `vpnEngine.calculateLoad()`
+  - `getVPNEmulationEngine(nodeId)` — публичный метод доступа к движку
+  - Удаление движка при удалении ноды
+
+#### Интеграция в DataFlowEngine
+- ✅ **Обработка пакетов через VPN**:
+  - Добавлен обработчик для типа `vpn`
+  - Извлечение информации о пакете (source, destination, protocol, port)
+  - Обработка через `vpnEngine.processPacket()`
+  - Шифрование/дешифрование пакетов
+  - Обогащение metadata: `vpnEncrypted`, `vpnConnectionId`, `vpnTunnelId`, `vpnBytesProcessed`
+
+#### UI: VPNConfigAdvanced
+- ✅ **Расширенный UI**:
+  - Три таба: Connections, Tunnels, Settings
+  - Адаптивные табы (переносятся на новую строку на узких экранах)
+  - Карточки статистики: Connections, Tunnels, Data Transferred, Encryption
+  - Отображение метрик из симуляции в реальном времени
+
+- ✅ **CRUD операции для Connections**:
+  - Создание нового соединения через кнопку "Add Connection"
+  - Редактирование существующего соединения через иконку Edit
+  - Удаление соединения с подтверждением через AlertDialog
+  - Модальное окно редактирования с полями:
+    - Username (обязательное)
+    - Remote IP (обязательное)
+    - Local IP (опциональное)
+    - Status (connected/disconnected/connecting/disconnecting)
+    - Protocol (openvpn/ipsec/wireguard/l2tp/pptp)
+    - Encryption Algorithm (aes-128/aes-256/chacha20-poly1305)
+    - Enable Compression (switch)
+  - Валидация обязательных полей с toast-уведомлениями
+  - Синхронизация с VPNEmulationEngine при запущенной симуляции
+
+- ✅ **CRUD операции для Tunnels**:
+  - Создание нового туннеля через кнопку "Add Tunnel"
+  - Редактирование существующего туннеля через иконку Edit
+  - Удаление туннеля с подтверждением через AlertDialog
+  - Модальное окно редактирования с полями:
+    - Tunnel Name (обязательное)
+    - Tunnel Type (site-to-site/remote-access)
+    - Status (up/down/connecting/disconnecting)
+    - Remote Endpoint (обязательное)
+    - Local Endpoint (опциональное)
+    - Protocol (openvpn/ipsec/wireguard)
+    - Encryption Algorithm (aes-128/aes-256/chacha20-poly1305)
+    - Enable Compression (switch)
+    - Enable Keep-Alive (switch)
+    - Keep-Alive Interval (если Keep-Alive включен)
+  - Валидация обязательных полей с toast-уведомлениями
+  - Синхронизация с VPNEmulationEngine при запущенной симуляции
+
+- ✅ **Расширенные настройки**:
+  - VPN Protocol: выбор между OpenVPN, IPsec, WireGuard
+  - Encryption Algorithm: AES-128, AES-256, ChaCha20-Poly1305
+  - Enable Compression: включение/выключение компрессии
+  - Enable Keep-Alive: включение/выключение keep-alive
+  - Max Connections: максимальное количество одновременных соединений (1-10000)
+  - Connection Timeout: таймаут для неактивных соединений (1-3600 секунд)
+  - Protocol Settings:
+    - Enable SSL VPN с настройкой SSL Port (1-65535)
+    - Enable IPSec с настройкой IPSec Port (1-65535)
+    - Enable L2TP (switch)
+    - Enable PPTP (switch, не рекомендуется)
+  - Authentication:
+    - Enable RADIUS с настройкой RADIUS Server
+    - Enable MFA с выбором провайдера (TOTP/SMS/Email)
+
+- ✅ **Поиск и фильтрация**:
+  - Поиск connections по username, remote IP, local IP
+  - Фильтрация connections по статусу (all/connected/disconnected)
+  - Поиск tunnels по name, remote endpoint
+  - Фильтрация tunnels по статусу (all/up/down)
+  - Индикация количества отфильтрованных элементов
+
+- ✅ **UX улучшения**:
+  - Toast-уведомления для всех операций (создание, обновление, удаление)
+  - Подтверждения удаления через AlertDialog для connections и tunnels
+  - Кнопка Refresh для обновления метрик из эмуляции
+  - Отображение реальных метрик из симуляции в карточках статистики
+  - Форматирование bytes (B/KB/MB/GB/TB) и duration (hours/minutes/seconds)
+  - Цветовые индикаторы статуса (green для connected/up, gray для disconnected/down, yellow для connecting)
+  - Badge с количеством элементов в табах
+  - Адаптивная сетка для карточек статистики (1 колонка на мобильных, 2 на планшетах, 4 на десктопах)
+
+#### Исправления ошибок линтера
+- ✅ **Исправления в EmulationEngine.ts**:
+  - WAFEmulationEngine: заменен `updateConfig` на `initializeConfig`
+  - IDSIPSEmulationEngine: заменен `updateConfig` на `initializeConfig`
+  - OpenTelemetryCollectorRoutingEngine: удален вызов несуществующего метода `processBatchFlush`
+  - ComponentMetrics: удалена строка с несуществующим свойством `latencyP95`
+  - BaseAPIGatewayConfig: исправлено приведение типов с использованием `as unknown as`
+
+#### Технические детали
+- Изменены/добавлены файлы:
+  - `src/core/VPNRoutingEngine.ts` — routing engine для обработки VPN трафика
+  - `src/core/VPNEmulationEngine.ts` — emulation engine для симуляции VPN Concentrator
+  - `src/core/EmulationEngine.ts` — интеграция VPN, исправления ошибок линтера
+  - `src/core/DataFlowEngine.ts` — обработка пакетов через VPN
+  - `src/components/config/edge/VPNConfigAdvanced.tsx` — полностью переработанный UI компонент
+
+### Метрики и показатели
+- **VPN метрики в симуляции**:
+  - `vpn_total_connections`: общее количество соединений
+  - `vpn_active_connections`: активные соединения
+  - `vpn_total_tunnels`: общее количество туннелей
+  - `vpn_active_tunnels`: активные туннели
+  - `vpn_bytes_in`: входящие байты
+  - `vpn_bytes_out`: исходящие байты
+  - `vpn_packets_in`: входящие пакеты
+  - `vpn_packets_out`: исходящие пакеты
+  - `vpn_encryption_operations`: операции шифрования
+  - `vpn_compression_operations`: операции компрессии
+  - `vpn_failed_connections`: неуспешные соединения
+  - `vpn_average_latency`: средняя латентность
+  - `vpn_connections_per_second`: соединений в секунду
+  - `vpn_bytes_per_second`: байт в секунду
+
+### Совместимость
+- ✅ Обратная совместимость: старые конфигурации VPN автоматически мигрируются
+- ✅ Поддержка всех существующих протоколов VPN
+- ✅ Интеграция с существующей системой эмуляции
+
+---
+
 ## Версия 0.1.7zt - Cloud API Gateway: Мультипровайдерная архитектура и полноценная симуляция
 
 ### Обзор изменений

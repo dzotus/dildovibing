@@ -3155,6 +3155,83 @@ export class DataFlowEngine {
       };
     }
 
+    if (type === 'vpn') {
+      return {
+        processData: (node, message, config) => {
+          // Get VPN emulation engine from emulation engine
+          const vpnEngine = emulationEngine.getVPNEmulationEngine(node.id);
+          
+          if (!vpnEngine) {
+            // No engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract packet information from message
+          const payload = message.payload as any;
+          const source = payload?.source || message.metadata?.source || message.source || '0.0.0.0';
+          const destination = payload?.destination || message.metadata?.destination || message.target || '0.0.0.0';
+          const protocol = (payload?.protocol || message.metadata?.protocol || 'tcp') as 'tcp' | 'udp';
+          const port = payload?.port || message.metadata?.port;
+          const sourcePort = payload?.sourcePort || message.metadata?.sourcePort;
+          const encrypted = payload?.encrypted || message.metadata?.encrypted || false;
+          const connectionId = payload?.connectionId || message.metadata?.connectionId;
+          const tunnelId = payload?.tunnelId || message.metadata?.tunnelId;
+
+          // Process packet through VPN
+          const processResult = vpnEngine.processPacket({
+            source,
+            destination,
+            protocol,
+            port,
+            sourcePort,
+            payload: message.payload,
+            encrypted,
+            connectionId,
+            tunnelId,
+          });
+
+          if (processResult.success) {
+            message.status = 'delivered';
+            message.latency = (message.latency || 0) + processResult.latency;
+            // Update metadata with VPN info
+            message.metadata = {
+              ...message.metadata,
+              vpnEncrypted: processResult.encrypted,
+              vpnConnectionId: processResult.connectionId,
+              vpnTunnelId: processResult.tunnelId,
+              vpnBytesProcessed: processResult.bytesProcessed,
+            };
+            // Mark payload as encrypted if it was encrypted
+            if (processResult.encrypted) {
+              message.metadata = {
+                ...message.metadata,
+                encrypted: true,
+              };
+            }
+          } else {
+            message.status = 'failed';
+            message.error = processResult.error || 'VPN processing failed';
+            message.latency = (message.latency || 0) + processResult.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // VPN can encrypt/decrypt data
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
     return {
       transformData: (node, message, targetType, config) => {
         // Integration components transform data formats

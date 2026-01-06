@@ -34,6 +34,7 @@ import { WAFEmulationEngine } from './WAFEmulationEngine';
 import { FirewallEmulationEngine } from './FirewallEmulationEngine';
 import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
+import { VPNEmulationEngine } from './VPNEmulationEngine';
 import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
@@ -242,6 +243,9 @@ export class EmulationEngine {
 
   // Firewall emulation engines per node
   private firewallEngines: Map<string, FirewallEmulationEngine> = new Map();
+
+  // VPN emulation engines per node
+  private vpnEngines: Map<string, VPNEmulationEngine> = new Map();
 
   // IDS/IPS emulation engines per node
   private idsIpsEngines: Map<string, IDSIPSEmulationEngine> = new Map();
@@ -692,7 +696,7 @@ export class EmulationEngine {
             this.initializeWAFEngine(node);
           } else {
             const engine = this.wafEngines.get(node.id)!;
-            engine.updateConfig(node);
+            engine.initializeConfig(node);
           }
         } catch (error) {
           errorCollector.addError(error as Error, {
@@ -727,6 +731,27 @@ export class EmulationEngine {
         }
       }
       
+      // Initialize VPN emulation engine for VPN nodes
+      if (node.type === 'vpn') {
+        try {
+          if (!this.vpnEngines.has(node.id)) {
+            this.initializeVPNEngine(node);
+          } else {
+            const engine = this.vpnEngines.get(node.id)!;
+            engine.initializeConfig(node); // VPNEmulationEngine uses initializeConfig for updates
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeVPNEngine' },
+          });
+        }
+      }
+      
       // Initialize IDS/IPS emulation engine for IDS/IPS nodes
       if (node.type === 'ids-ips') {
         try {
@@ -734,7 +759,7 @@ export class EmulationEngine {
             this.initializeIDSIPSEngine(node);
           } else {
             const engine = this.idsIpsEngines.get(node.id)!;
-            engine.updateConfig(node);
+            engine.initializeConfig(node);
           }
         } catch (error) {
           errorCollector.addError(error as Error, {
@@ -846,6 +871,7 @@ export class EmulationEngine {
         this.vaultEngines.delete(nodeId);
         this.wafEngines.delete(nodeId);
         this.firewallEngines.delete(nodeId);
+        this.vpnEngines.delete(nodeId);
         this.idsIpsEngines.delete(nodeId);
         this.jenkinsEngines.delete(nodeId);
         this.gitlabCIEngines.delete(nodeId);
@@ -1291,7 +1317,7 @@ export class EmulationEngine {
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
         const node = this.nodes.find(n => n.id === nodeId);
-        otelEngine.processBatchFlush();
+        // Note: OpenTelemetry Collector processes messages individually, batch flush is handled internally
       } catch (error) {
         const node = this.nodes.find(n => n.id === nodeId);
         errorCollector.addError(error as Error, {
@@ -1436,6 +1462,9 @@ export class EmulationEngine {
           break;
         case 'firewall':
           this.simulateFirewall(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'vpn':
+          this.simulateVPN(node, config, metrics, hasIncomingConnections);
           break;
         case 'ids-ips':
           this.simulateIDSIPS(node, config, metrics, hasIncomingConnections);
@@ -4870,7 +4899,7 @@ export class EmulationEngine {
     }
 
     // Get gateway config
-    const gatewayConfig = (node.data.config || {}) as BaseAPIGatewayConfig;
+    const gatewayConfig = (node.data.config || {}) as unknown as BaseAPIGatewayConfig;
     const apis = gatewayConfig.apis || [];
     
     // Calculate metrics from engine
@@ -4880,7 +4909,6 @@ export class EmulationEngine {
     metrics.throughput = engineMetrics.throughput;
     metrics.latency = engineMetrics.latency;
     metrics.latencyP50 = engineMetrics.latencyP50;
-    metrics.latencyP95 = engineMetrics.latencyP95;
     metrics.latencyP99 = engineMetrics.latencyP99;
     metrics.errorRate = engineMetrics.errorRate;
     metrics.utilization = engineMetrics.utilization;
@@ -5461,6 +5489,92 @@ export class EmulationEngine {
 
     // Очистка старых соединений
     engine.cleanup();
+  }
+
+  /**
+   * VPN emulation
+   */
+  private simulateVPN(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.vpnEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что VPN простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const vpnMetrics = engine.getMetrics();
+    const cfg = engine.getConfig();
+
+    // Throughput = пакеты в секунду через VPN
+    metrics.throughput = load.packetsPerSecond;
+
+    // Latency = средняя латентность обработки пакета (включая шифрование)
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных соединений
+    metrics.errorRate = load.errorRate;
+
+    // Utilization — функция от активных соединений, туннелей, трафика и операций шифрования
+    const connectionsFactor = Math.min(0.3, load.utilization * 0.5);
+    const tunnelsFactor = Math.min(0.2, (vpnMetrics.activeTunnels || 0) / 10);
+    const trafficFactor = Math.min(0.3, load.bytesPerSecond / (100 * 1024 * 1024)); // 100 MB/s max
+    const encryptionFactor = Math.min(0.2, (vpnMetrics.encryptionOperations || 0) / 10000);
+
+    metrics.utilization = Math.min(0.95, 
+      0.1 + // Base utilization
+      connectionsFactor +
+      tunnelsFactor +
+      trafficFactor +
+      encryptionFactor
+    );
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      vpn_total_connections: vpnMetrics.totalConnections,
+      vpn_active_connections: vpnMetrics.activeConnections,
+      vpn_total_tunnels: vpnMetrics.totalTunnels,
+      vpn_active_tunnels: vpnMetrics.activeTunnels,
+      vpn_bytes_in: vpnMetrics.totalBytesIn,
+      vpn_bytes_out: vpnMetrics.totalBytesOut,
+      vpn_packets_in: vpnMetrics.totalPacketsIn,
+      vpn_packets_out: vpnMetrics.totalPacketsOut,
+      vpn_encryption_operations: vpnMetrics.encryptionOperations,
+      vpn_compression_operations: vpnMetrics.compressionOperations,
+      vpn_failed_connections: vpnMetrics.failedConnections,
+      vpn_average_latency: load.averageLatency,
+      vpn_connections_per_second: load.connectionsPerSecond,
+      vpn_bytes_per_second: load.bytesPerSecond,
+    };
+
+    // Симулируем трафик, если есть входящие соединения
+    if (hasIncomingConnections) {
+      // Оцениваем скорость пакетов на основе входящих соединений
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let estimatedPPS = 0;
+      let estimatedBPS = 0;
+
+      for (const conn of incomingConnections) {
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          estimatedPPS += sourceMetrics.throughput || 0;
+          // Оцениваем bytes per second из throughput (примерно 1500 bytes per packet)
+          estimatedBPS += (sourceMetrics.throughput || 0) * 1500;
+        }
+      }
+
+      // Если нет реального трафика, симулируем его
+      if (estimatedPPS > 0) {
+        engine.simulateIncomingTraffic(estimatedPPS, load.connectionsPerSecond);
+      }
+    }
+
+    // Очистка устаревших соединений
+    engine.cleanupStaleConnections();
   }
 
   /**
@@ -6277,7 +6391,7 @@ export class EmulationEngine {
    * Initialize Cloud API Gateway emulation engine for a node
    */
   private initializeCloudAPIGatewayEngine(node: CanvasNode): void {
-    const config = (node.data.config || {}) as BaseAPIGatewayConfig;
+    const config = (node.data.config || {}) as unknown as BaseAPIGatewayConfig;
     
     // Ensure provider is set
     if (!config.provider) {
@@ -7009,6 +7123,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize VPN emulation engine for a node
+   */
+  private initializeVPNEngine(node: CanvasNode): void {
+    const engine = new VPNEmulationEngine();
+    engine.initializeConfig(node);
+    this.vpnEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize IDS/IPS emulation engine for a node
    */
   private initializeIDSIPSEngine(node: CanvasNode): void {
@@ -7617,6 +7740,13 @@ export class EmulationEngine {
    */
   public getFirewallEmulationEngine(nodeId: string): FirewallEmulationEngine | undefined {
     return this.firewallEngines.get(nodeId);
+  }
+
+  /**
+   * Get VPN emulation engine for a node
+   */
+  public getVPNEmulationEngine(nodeId: string): VPNEmulationEngine | undefined {
+    return this.vpnEngines.get(nodeId);
   }
 
   /**
