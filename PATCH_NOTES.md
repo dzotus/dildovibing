@@ -1,5 +1,155 @@
 # Patch Notes
 
+## Версия 0.1.7zv - CDN Edge: Полная реализация уровня 10/10
+
+### Обзор изменений
+**CDN Edge компонент**: Полностью переработан с расширенным UI, полной валидацией форм, синхронизацией метрик из эмуляции в реальном времени, CRUD операциями для distributions и edge locations, поиском, фильтрацией и логическими зависимостями между протоколами. Реализована визуальная индикация ошибок валидации с красными рамками и сообщениями об ошибках.
+
+**Синхронизация с эмуляцией**: Метрики из CDNEmulationEngine синхронизируются с UI в реальном времени. Distributions и edge locations обновляются с реальными метриками (requests, cache hits, bandwidth, cache hit rate) из симуляции.
+
+### Ключевые изменения
+
+#### UI: CDNConfigAdvanced
+- ✅ **Расширенный UI**:
+  - Три таба: Distributions, Edge Locations, Settings
+  - Адаптивные табы (переносятся на новую строку на узких экранах)
+  - Карточки статистики: Distributions, Edge Locations, Requests, Cache Hit Rate
+  - Отображение метрик из симуляции в реальном времени
+  - Адаптивная сетка для карточек (1 колонка на мобильных, 2 на планшетах, 4 на десктопах)
+
+- ✅ **CRUD операции для Distributions**:
+  - Создание нового distribution через кнопку "Create"
+  - Редактирование существующего distribution через иконку Edit
+  - Удаление distribution с toast-уведомлением
+  - Модальное окно редактирования с полями:
+    - Domain (обязательное, валидация формата домена)
+    - Origin URL (обязательное, валидация URL)
+    - Status (deployed/deploying/failed)
+    - Cache Policy (cache-first/origin-first/bypass)
+    - Default TTL и Max TTL (валидация: min 1, max >= default)
+    - Enable Compression с выбором типа (gzip/brotli/zstd)
+    - Enable HTTP/2, HTTP/3, HTTPS (с логическими зависимостями)
+    - Enable Geo Routing, DDoS Protection
+  - Валидация всех полей с визуальной индикацией ошибок
+  - Синхронизация с CDNEmulationEngine при запущенной симуляции
+
+- ✅ **CRUD операции для Edge Locations**:
+  - Создание нового edge location через кнопку "Create"
+  - Редактирование существующего edge location через иконку Edit
+  - Удаление edge location с toast-уведомлением
+  - Модальное окно редактирования с полями:
+    - City (обязательное)
+    - Region (обязательное)
+    - Status (active/inactive)
+    - Capacity (req/s, валидация: 1-1,000,000)
+    - Latency (ms, валидация: 1-10,000)
+  - Валидация всех полей с визуальной индикацией ошибок
+  - Синхронизация с CDNEmulationEngine при запущенной симуляции
+
+- ✅ **Валидация форм**:
+  - Визуальная индикация ошибок: красная рамка для полей с ошибками
+  - Текст ошибки под полем с иконкой AlertCircle
+  - Валидация в реальном времени при изменении поля (если поле было touched)
+  - Валидация при потере фокуса (onBlur)
+  - Ошибки очищаются автоматически при исправлении
+  - Ошибки показываются только для "touched" полей (не мешают при первом открытии формы)
+  - Toast-уведомления при попытке сохранения с ошибками
+
+- ✅ **Логические зависимости протоколов**:
+  - HTTPS — базовый протокол, требуется для HTTP/2 и HTTP/3
+  - HTTP/2 и HTTP/3 автоматически отключаются при отключении HTTPS
+  - HTTP/2 и HTTP/3 становятся disabled (серые), если HTTPS выключен
+  - HTTP/2 и HTTP/3 могут быть включены одновременно (сервер поддерживает оба)
+  - Информационное сообщение, когда включены оба протокола одновременно
+  - Подсказки под каждым переключателем объясняют зависимости
+
+- ✅ **Расширенные настройки**:
+  - CDN Provider: выбор между Cloudflare, AWS CloudFront, Fastly, Akamai
+  - Caching: enable caching, cache TTL, default/max TTL, cache policy
+  - Compression: enable compression, compression type (gzip/brotli/zstd)
+  - Protocols: SSL/TLS, HTTP/2, HTTP/3 с логическими зависимостями
+  - Features: cache purge, geo routing, DDoS protection
+  - Metrics Export: Prometheus metrics с настройкой port и path
+
+- ✅ **Поиск и фильтрация**:
+  - Поиск distributions по domain, origin, status
+  - Поиск edge locations по city, region, status
+  - Очистка поиска одной кнопкой
+  - Индикация количества отфильтрованных элементов
+
+- ✅ **Функциональность**:
+  - Кнопка Refresh обновляет метрики из эмуляции
+  - Purge Cache для distributions с подтверждением через Dialog
+  - Toast-уведомления для всех операций (создание, обновление, удаление, purge)
+  - Tooltips для всех кнопок действий (Edit, Delete, Purge Cache)
+
+- ✅ **UX улучшения**:
+  - Адаптивные табы (flex-wrap, переносятся на новую строку)
+  - Адаптивные карточки метрик (grid-cols-1 sm:grid-cols-2 lg:grid-cols-4)
+  - Truncate для длинных текстов (domain, origin)
+  - Цветовые индикаторы статусов (green для deployed/active, yellow для deploying, red для failed/inactive)
+  - Badge с количеством элементов в табах
+  - Форматирование bytes (B/KB/MB/GB/TB) и requests (K/M)
+  - Описания для всех полей настроек
+
+#### Синхронизация с эмуляцией
+- ✅ **Синхронизация метрик**:
+  - Метрики из CDNEmulationEngine синхронизируются с UI в реальном времени
+  - Distributions обновляются с реальными метриками: requests, cacheHitRate, bandwidth, edgeLocations
+  - Edge locations обновляются с реальными метриками: requests, cacheHits, bandwidth
+  - Общие метрики: totalDistributions, totalEdgeLocations, totalRequests, totalBandwidth, averageCacheHitRate
+  - Синхронизация происходит только при запущенной симуляции
+
+- ✅ **Синхронизация конфигурации**:
+  - Конфигурация синхронизируется с CDNEmulationEngine при изменениях
+  - Автоматическая инициализация движка при изменении distributions, edge locations, настроек
+  - Обновление routing engine при изменении конфигурации
+
+#### Валидация полей
+
+- ✅ **Distribution форма**:
+  - Domain: обязательное, валидация формата домена (regex)
+  - Origin URL: обязательное, валидация URL с проверкой протокола (http/https)
+  - Default TTL: минимум 1 секунда
+  - Max TTL: минимум 1 секунда, должен быть >= Default TTL
+
+- ✅ **Edge Location форма**:
+  - City: обязательное
+  - Region: обязательное
+  - Capacity: от 1 до 1,000,000 req/s
+  - Latency: от 1 до 10,000ms
+
+#### Технические детали
+- Изменены/добавлены файлы:
+  - `src/components/config/edge/CDNConfigAdvanced.tsx` — полностью переработанный UI компонент
+  - Добавлена валидация форм с визуальной индикацией ошибок
+  - Добавлены логические зависимости между протоколами
+  - Добавлена синхронизация метрик из эмуляции
+
+### Метрики и показатели
+- **CDN метрики в симуляции**:
+  - `cdn_total_distributions`: общее количество distributions
+  - `cdn_active_distributions`: активные distributions
+  - `cdn_total_edge_locations`: общее количество edge locations
+  - `cdn_active_edge_locations`: активные edge locations
+  - `cdn_total_requests`: общее количество запросов
+  - `cdn_total_cache_hits`: общее количество cache hits
+  - `cdn_total_cache_misses`: общее количество cache misses
+  - `cdn_total_bandwidth`: общий bandwidth (bytes)
+  - `cdn_average_cache_hit_rate`: средний cache hit rate
+  - `cdn_average_latency`: средняя латентность
+  - `cdn_requests_per_second`: запросов в секунду
+  - `cdn_bandwidth_per_second`: bandwidth в секунду
+  - `cdn_error_rate`: доля ошибок
+  - `cdn_cache_hit_rate`: cache hit rate
+
+### Совместимость
+- ✅ Обратная совместимость: старые конфигурации CDN автоматически мигрируются
+- ✅ Поддержка всех существующих настроек CDN
+- ✅ Интеграция с существующей системой эмуляции
+
+---
+
 ## Версия 0.1.7zu - VPN Concentrator: Полноценная эмуляция и расширенный UI
 
 ### Обзор изменений

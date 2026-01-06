@@ -119,6 +119,7 @@ export class DataFlowEngine {
     this.registerHandler('haproxy', this.createIntegrationHandler('haproxy'));
     this.registerHandler('traefik', this.createIntegrationHandler('traefik'));
     this.registerHandler('envoy', this.createIntegrationHandler('envoy'));
+    this.registerHandler('cdn', this.createIntegrationHandler('cdn'));
     this.registerHandler('apigee', this.createIntegrationHandler('apigee'));
     this.registerHandler('mulesoft', this.createIntegrationHandler('mulesoft'));
     this.registerHandler('graphql-gateway', this.createIntegrationHandler('graphql-gateway'));
@@ -2627,6 +2628,89 @@ export class DataFlowEngine {
         },
         
         getSupportedFormats: () => ['json', 'xml', 'binary', 'text'],
+      };
+    }
+
+    if (type === 'cdn') {
+      return {
+        processData: (node, message, config) => {
+          // Get CDN emulation engine from emulation engine
+          const cdnEngine = emulationEngine.getCDNEmulationEngine(node.id);
+          
+          if (!cdnEngine) {
+            // No engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const path = payload?.path || message.metadata?.path || '/';
+          const method = payload?.method || message.metadata?.method || 'GET';
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const query = payload?.query || message.metadata?.query || {};
+          const clientIP = headers['X-Real-IP'] || headers['X-Forwarded-For'] || message.metadata?.clientIP;
+          const userAgent = headers['User-Agent'] || message.metadata?.userAgent;
+          
+          // Get domain from headers or config
+          const cdnConfig = (node.data.config as any) || {};
+          const distributions = cdnConfig.distributions || [];
+          const domain = headers['Host'] || message.metadata?.host || (distributions.length > 0 ? distributions[0].domain : 'cdn.example.com');
+
+          // Process request through CDN
+          const cdnResult = cdnEngine.processRequest({
+            method: method.toUpperCase() as 'GET' | 'POST' | 'PUT' | 'DELETE' | 'HEAD' | 'OPTIONS',
+            path,
+            domain,
+            headers,
+            query,
+            body: payload?.body,
+            clientIP,
+            userAgent,
+          });
+
+          if (cdnResult.success) {
+            message.status = 'delivered';
+            message.latency = (message.latency || 0) + cdnResult.latency;
+            // Update metadata with CDN info
+            message.metadata = {
+              ...message.metadata,
+              cdnCacheHit: cdnResult.cacheHit,
+              cdnLatency: cdnResult.latency,
+              cdnSize: cdnResult.size,
+            };
+            // If cache hit, don't forward to origin
+            if (cdnResult.cacheHit) {
+              message.payload = { status: 'ok', cached: true };
+            }
+          } else {
+            message.status = 'failed';
+            message.error = cdnResult.error || 'CDN request failed';
+            message.latency = (message.latency || 0) + cdnResult.latency;
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // CDN can compress responses
+          const cdnConfig = (node.data.config as any) || {};
+          if (cdnConfig.enableCompression && message.metadata?.cdnCacheHit) {
+            message.metadata = {
+              ...message.metadata,
+              contentEncoding: cdnConfig.compressionType || 'gzip',
+            };
+          }
+          
+          const targetFormats = this.getTargetFormats(targetType);
+          if (targetFormats.length > 0 && !targetFormats.includes(message.format)) {
+            message.format = targetFormats[0];
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'xml', 'binary', 'text', 'html'],
       };
     }
 

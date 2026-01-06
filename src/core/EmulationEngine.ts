@@ -35,6 +35,7 @@ import { FirewallEmulationEngine } from './FirewallEmulationEngine';
 import { IDSIPSEmulationEngine } from './IDSIPSEmulationEngine';
 import { VaultEmulationEngine } from './VaultEmulationEngine';
 import { VPNEmulationEngine } from './VPNEmulationEngine';
+import { CDNEmulationEngine } from './CDNEmulationEngine';
 import { JenkinsEmulationEngine } from './JenkinsEmulationEngine';
 import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
@@ -246,6 +247,9 @@ export class EmulationEngine {
 
   // VPN emulation engines per node
   private vpnEngines: Map<string, VPNEmulationEngine> = new Map();
+
+  // CDN emulation engines per node
+  private cdnEngines: Map<string, CDNEmulationEngine> = new Map();
 
   // IDS/IPS emulation engines per node
   private idsIpsEngines: Map<string, IDSIPSEmulationEngine> = new Map();
@@ -838,6 +842,27 @@ export class EmulationEngine {
           engine.updateConfig(node);
         }
       }
+      
+      // Initialize CDN emulation engine for CDN nodes
+      if (node.type === 'cdn') {
+        try {
+          if (!this.cdnEngines.has(node.id)) {
+            this.initializeCDNEngine(node);
+          } else {
+            const engine = this.cdnEngines.get(node.id)!;
+            engine.initializeConfig(node);
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeCDNEngine' },
+          });
+        }
+      }
     }
     
     // Remove metrics for deleted nodes
@@ -872,6 +897,7 @@ export class EmulationEngine {
         this.wafEngines.delete(nodeId);
         this.firewallEngines.delete(nodeId);
         this.vpnEngines.delete(nodeId);
+        this.cdnEngines.delete(nodeId);
         this.idsIpsEngines.delete(nodeId);
         this.jenkinsEngines.delete(nodeId);
         this.gitlabCIEngines.delete(nodeId);
@@ -1465,6 +1491,9 @@ export class EmulationEngine {
           break;
         case 'vpn':
           this.simulateVPN(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'cdn':
+          this.simulateCDN(node, config, metrics, hasIncomingConnections);
           break;
         case 'ids-ips':
           this.simulateIDSIPS(node, config, metrics, hasIncomingConnections);
@@ -5578,6 +5607,86 @@ export class EmulationEngine {
   }
 
   /**
+   * CDN emulation
+   */
+  private simulateCDN(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.cdnEngines.get(node.id);
+
+    if (!engine) {
+      // Если двигатель не инициализирован, считаем, что CDN простаивает
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1;
+      return;
+    }
+
+    const load = engine.calculateLoad();
+    const cdnMetrics = engine.getMetrics();
+    const cfg = engine.getConfig();
+
+    // Throughput = запросы в секунду через CDN
+    metrics.throughput = load.requestsPerSecond;
+
+    // Latency = средняя латентность обработки запроса
+    metrics.latency = load.averageLatency;
+
+    // Error rate = доля неуспешных запросов
+    metrics.errorRate = load.errorRate;
+
+    // Utilization — функция от активных distributions, edge locations, и capacity
+    const distributionsFactor = Math.min(0.2, cdnMetrics.activeDistributions / Math.max(1, cdnMetrics.totalDistributions));
+    const edgeLocationsFactor = Math.min(0.2, cdnMetrics.activeEdgeLocations / Math.max(1, cdnMetrics.totalEdgeLocations));
+    const capacityFactor = Math.min(0.5, load.utilization * 0.5);
+    const cacheFactor = load.cacheHitRate > 0.8 ? 0.1 : 0; // Cache reduces load
+
+    metrics.utilization = Math.min(0.95,
+      0.1 + // Base utilization
+      distributionsFactor +
+      edgeLocationsFactor +
+      capacityFactor -
+      cacheFactor
+    );
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      cdn_total_distributions: cdnMetrics.totalDistributions,
+      cdn_active_distributions: cdnMetrics.activeDistributions,
+      cdn_total_edge_locations: cdnMetrics.totalEdgeLocations,
+      cdn_active_edge_locations: cdnMetrics.activeEdgeLocations,
+      cdn_total_requests: cdnMetrics.totalRequests,
+      cdn_total_cache_hits: cdnMetrics.totalCacheHits,
+      cdn_total_cache_misses: cdnMetrics.totalCacheMisses,
+      cdn_total_bandwidth: cdnMetrics.totalBandwidth,
+      cdn_average_cache_hit_rate: cdnMetrics.averageCacheHitRate,
+      cdn_average_latency: load.averageLatency,
+      cdn_requests_per_second: load.requestsPerSecond,
+      cdn_bandwidth_per_second: load.bandwidthPerSecond,
+      cdn_error_rate: load.errorRate,
+      cdn_cache_hit_rate: load.cacheHitRate,
+    };
+
+    // Симулируем трафик, если есть входящие соединения
+    if (hasIncomingConnections) {
+      // Оцениваем скорость запросов на основе входящих соединений
+      const incomingConnections = this.connections.filter(c => c.target === node.id);
+      let estimatedRPS = 0;
+
+      for (const conn of incomingConnections) {
+        const sourceMetrics = this.metrics.get(conn.source);
+        if (sourceMetrics) {
+          estimatedRPS += sourceMetrics.throughput || 0;
+        }
+      }
+
+      // Если нет реального трафика, симулируем его
+      if (estimatedRPS > 0) {
+        engine.simulateIncomingTraffic(estimatedRPS);
+      }
+    }
+  }
+
+  /**
    * Argo CD emulation
    */
   private simulateArgoCD(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -7132,6 +7241,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize CDN emulation engine for a node
+   */
+  private initializeCDNEngine(node: CanvasNode): void {
+    const engine = new CDNEmulationEngine();
+    engine.initializeConfig(node);
+    this.cdnEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize IDS/IPS emulation engine for a node
    */
   private initializeIDSIPSEngine(node: CanvasNode): void {
@@ -7747,6 +7865,13 @@ export class EmulationEngine {
    */
   public getVPNEmulationEngine(nodeId: string): VPNEmulationEngine | undefined {
     return this.vpnEngines.get(nodeId);
+  }
+
+  /**
+   * Get CDN emulation engine for a node
+   */
+  public getCDNEmulationEngine(nodeId: string): CDNEmulationEngine | undefined {
+    return this.cdnEngines.get(nodeId);
   }
 
   /**
