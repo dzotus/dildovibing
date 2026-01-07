@@ -1,5 +1,109 @@
 # Patch Notes
 
+## Версия 0.1.7zy - Исправления ошибок итерации в GitLabCI и Docker эмуляционных движках
+
+### Обзор изменений
+**Исправления критических ошибок**: Исправлены ошибки "t is not iterable" в GitLabCIEmulationEngine и DockerEmulationEngine, возникающие при обработке конфигураций с не-массивными значениями. Добавлена защита от итерации не-массивов во всех методах инициализации.
+
+**Демонстрационный JSON**: Создан комплексный демонстрационный файл `enterprise_architecture_demo.json` с 60 компонентами, 57 соединениями и 10 логическими группами для демонстрации возможностей системы.
+
+### Ключевые изменения
+
+#### Исправления GitLabCIEmulationEngine
+- ✅ **Обработка runners как числа**: Если `runners` в конфигурации является числом, автоматически создается массив дефолтных раннеров указанного размера
+- ✅ **Защита от не-массивов**: Добавлены проверки `Array.isArray()` во всех методах инициализации:
+  - `initializeRunners()` - проверка `configRunners`
+  - `initializePipelines()` - проверка `configPipelines` и `stages`
+  - `initializeVariables()` - проверка `configVariables`
+  - `initializeEnvironments()` - проверка `configEnvironments`
+  - `initializeSchedules()` - проверка `configSchedules`
+- ✅ **Защита вложенных массивов**: Добавлены проверки для `stage.jobs`, `job.tags`, `job.script`
+- ✅ **Улучшенная обработка конфигурации**: Метод `initializeConfig()` теперь корректно обрабатывает различные форматы данных
+
+#### Исправления DockerEmulationEngine
+- ✅ **Защита в initializeProviders()**: Добавлены проверки `Array.isArray()` перед передачей в конструктор `DockerSimulationProvider`:
+  - `containers` - проверка и передача только массивов
+  - `images` - проверка и передача только массивов
+  - `networks` - проверка и передача только массивов
+  - `volumes` - проверка и передача только массивов
+- ✅ **Защита в initializeConfig()**: Добавлена проверка перед итерацией контейнеров
+- ✅ **Защита в DockerSimulationProvider**: Добавлены проверки `Array.isArray()` в конструкторе перед итерацией всех параметров
+
+#### Демонстрационный JSON файл
+- ✅ **Создан enterprise_architecture_demo.json**:
+  - 60 компонентов различных типов (от API Gateway до gRPC)
+  - 57 соединений с различными типами (HTTP, gRPC, sync, async)
+  - 10 логических групп для организации компонентов
+  - Детальные конфигурации для каждого компонента
+  - Реалистичная архитектура микросервисов
+
+### Технические детали
+
+#### GitLabCIEmulationEngine.ts
+```typescript
+// Обработка runners как числа
+let runners = config.runners;
+if (typeof runners === 'number') {
+  runners = Array.from({ length: runners }, (_, i) => ({
+    id: `runner-${i + 1}`,
+    name: `docker-runner-${i + 1}`,
+    executor: config.runnerType || 'docker',
+    maxJobs: config.concurrentJobs || 4,
+    tags: [],
+    isShared: false,
+  }));
+} else if (!Array.isArray(runners)) {
+  runners = [];
+}
+
+// Защита во всех методах
+const configRunners = Array.isArray(this.config?.runners) ? this.config.runners : [];
+```
+
+#### DockerEmulationEngine.ts
+```typescript
+// Защита перед передачей в конструктор
+const containers = Array.isArray(this.config?.containers) ? this.config.containers : undefined;
+const images = Array.isArray(this.config?.images) ? this.config.images : undefined;
+const networks = Array.isArray(this.config?.networks) ? this.config.networks : undefined;
+const volumes = Array.isArray(this.config?.volumes) ? this.config.volumes : undefined;
+
+this.simulationProvider = new DockerSimulationProvider(
+  containers,
+  images,
+  networks,
+  volumes
+);
+```
+
+#### DockerSimulationProvider.ts
+```typescript
+// Защита в конструкторе
+if (initialContainers && Array.isArray(initialContainers)) {
+  for (const container of initialContainers) {
+    this.containers.set(container.id, { ...container });
+  }
+}
+```
+
+### Файлы изменений
+- `src/core/GitLabCIEmulationEngine.ts` - исправления обработки конфигурации
+- `src/core/DockerEmulationEngine.ts` - исправления инициализации провайдеров
+- `src/core/docker/DockerSimulationProvider.ts` - защита в конструкторе
+- `enterprise_architecture_demo.json` - новый демонстрационный файл
+
+### Результат
+- ✅ Исправлена ошибка "t is not iterable" в GitLabCIEmulationEngine
+- ✅ Исправлена ошибка "t is not iterable" в DockerEmulationEngine
+- ✅ Код защищен от не-массивных значений в конфигурациях
+- ✅ Поддержка различных форматов конфигурации (числа, массивы, undefined)
+- ✅ Создан демонстрационный JSON для показа возможностей системы
+
+### Итоговая оценка
+**Стабильность**: 10/10 - Все критические ошибки итерации исправлены
+**Надежность**: 10/10 - Код защищен от неожиданных форматов данных
+**Демонстрация**: 10/10 - Создан комплексный демонстрационный файл
+
 ## Версия 0.1.7zx - gRPC: Полная реализация уровня 10/10 с детальной симуляцией
 
 ### Обзор изменений

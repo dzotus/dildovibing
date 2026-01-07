@@ -266,7 +266,7 @@ export class DockerEmulationEngine {
     this.initializeProviders();
     
     // Initialize containers from config
-    if (config.containers) {
+    if (config.containers && Array.isArray(config.containers)) {
       for (const container of config.containers) {
         this.containers.set(container.id, { ...container });
       }
@@ -286,11 +286,17 @@ export class DockerEmulationEngine {
    */
   private initializeProviders(): void {
     // Always create simulation provider
+    // Ensure arrays are passed (handle cases where config might have non-array values)
+    const containers = Array.isArray(this.config?.containers) ? this.config.containers : undefined;
+    const images = Array.isArray(this.config?.images) ? this.config.images : undefined;
+    const networks = Array.isArray(this.config?.networks) ? this.config.networks : undefined;
+    const volumes = Array.isArray(this.config?.volumes) ? this.config.volumes : undefined;
+    
     this.simulationProvider = new DockerSimulationProvider(
-      this.config?.containers,
-      this.config?.images,
-      this.config?.networks,
-      this.config?.volumes
+      containers,
+      images,
+      networks,
+      volumes
     );
 
     // Create real provider if needed

@@ -22,22 +22,23 @@ export class DockerSimulationProvider implements IDockerProvider {
     initialVolumes?: DockerVolume[]
   ) {
     // Initialize with provided data
-    if (initialContainers) {
+    // Ensure we only iterate over arrays
+    if (initialContainers && Array.isArray(initialContainers)) {
       for (const container of initialContainers) {
         this.containers.set(container.id, { ...container });
       }
     }
-    if (initialImages) {
+    if (initialImages && Array.isArray(initialImages)) {
       for (const image of initialImages) {
         this.images.set(image.id, { ...image });
       }
     }
-    if (initialNetworks) {
+    if (initialNetworks && Array.isArray(initialNetworks)) {
       for (const network of initialNetworks) {
         this.networks.set(network.id, { ...network });
       }
     }
-    if (initialVolumes) {
+    if (initialVolumes && Array.isArray(initialVolumes)) {
       for (const volume of initialVolumes) {
         this.volumes.set(volume.id, { ...volume });
       }
