@@ -385,6 +385,22 @@ export class GitLabCIEmulationEngine {
   initializeConfig(node: CanvasNode): void {
     const config = node.data.config || {};
     
+    // Handle runners: if it's a number, create default runners array
+    let runners = config.runners;
+    if (typeof runners === 'number') {
+      // If runners is a number, create that many default runners
+      runners = Array.from({ length: runners }, (_, i) => ({
+        id: `runner-${i + 1}`,
+        name: `docker-runner-${i + 1}`,
+        executor: config.runnerType || 'docker',
+        maxJobs: config.concurrentJobs || 4,
+        tags: [],
+        isShared: false,
+      }));
+    } else if (!Array.isArray(runners)) {
+      runners = [];
+    }
+    
     this.config = {
       gitlabUrl: config.gitlabUrl || 'https://gitlab.com',
       projectId: config.projectId || '1',
@@ -398,11 +414,11 @@ export class GitLabCIEmulationEngine {
       artifactsExpiry: config.artifactsExpiry || '7d',
       enableKubernetes: config.enableKubernetes ?? false,
       k8sNamespace: config.k8sNamespace || 'gitlab-runner',
-      pipelines: config.pipelines || [],
-      runners: config.runners || [],
-      variables: config.variables || [],
-      environments: config.environments || [],
-      schedules: config.schedules || [],
+      pipelines: Array.isArray(config.pipelines) ? config.pipelines : [],
+      runners: runners,
+      variables: Array.isArray(config.variables) ? config.variables : [],
+      environments: Array.isArray(config.environments) ? config.environments : [],
+      schedules: Array.isArray(config.schedules) ? config.schedules : [],
       pipelineTriggerRate: config.pipelineTriggerRate || 2, // 2 pipelines per hour per pipeline config
       averagePipelineDuration: config.averagePipelineDuration || 300000, // 5 minutes
       averageJobDuration: config.averageJobDuration || 60000, // 1 minute
@@ -432,11 +448,11 @@ export class GitLabCIEmulationEngine {
   private initializePipelines(): void {
     this.pipelines.clear();
     
-    const configPipelines = this.config?.pipelines || [];
+    const configPipelines = Array.isArray(this.config?.pipelines) ? this.config.pipelines : [];
     
     for (const pipelineConfig of configPipelines) {
       const pipelineId = pipelineConfig.id;
-      const stages = pipelineConfig.stages || [
+      const stages = Array.isArray(pipelineConfig.stages) ? pipelineConfig.stages : [
         { name: 'build', jobs: [{ name: 'build', stage: 'build' }] },
         { name: 'test', jobs: [{ name: 'test', stage: 'test' }] },
         { name: 'deploy', jobs: [{ name: 'deploy', stage: 'deploy' }] },
@@ -445,7 +461,7 @@ export class GitLabCIEmulationEngine {
       const gitlabStages: GitLabCIStage[] = stages.map(stage => ({
         name: stage.name,
         status: 'pending',
-        jobs: (stage.jobs || []).map(job => ({
+        jobs: Array.isArray(stage.jobs) ? stage.jobs.map(job => ({
           id: `${pipelineId}-${stage.name}-${job.name}`,
           name: job.name,
           stage: stage.name,
@@ -453,10 +469,10 @@ export class GitLabCIEmulationEngine {
           pipelineId,
           when: job.when || 'on_success',
           allowFailure: job.allowFailure || false,
-          tags: job.tags || [],
+          tags: Array.isArray(job.tags) ? job.tags : [],
           image: job.image,
-          script: job.script || [`echo "Running ${job.name}"`],
-        })),
+          script: Array.isArray(job.script) ? job.script : [`echo "Running ${job.name}"`],
+        })) : [],
       }));
       
       const pipeline: GitLabCIPipeline = {
@@ -481,7 +497,7 @@ export class GitLabCIEmulationEngine {
   private initializeRunners(): void {
     this.runners.clear();
     
-    const configRunners = this.config?.runners || [];
+    const configRunners = Array.isArray(this.config?.runners) ? this.config.runners : [];
     
     // Default runner if none configured
     if (configRunners.length === 0 && this.config?.enableRunners) {
@@ -538,7 +554,7 @@ export class GitLabCIEmulationEngine {
   private initializeVariables(): void {
     this.variables.clear();
     
-    const configVariables = this.config?.variables || [];
+    const configVariables = Array.isArray(this.config?.variables) ? this.config.variables : [];
     
     for (const varConfig of configVariables) {
       const variable: GitLabCIVariable = {
@@ -561,7 +577,7 @@ export class GitLabCIEmulationEngine {
   private initializeEnvironments(): void {
     this.environments.clear();
     
-    const configEnvironments = this.config?.environments || [];
+    const configEnvironments = Array.isArray(this.config?.environments) ? this.config.environments : [];
     
     for (const envConfig of configEnvironments) {
       const environment: GitLabCIEnvironment = {
@@ -583,7 +599,7 @@ export class GitLabCIEmulationEngine {
   private initializeSchedules(): void {
     this.schedules.clear();
     
-    const configSchedules = this.config?.schedules || [];
+    const configSchedules = Array.isArray(this.config?.schedules) ? this.config.schedules : [];
     
     for (const scheduleConfig of configSchedules) {
       const schedule: GitLabCISchedule = {
