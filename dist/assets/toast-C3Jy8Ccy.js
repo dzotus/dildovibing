@@ -1,1 +1,0 @@
-import{au as i}from"./index-D6rf2aAc.js";function r(o){i.success(o,{duration:3e3,position:"top-right"})}function t(o){i.error(o,{duration:4e3,position:"top-right"})}function s(o){i(o,{duration:3e3,position:"top-right",icon:"ℹ️"})}function a(o){i(o,{duration:4e3,position:"top-right",icon:"⚠️"})}function c(o){t(`Ошибка валидации: ${o}`)}export{r as a,s as b,a as c,c as d,t as s};
