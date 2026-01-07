@@ -15,6 +15,7 @@ import { EnvoyRoutingEngine } from './EnvoyRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { RestApiRoutingEngine } from './RestApiRoutingEngine';
+import { GRPCRoutingEngine } from './GRPCRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
@@ -194,6 +195,9 @@ export class EmulationEngine {
 
   // REST API routing engines per node
   private restApiRoutingEngines: Map<string, RestApiRoutingEngine> = new Map();
+
+  // gRPC routing engines per node
+  private grpcRoutingEngines: Map<string, GRPCRoutingEngine> = new Map();
 
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
@@ -418,6 +422,9 @@ export class EmulationEngine {
         }
         if (node.type === 'rest') {
           this.initializeRestApiRoutingEngine(node);
+        }
+        if (node.type === 'grpc') {
+          this.initializeGRPCRoutingEngine(node);
         }
         if (node.type === 'webhook-relay') {
           this.initializeWebhookRelayRoutingEngine(node);
@@ -691,6 +698,12 @@ export class EmulationEngine {
         this.initializeRestApiRoutingEngine(node);
       }
 
+      // Initialize gRPC routing engine for gRPC nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'grpc') {
+        this.initializeGRPCRoutingEngine(node);
+      }
+
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
@@ -898,6 +911,7 @@ export class EmulationEngine {
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.bffRoutingEngines.delete(nodeId);
         this.restApiRoutingEngines.delete(nodeId);
+        this.grpcRoutingEngines.delete(nodeId);
         this.webhookRelayRoutingEngines.delete(nodeId);
         this.redisRoutingEngines.delete(nodeId);
         this.cassandraRoutingEngines.delete(nodeId);
@@ -4887,7 +4901,75 @@ export class EmulationEngine {
       }
     }
     
-    // Default behavior for gRPC, WebSocket, etc.
+    // For gRPC, use routing engine if available
+    if (node.type === 'grpc') {
+      const routingEngine = this.grpcRoutingEngines.get(node.id);
+      if (routingEngine) {
+        const stats = routingEngine.getStats();
+        const methodStats = routingEngine.getAllMethodStats();
+        const connectionState = routingEngine.getConnectionState();
+        
+        // Calculate metrics from routing engine stats
+        const totalRequests = stats.totalRequests;
+        const totalErrors = stats.totalErrors;
+        const avgLatency = stats.averageLatency;
+        
+        // Simulate current throughput based on incoming connections
+        const rps = config.requestsPerSecond || 100;
+        const variation = Math.sin(this.simulationTime / 1500) * 0.1 + 1;
+        metrics.throughput = rps * variation;
+        
+        // Use routing engine latency if available, otherwise use config
+        metrics.latency = avgLatency > 0 ? avgLatency : (config.responseLatency || 20) + Math.random() * 15; // gRPC is faster
+        
+        // Calculate error rate from routing engine stats
+        if (totalRequests > 0) {
+          metrics.errorRate = totalErrors / totalRequests;
+        } else {
+          metrics.errorRate = 0.002; // Default 0.2% for gRPC (lower than REST)
+        }
+        
+        // Utilization based on throughput vs capacity and connections
+        const maxConnections = connectionState.totalConnections || 100;
+        const connectionUtilization = Math.min(1, (connectionState.activeConnections + connectionState.idleConnections) / maxConnections);
+        metrics.utilization = Math.min(1, (metrics.throughput / rps) * 0.7 + connectionUtilization * 0.3);
+        
+        // Custom metrics from routing engine
+        const methodMetrics: Record<string, number> = {};
+        
+        for (const [methodKey, methodStat] of Object.entries(methodStats)) {
+          if (methodStat) {
+            methodMetrics[`method_${methodKey}_requests`] = methodStat.requestCount;
+            methodMetrics[`method_${methodKey}_errors`] = methodStat.errorCount;
+            methodMetrics[`method_${methodKey}_latency`] = methodStat.averageLatency;
+            if (methodStat.streamingConnections) {
+              methodMetrics[`method_${methodKey}_streaming_connections`] = methodStat.streamingConnections;
+            }
+          }
+        }
+        
+        metrics.customMetrics = {
+          'rps': metrics.throughput,
+          'total_requests': totalRequests,
+          'total_errors': totalErrors,
+          'p50_latency': Math.round(metrics.latency * 0.5),
+          'p99_latency': Math.round(metrics.latency * 1.8), // gRPC has better tail latency
+          'errors': Math.round(metrics.throughput * metrics.errorRate),
+          'services': stats.totalServices,
+          'enabled_services': stats.enabledServices,
+          'methods': stats.totalMethods,
+          'enabled_methods': stats.enabledMethods,
+          'active_connections': connectionState.activeConnections,
+          'idle_connections': connectionState.idleConnections,
+          'total_connections': connectionState.totalConnections,
+          ...methodMetrics,
+        };
+        
+        return;
+      }
+    }
+    
+    // Default behavior for WebSocket, etc.
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
     
@@ -7076,6 +7158,46 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize gRPC routing engine for a node
+   */
+  private initializeGRPCRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config || {}) as any;
+    const routingEngine = new GRPCRoutingEngine();
+
+    routingEngine.initialize({
+      endpoint: config.endpoint || 'localhost:50051',
+      services: (config.services || []).map((service: any) => ({
+        name: service.name,
+        methods: (service.methods || []).map((method: any) => ({
+          name: method.name,
+          inputType: method.inputType || 'google.protobuf.Empty',
+          outputType: method.outputType || 'google.protobuf.Empty',
+          streaming: method.streaming || 'unary',
+          enabled: method.enabled !== false,
+          timeout: method.timeout,
+          rateLimit: method.rateLimit,
+          retryPolicy: method.retryPolicy,
+        })),
+        enabled: service.enabled !== false,
+      })),
+      reflectionEnabled: config.reflectionEnabled ?? true,
+      enableTLS: config.enableTLS ?? false,
+      enableCompression: config.enableCompression ?? true,
+      maxMessageSize: config.maxMessageSize || 4,
+      keepAliveTime: config.keepAliveTime || 30,
+      keepAliveTimeout: config.keepAliveTimeout || 5,
+      maxConnectionIdle: config.maxConnectionIdle || 300,
+      maxConnectionAge: config.maxConnectionAge || 3600,
+      maxConnectionAgeGrace: config.maxConnectionAgeGrace || 5,
+      authentication: config.authentication || { type: 'none' },
+      rateLimit: config.rateLimit,
+      loadBalancing: config.loadBalancing,
+    });
+
+    this.grpcRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
    * Initialize Webhook Relay routing engine for a node
    */
   private initializeWebhookRelayRoutingEngine(node: CanvasNode): void {
@@ -7888,6 +8010,13 @@ export class EmulationEngine {
    */
   public getRestApiRoutingEngine(nodeId: string): RestApiRoutingEngine | undefined {
     return this.restApiRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get gRPC routing engine for a node
+   */
+  public getGRPCRoutingEngine(nodeId: string): GRPCRoutingEngine | undefined {
+    return this.grpcRoutingEngines.get(nodeId);
   }
 
   /**

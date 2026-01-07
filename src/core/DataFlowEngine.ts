@@ -2197,7 +2197,85 @@ export class DataFlowEngine {
       };
     }
     
-    // Default handler for other API types (gRPC, GraphQL, WebSocket)
+    // Special handling for gRPC with routing engine
+    if (type === 'grpc') {
+      return {
+        processData: (node, message, config) => {
+          // Get gRPC routing engine from emulation engine
+          const routingEngine = emulationEngine.getGRPCRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, use default behavior
+            const response = {
+              status: 'OK',
+              data: message.payload,
+              timestamp: Date.now(),
+            };
+            message.payload = response;
+            message.status = 'delivered';
+            return message;
+          }
+
+          // Extract request information from message
+          const payload = message.payload as any;
+          const service = payload?.service || message.metadata?.service || '';
+          const method = payload?.method || message.metadata?.method || '';
+          const grpcPayload = payload?.payload || payload?.body || payload || message.payload;
+          const metadata = payload?.metadata || message.metadata || {};
+          const timeout = payload?.timeout || message.metadata?.timeout;
+          const clientIP = payload?.clientIP || message.metadata?.clientIP;
+
+          // Route request through gRPC service
+          const routeResult = routingEngine.routeRequest({
+            service,
+            method,
+            payload: grpcPayload,
+            metadata,
+            timeout,
+            clientIP,
+          });
+
+          if (routeResult.status === 'OK') {
+            message.status = 'delivered';
+            message.latency = routeResult.latency;
+            message.payload = routeResult.data;
+            // Update metadata with routing info
+            message.metadata = {
+              ...message.metadata,
+              grpcService: routeResult.service,
+              grpcMethod: routeResult.method,
+              grpcStatus: routeResult.status,
+              grpcMetadata: routeResult.metadata,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = routeResult.error || `gRPC ${routeResult.status}`;
+            message.latency = routeResult.latency;
+            message.metadata = {
+              ...message.metadata,
+              grpcService: routeResult.service,
+              grpcMethod: routeResult.method,
+              grpcStatus: routeResult.status,
+            };
+          }
+
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // gRPC transforms to protobuf
+          if (message.format !== 'protobuf' && message.format !== 'binary') {
+            message.format = 'protobuf';
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['protobuf', 'binary'],
+      };
+    }
+    
+    // Default handler for other API types (GraphQL, WebSocket)
     return {
       processData: (node, message, config) => {
         // APIs process requests and return responses
@@ -2214,17 +2292,11 @@ export class DataFlowEngine {
       
       transformData: (node, message, targetType, config) => {
         // Transform based on API type
-        if (type === 'grpc' && message.format !== 'protobuf') {
-          message.format = 'protobuf';
-          message.status = 'transformed';
-        }
         return message;
       },
       
       getSupportedFormats: () => {
         switch (type) {
-          case 'grpc':
-            return ['protobuf', 'binary'];
           case 'graphql':
             return ['json'];
           case 'websocket':
