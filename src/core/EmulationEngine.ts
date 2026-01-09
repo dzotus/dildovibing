@@ -29,6 +29,7 @@ import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 import { GraphQLEmulationEngine } from './GraphQLEmulationEngine';
+import { SOAPEmulationEngine } from './SOAPEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
 import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
 import { alertSystem } from './AlertSystem';
@@ -232,6 +233,9 @@ export class EmulationEngine {
 
   // GraphQL emulation engines per node
   private graphQLEngines: Map<string, GraphQLEmulationEngine> = new Map();
+  
+  // SOAP emulation engines per node
+  private soapEngines: Map<string, SOAPEmulationEngine> = new Map();
 
   // Loki emulation engines per node
   private lokiEngines: Map<string, LokiEmulationEngine> = new Map();
@@ -722,6 +726,17 @@ export class EmulationEngine {
         }
       }
 
+      // Initialize SOAP emulation engine for SOAP nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'soap') {
+        if (!this.soapEngines.has(node.id)) {
+          this.initializeSOAPEngine(node);
+        } else {
+          const engine = this.soapEngines.get(node.id)!;
+          engine.updateConfig((node.data.config || {}) as any);
+        }
+      }
+
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
@@ -955,6 +970,7 @@ export class EmulationEngine {
         this.prometheusEngines.delete(nodeId);
         this.grafanaEngines.delete(nodeId);
         this.graphQLEngines.delete(nodeId);
+        this.soapEngines.delete(nodeId);
         this.lokiEngines.delete(nodeId);
         this.jaegerEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
@@ -1501,6 +1517,9 @@ export class EmulationEngine {
         case 'graphql':
         case 'websocket':
           this.simulateAPI(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'soap':
+          this.simulateSOAP(node, config, metrics, hasIncomingConnections);
           break;
         case 'kong':
           this.simulateKong(node, config, metrics, hasIncomingConnections);
@@ -5050,6 +5069,66 @@ export class EmulationEngine {
       }
     }
     
+    // For SOAP, use emulation engine if available
+    if (node.type === 'soap') {
+      const soapEngine = this.soapEngines.get(node.id);
+      if (soapEngine) {
+        const soapMetrics = soapEngine.getSOAPMetrics();
+        
+        // Calculate metrics from SOAP engine
+        metrics.throughput = soapMetrics.requestsPerSecond;
+        metrics.latency = soapMetrics.averageLatency;
+        metrics.errorRate = soapMetrics.errorRate / 100; // Convert from percentage
+        metrics.utilization = Math.min(1, metrics.throughput / (config.requestsPerSecond || 100));
+        
+        // Custom metrics from SOAP engine
+        const soapConfig = config as any;
+        metrics.customMetrics = {
+          'requests_per_second': soapMetrics.requestsPerSecond,
+          'total_requests': soapMetrics.totalRequests,
+          'total_errors': soapMetrics.totalErrors,
+          'average_response_time': soapMetrics.averageResponseTime,
+          'average_latency': soapMetrics.averageLatency,
+          'error_rate': soapMetrics.errorRate,
+          'success_rate': soapMetrics.successRate,
+          'services_count': soapConfig?.services?.length || 0,
+          'operations_count': soapConfig?.services?.reduce((sum: number, s: any) => sum + (s.operations?.length || 0), 0) || 0,
+        };
+        
+        // Add operation metrics
+        if (soapMetrics.operationMetrics) {
+          for (const opMetric of soapMetrics.operationMetrics) {
+            metrics.customMetrics![`operation_${opMetric.operationName}_calls`] = opMetric.totalCalls;
+            metrics.customMetrics![`operation_${opMetric.operationName}_latency`] = opMetric.averageLatency;
+            metrics.customMetrics![`operation_${opMetric.operationName}_errors`] = opMetric.totalErrors;
+          }
+        }
+        
+        // Add service metrics
+        if (soapMetrics.serviceMetrics) {
+          for (const svcMetric of soapMetrics.serviceMetrics) {
+            metrics.customMetrics![`service_${svcMetric.serviceName}_requests`] = svcMetric.totalRequests;
+            metrics.customMetrics![`service_${svcMetric.serviceName}_latency`] = svcMetric.averageLatency;
+            metrics.customMetrics![`service_${svcMetric.serviceName}_errors`] = svcMetric.totalErrors;
+          }
+        }
+        
+        // Add rate limit metrics
+        if (soapMetrics.rateLimitMetrics) {
+          metrics.customMetrics!['rate_limit_blocked'] = soapMetrics.rateLimitMetrics.totalBlockedRequests;
+          metrics.customMetrics!['rate_limit_hits_per_sec'] = soapMetrics.rateLimitMetrics.rateLimitHitsPerSecond;
+        }
+        
+        // Add timeout metrics
+        if (soapMetrics.timeoutMetrics) {
+          metrics.customMetrics!['timeouts_total'] = soapMetrics.timeoutMetrics.totalTimeouts;
+          metrics.customMetrics!['timeouts_per_sec'] = soapMetrics.timeoutMetrics.timeoutsPerSecond;
+        }
+        
+        return;
+      }
+    }
+    
     // Default behavior for WebSocket, etc.
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
@@ -7493,6 +7572,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize SOAP Emulation Engine for SOAP node
+   */
+  private initializeSOAPEngine(node: CanvasNode): void {
+    const soapEngine = new SOAPEmulationEngine();
+    soapEngine.initializeConfig(node);
+    this.soapEngines.set(node.id, soapEngine);
+  }
+
+  /**
    * Initialize Jaeger Emulation Engine for Jaeger node
    */
   private initializeJaegerEngine(node: CanvasNode): void {
@@ -8230,6 +8318,13 @@ export class EmulationEngine {
    */
   public getGraphQLEmulationEngine(nodeId: string): GraphQLEmulationEngine | undefined {
     return this.graphQLEngines.get(nodeId);
+  }
+
+  /**
+   * Get SOAP emulation engine for a node
+   */
+  public getSOAPEmulationEngine(nodeId: string): SOAPEmulationEngine | undefined {
+    return this.soapEngines.get(nodeId);
   }
 
   /**

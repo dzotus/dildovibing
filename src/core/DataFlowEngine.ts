@@ -2431,6 +2431,101 @@ export class DataFlowEngine {
       };
     }
     
+    // Special handling for SOAP with emulation engine
+    if (type === 'soap') {
+      return {
+        processData: (node, message, config) => {
+          // Get SOAP emulation engine
+          const soapEngine = emulationEngine.getSOAPEmulationEngine(node.id);
+          
+          if (!soapEngine) {
+            // No engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract SOAP envelope from message
+          const payload = message.payload as any;
+          const envelope = payload?.envelope || payload?.body || (typeof payload === 'string' ? payload : '');
+          const operation = payload?.operation || message.metadata?.operation;
+          const service = payload?.service || message.metadata?.service;
+          const headers = payload?.headers || message.metadata?.headers || {};
+          const clientIP = payload?.clientIP || message.metadata?.clientIP;
+          
+          if (!envelope) {
+            message.status = 'error';
+            message.error = 'SOAP envelope is required';
+            return message;
+          }
+          
+          // Get Jaeger engines for tracing
+          const getJaegerEngines = () => {
+            const engines = new Map();
+            for (const n of this.nodes) {
+              if (n.type === 'jaeger') {
+                const jaegerEngine = emulationEngine.getJaegerEmulationEngine(n.id);
+                if (jaegerEngine) {
+                  engines.set(n.id, jaegerEngine);
+                }
+              }
+            }
+            return engines;
+          };
+          
+          // Process SOAP request
+          const soapResponse = soapEngine.processRequest(
+            {
+              envelope,
+              operation,
+              service,
+              headers,
+              clientIP,
+            },
+            this.nodes,
+            this.connections,
+            getJaegerEngines
+          );
+          
+          // Update message with SOAP response
+          if (soapResponse.success) {
+            message.payload = {
+              envelope: soapResponse.envelope,
+              status: soapResponse.status,
+            };
+            message.metadata = {
+              ...message.metadata,
+              latency: soapResponse.latency,
+              soapVersion: (config as any)?.soapVersion || '1.1',
+            };
+            message.status = 'delivered';
+            message.latency = soapResponse.latency;
+          } else {
+            message.payload = {
+              envelope: soapResponse.envelope,
+              fault: soapResponse.fault,
+              error: soapResponse.error,
+            };
+            message.status = 'error';
+            message.error = soapResponse.error || soapResponse.fault?.string || 'SOAP request failed';
+            message.latency = soapResponse.latency;
+          }
+          
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // SOAP uses XML format
+          if (message.format !== 'xml') {
+            message.format = 'xml';
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['xml', 'json'],
+      };
+    }
+    
     // Default handler for other API types (WebSocket)
     return {
       processData: (node, message, config) => {
