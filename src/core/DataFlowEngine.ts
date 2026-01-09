@@ -2275,7 +2275,163 @@ export class DataFlowEngine {
       };
     }
     
-    // Default handler for other API types (GraphQL, WebSocket)
+    // GraphQL handler
+    if (type === 'graphql') {
+      return {
+        processData: (node, message, config) => {
+          // Get GraphQL emulation engine
+          const graphQLEngine = emulationEngine.getGraphQLEmulationEngine(node.id);
+          
+          if (!graphQLEngine) {
+            // No engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract GraphQL query from message
+          const payload = message.payload as any;
+          
+          // Check if this is a batch request (array of requests)
+          if (Array.isArray(payload)) {
+            // Process batch requests
+            // Note: processBatchQueries doesn't support tracing yet, but we can add it later
+            const batchPromise = graphQLEngine.processBatchQueries(
+              payload,
+              this.nodes,
+              this.connections
+            );
+            
+            // Handle async batch processing
+            let resolved = false;
+            let resolvedValue: any = null;
+            (batchPromise as Promise<any>).then((value) => {
+              resolvedValue = value;
+              resolved = true;
+            }).catch(() => {
+              resolved = true;
+            });
+            
+            const startWait = Date.now();
+            while (!resolved && (Date.now() - startWait) < 500) {
+              // Wait for batch processing
+            }
+            
+            const batchResults = resolvedValue || [];
+            
+            // Update message with batch results
+            message.payload = batchResults;
+            message.status = batchResults.every((r: any) => r.success) ? 'delivered' : 'error';
+            if (!message.status || message.status === 'error') {
+              message.error = 'Some batch queries failed';
+            }
+            
+            return message;
+          }
+          
+          // Single request processing
+          const query = payload?.query || payload?.body?.query || message.metadata?.query;
+          const variables = payload?.variables || payload?.body?.variables || message.metadata?.variables;
+          const operationName = payload?.operationName || payload?.body?.operationName || message.metadata?.operationName;
+          const extensions = payload?.extensions || payload?.body?.extensions || message.metadata?.extensions;
+          
+          // Determine if it's a mutation or query
+          const isMutation = query && query.trim().toLowerCase().startsWith('mutation');
+          
+          // Process through GraphQL engine with nodes and connections for resolver execution
+          // Note: processQuery is async, but DataFlowEngine processData is synchronous
+          // For simulation, we'll handle the promise synchronously using a workaround
+          let result: any;
+          if (isMutation) {
+            result = graphQLEngine.processMutation({
+              query,
+              variables,
+              operationName,
+            });
+          } else {
+            // processQuery is async, but we need synchronous result
+            // In simulation, we can use a synchronous wrapper
+            // Pass getJaegerEngines for tracing support
+            const getJaegerEngines = () => emulationEngine.getAllJaegerEngines();
+            const queryPromise = graphQLEngine.processQuery({
+              query,
+              variables,
+              operationName,
+              extensions,
+            }, this.nodes, this.connections, getJaegerEngines);
+            
+            // For simulation: if it's a promise, we'll resolve it immediately
+            // This is a simplification for the simulation engine
+            if (queryPromise && typeof (queryPromise as any).then === 'function') {
+              // Synchronous promise resolution for simulation
+              let resolved = false;
+              let resolvedValue: any = null;
+              (queryPromise as Promise<any>).then((value) => {
+                resolvedValue = value;
+                resolved = true;
+              }).catch(() => {
+                resolved = true;
+              });
+              
+              // Wait synchronously (only works in simulation context)
+              // In real async system, this would need to be handled differently
+              const startWait = Date.now();
+              while (!resolved && (Date.now() - startWait) < 100) {
+                // Small timeout to prevent infinite loop
+                // In real system, this would be handled asynchronously
+              }
+              
+              result = resolvedValue || {
+                success: false,
+                errors: [{ message: 'Query execution timeout' }],
+                latency: Date.now() - startWait,
+              };
+            } else {
+              result = queryPromise;
+            }
+          }
+          
+          // Update message with GraphQL response
+          if (result.success) {
+            message.payload = {
+              data: result.data,
+              extensions: result.complexity !== undefined ? {
+                complexity: result.complexity,
+                depth: result.depth,
+              } : undefined,
+            };
+            message.metadata = {
+              ...message.metadata,
+              latency: result.latency,
+              complexity: result.complexity,
+              depth: result.depth,
+              cached: result.cached,
+            };
+            message.status = 'delivered';
+          } else {
+            message.payload = {
+              errors: result.errors,
+            };
+            message.status = 'error';
+            message.error = result.errors?.[0]?.message || 'GraphQL query failed';
+          }
+          
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // GraphQL uses JSON format
+          if (message.format !== 'json') {
+            message.format = 'json';
+            message.status = 'transformed';
+          }
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json'],
+      };
+    }
+    
+    // Default handler for other API types (WebSocket)
     return {
       processData: (node, message, config) => {
         // APIs process requests and return responses
@@ -2297,8 +2453,6 @@ export class DataFlowEngine {
       
       getSupportedFormats: () => {
         switch (type) {
-          case 'graphql':
-            return ['json'];
           case 'websocket':
             return ['json', 'text', 'binary'];
           default:

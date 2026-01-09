@@ -28,6 +28,7 @@ import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
+import { GraphQLEmulationEngine } from './GraphQLEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
 import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
 import { alertSystem } from './AlertSystem';
@@ -228,6 +229,9 @@ export class EmulationEngine {
   
   // Grafana emulation engines per node
   private grafanaEngines: Map<string, GrafanaEmulationEngine> = new Map();
+
+  // GraphQL emulation engines per node
+  private graphQLEngines: Map<string, GraphQLEmulationEngine> = new Map();
 
   // Loki emulation engines per node
   private lokiEngines: Map<string, LokiEmulationEngine> = new Map();
@@ -455,6 +459,9 @@ export class EmulationEngine {
         }
         if (node.type === 'grafana') {
           this.initializeGrafanaEngine(node);
+        }
+        if (node.type === 'graphql') {
+          this.initializeGraphQLEngine(node);
         }
         if (node.type === 'jaeger') {
           this.initializeJaegerEngine(node);
@@ -704,6 +711,17 @@ export class EmulationEngine {
         this.initializeGRPCRoutingEngine(node);
       }
 
+      // Initialize GraphQL emulation engine for GraphQL nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'graphql') {
+        if (!this.graphQLEngines.has(node.id)) {
+          this.initializeGraphQLEngine(node);
+        } else {
+          const engine = this.graphQLEngines.get(node.id)!;
+          engine.updateConfig((node.data.config || {}) as any);
+        }
+      }
+
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
@@ -934,6 +952,11 @@ export class EmulationEngine {
         this.ansibleEngines.delete(nodeId);
         this.traefikEngines.delete(nodeId);
         this.harborEngines.delete(nodeId);
+        this.prometheusEngines.delete(nodeId);
+        this.grafanaEngines.delete(nodeId);
+        this.graphQLEngines.delete(nodeId);
+        this.lokiEngines.delete(nodeId);
+        this.jaegerEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
         this.lastActiveMQUpdate.delete(nodeId);
         this.lastSQSUpdate.delete(nodeId);
@@ -1475,6 +1498,7 @@ export class EmulationEngine {
           break;
         case 'rest':
         case 'grpc':
+        case 'graphql':
         case 'websocket':
           this.simulateAPI(node, config, metrics, hasIncomingConnections);
           break;
@@ -4969,6 +4993,63 @@ export class EmulationEngine {
       }
     }
     
+    // For GraphQL, use emulation engine if available
+    if (node.type === 'graphql') {
+      const graphQLEngine = this.graphQLEngines.get(node.id);
+      if (graphQLEngine) {
+        const load = graphQLEngine.getLoad();
+        const graphQLMetrics = graphQLEngine.getGraphQLMetrics();
+        
+        // Simulate requests if no incoming connections
+        if (!hasIncomingConnections) {
+          const rps = config.requestsPerSecond || 100;
+          graphQLEngine.simulateRequests(rps, this.nodes, this.connections);
+        }
+        
+        // Process subscriptions (generate and deliver events)
+        graphQLEngine.processSubscriptions(this.nodes, this.connections);
+        
+        // Get updated load after simulation
+        const updatedLoad = graphQLEngine.getLoad();
+        
+        // Calculate metrics from GraphQL engine
+        metrics.throughput = updatedLoad.queriesPerSecond + updatedLoad.mutationsPerSecond;
+        metrics.latency = updatedLoad.averageLatency;
+        metrics.errorRate = updatedLoad.errorRate;
+        metrics.utilization = (updatedLoad.cpuUtilization + updatedLoad.memoryUtilization) / 2;
+        
+        // Custom metrics from GraphQL engine
+        metrics.customMetrics = {
+          'queries_per_second': graphQLMetrics.queriesPerSecond,
+          'mutations_per_second': graphQLMetrics.mutationsPerSecond,
+          'subscriptions_active': graphQLMetrics.subscriptionsActive,
+          'total_queries': graphQLMetrics.totalQueries,
+          'total_mutations': graphQLMetrics.totalMutations,
+          'total_errors': graphQLMetrics.totalErrors,
+          'average_response_time': graphQLMetrics.averageResponseTime,
+          'average_complexity': graphQLMetrics.averageComplexity,
+          'average_depth': graphQLMetrics.averageDepth,
+          'cache_hit_rate': graphQLMetrics.cacheHitRate,
+          'error_rate': graphQLMetrics.errorRate,
+          'cpu_utilization': updatedLoad.cpuUtilization,
+          'memory_utilization': updatedLoad.memoryUtilization,
+        };
+        
+        // Add subscription metrics
+        const subscriptionMetrics = graphQLEngine.getSubscriptionMetrics();
+        metrics.customMetrics = {
+          ...metrics.customMetrics,
+          'subscription_events_total': subscriptionMetrics.totalEvents,
+          'subscription_events_per_second': subscriptionMetrics.eventsPerSecond,
+          'subscription_avg_delivery_latency': subscriptionMetrics.averageDeliveryLatency,
+          'subscription_delivery_errors': subscriptionMetrics.totalDeliveryErrors,
+          'subscription_delivery_error_rate': subscriptionMetrics.deliveryErrorRate,
+        };
+        
+        return;
+      }
+    }
+    
     // Default behavior for WebSocket, etc.
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
@@ -7399,7 +7480,16 @@ export class EmulationEngine {
   private initializeGrafanaEngine(node: CanvasNode): void {
     const grafanaEngine = new GrafanaEmulationEngine();
     grafanaEngine.initializeConfig(node);
-    this.grafanaEngines.set(node.id, grafanaEngine);
+        this.grafanaEngines.set(node.id, grafanaEngine);
+  }
+
+  /**
+   * Initialize GraphQL Emulation Engine for GraphQL node
+   */
+  private initializeGraphQLEngine(node: CanvasNode): void {
+    const graphQLEngine = new GraphQLEmulationEngine();
+    graphQLEngine.initializeConfig(node);
+    this.graphQLEngines.set(node.id, graphQLEngine);
   }
 
   /**
@@ -8133,6 +8223,13 @@ export class EmulationEngine {
    */
   public getIDSIPSEmulationEngine(nodeId: string): IDSIPSEmulationEngine | undefined {
     return this.idsIpsEngines.get(nodeId);
+  }
+
+  /**
+   * Get GraphQL emulation engine for a node
+   */
+  public getGraphQLEmulationEngine(nodeId: string): GraphQLEmulationEngine | undefined {
+    return this.graphQLEngines.get(nodeId);
   }
 
   /**

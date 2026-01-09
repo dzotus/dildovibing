@@ -1,0 +1,673 @@
+{
+  "version": 1,
+  "name": "Simulation Demo - Minimal",
+  "description": "Минимальный демонстрационный конфиг для симуляции",
+  "createdAt": "2024-12-20T12:00:00.000Z",
+  "updatedAt": "2024-12-20T12:00:00.000Z",
+  "nodes": [
+    {
+      "id": "api-gateway-1",
+      "type": "api-gateway",
+      "position": { "x": 400, "y": 100 },
+      "data": {
+        "label": "Cloud API Gateway",
+        "config": {
+          "enabled": true,
+          "provider": "aws",
+          "endpoints": [
+            {
+              "name": "user-api",
+              "path": "/api/v1/users",
+              "method": "GET",
+              "target": "rest-1",
+              "rateLimit": 1000,
+              "timeout": 5000
+            },
+            {
+              "name": "order-api",
+              "path": "/api/v1/orders",
+              "method": "POST",
+              "target": "grpc-1",
+              "rateLimit": 500,
+              "timeout": 10000
+            }
+          ],
+          "authentication": {
+            "type": "jwt",
+            "keycloakUrl": "keycloak-1"
+          },
+          "caching": {
+            "enabled": true,
+            "ttl": 300
+          }
+        }
+      }
+    },
+    {
+      "id": "nginx-1",
+      "type": "nginx",
+      "position": { "x": 400, "y": 300 },
+      "data": {
+        "label": "NGINX",
+        "config": {
+          "enabled": true,
+          "workerThreads": 8,
+          "cacheSize": 512,
+          "upstreamServers": [
+            { "host": "app-1", "port": 8080, "weight": 1 },
+            { "host": "app-2", "port": 8080, "weight": 1 }
+          ],
+          "sslEnabled": true,
+          "compressionEnabled": true
+        }
+      }
+    },
+    {
+      "id": "kafka-1",
+      "type": "kafka",
+      "position": { "x": 200, "y": 500 },
+      "data": {
+        "label": "Kafka",
+        "config": {
+          "enabled": true,
+          "brokers": ["kafka-1:9092", "kafka-2:9092"],
+          "topics": [
+            {
+              "name": "user-events",
+              "partitions": 6,
+              "replication": 3
+            }
+          ],
+          "topicCount": 5,
+          "partitions": 6,
+          "replicationFactor": 3,
+          "throughputMsgs": 50000,
+          "groupId": "event-processors",
+          "clientId": "kafka-client-1"
+        }
+      }
+    },
+    {
+      "id": "rabbitmq-1",
+      "type": "rabbitmq",
+      "position": { "x": 400, "y": 500 },
+      "data": {
+        "label": "RabbitMQ",
+        "config": {
+          "enabled": true,
+          "host": "rabbitmq-1",
+          "port": 5672,
+          "username": "admin",
+          "vhost": "/",
+          "queues": [
+            {
+              "name": "email-queue",
+              "durable": true,
+              "exclusive": false,
+              "autoDelete": false
+            }
+          ],
+          "throughputMsgs": 10000,
+          "exchangeType": "topic"
+        }
+      }
+    },
+    {
+      "id": "postgres-1",
+      "type": "postgres",
+      "position": { "x": 200, "y": 700 },
+      "data": {
+        "label": "PostgreSQL",
+        "config": {
+          "enabled": true,
+          "host": "postgres-1",
+          "port": 5432,
+          "database": "main_db",
+          "maxConnections": 200,
+          "queryLatency": 25,
+          "indexCount": 50,
+          "replication": {
+            "enabled": true,
+            "replicas": 2
+          },
+          "pooling": {
+            "min": 10,
+            "max": 200,
+            "idleTimeout": 30000
+          }
+        }
+      }
+    },
+    {
+      "id": "redis-1",
+      "type": "redis",
+      "position": { "x": 400, "y": 700 },
+      "data": {
+        "label": "Redis",
+        "config": {
+          "enabled": true,
+          "host": "redis-1",
+          "port": 6379,
+          "maxMemory": "2gb",
+          "evictionPolicy": "allkeys-lru",
+          "databases": 16,
+          "persistence": {
+            "rdb": true,
+            "aof": true
+          },
+          "clustering": {
+            "enabled": true,
+            "nodes": 6
+          }
+        }
+      }
+    },
+    {
+      "id": "prometheus-1",
+      "type": "prometheus",
+      "position": { "x": 200, "y": 900 },
+      "data": {
+        "label": "Prometheus",
+        "config": {
+          "enabled": true,
+          "scrapeInterval": "15s",
+          "evaluationInterval": "15s",
+          "enableAlertmanager": true,
+          "scrapeConfigs": [
+            {
+              "job_name": "kafka",
+              "scrape_interval": "10s",
+              "targets": ["kafka-1:9090"]
+            },
+            {
+              "job_name": "rabbitmq",
+              "scrape_interval": "15s",
+              "targets": ["rabbitmq-1:15692"]
+            },
+            {
+              "job_name": "rest",
+              "scrape_interval": "10s",
+              "targets": ["rest-1:8080"]
+            },
+            {
+              "job_name": "grpc",
+              "scrape_interval": "10s",
+              "targets": ["grpc-1:9090"]
+            },
+            {
+              "job_name": "postgres",
+              "scrape_interval": "30s",
+              "targets": ["postgres-1:9187"]
+            },
+            {
+              "job_name": "redis",
+              "scrape_interval": "15s",
+              "targets": ["redis-1:9121"]
+            },
+            {
+              "job_name": "nginx",
+              "scrape_interval": "10s",
+              "targets": ["nginx-1:9113"]
+            },
+            {
+              "job_name": "api-gateway",
+              "scrape_interval": "10s",
+              "targets": ["api-gateway-1:9090"]
+            }
+          ],
+          "retention": "30d"
+        }
+      }
+    },
+    {
+      "id": "grafana-1",
+      "type": "grafana",
+      "position": { "x": 400, "y": 900 },
+      "data": {
+        "label": "Grafana",
+        "config": {
+          "enabled": true,
+          "datasources": [
+            {
+              "name": "Prometheus",
+              "type": "prometheus",
+              "url": "http://prometheus-1:9090",
+              "access": "proxy"
+            }
+          ],
+          "dashboards": [
+            {
+              "id": "dashboard-1",
+              "name": "System Overview",
+              "panels": [
+                {
+                  "id": "panel-1",
+                  "title": "Component Throughput",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_throughput_total",
+                      "legendFormat": "{{component_name}} ({{component_type}})"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 0,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-2",
+                  "title": "Component Latency",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_latency_ms",
+                      "legendFormat": "{{component_name}} ({{component_type}})"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 0,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-3",
+                  "title": "Component Utilization",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_utilization",
+                      "legendFormat": "{{component_name}} ({{component_type}})"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 0,
+                    "y": 16,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-4",
+                  "title": "Component Error Rate",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_error_rate",
+                      "legendFormat": "{{component_name}} ({{component_type}})"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 0,
+                    "y": 24,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-5",
+                  "title": "Kafka Throughput",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_throughput_total{component_type=\"kafka\"}",
+                      "legendFormat": "Kafka"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 12,
+                    "y": 0,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-6",
+                  "title": "RabbitMQ Throughput",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_throughput_total{component_type=\"rabbitmq\"}",
+                      "legendFormat": "RabbitMQ"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 12,
+                    "y": 8,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-7",
+                  "title": "REST API Latency",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_latency_ms{component_type=\"rest\"}",
+                      "legendFormat": "REST API"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 12,
+                    "y": 16,
+                    "w": 12,
+                    "h": 8
+                  }
+                },
+                {
+                  "id": "panel-8",
+                  "title": "gRPC Latency",
+                  "type": "graph",
+                  "datasource": "Prometheus",
+                  "queries": [
+                    {
+                      "refId": "A",
+                      "expr": "component_latency_ms{component_type=\"grpc\"}",
+                      "legendFormat": "gRPC"
+                    }
+                  ],
+                  "gridPos": {
+                    "x": 12,
+                    "y": 24,
+                    "w": 12,
+                    "h": 8
+                  }
+                }
+              ],
+              "tags": ["system", "overview"],
+              "refresh": "30s"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "keycloak-1",
+      "type": "keycloak",
+      "position": { "x": 600, "y": 500 },
+      "data": {
+        "label": "Keycloak",
+        "config": {
+          "enabled": true,
+          "realm": "enterprise",
+          "clients": [
+            {
+              "name": "api-gateway-client",
+              "clientId": "api-gateway",
+              "protocol": "openid-connect"
+            }
+          ],
+          "users": 10000,
+          "sessions": 5000
+        }
+      }
+    },
+    {
+      "id": "rest-1",
+      "type": "rest",
+      "position": { "x": 200, "y": 1100 },
+      "data": {
+        "label": "REST API",
+        "config": {
+          "enabled": true,
+          "baseUrl": "https://api.example.com",
+          "endpoints": [
+            {
+              "path": "/api/v1/users",
+              "method": "GET",
+              "responseLatency": 50
+            }
+          ],
+          "requestsPerSecond": 5000,
+          "avgPayloadSize": 2048,
+          "responseLatency": 50
+        }
+      }
+    },
+    {
+      "id": "grpc-1",
+      "type": "grpc",
+      "position": { "x": 400, "y": 1100 },
+      "data": {
+        "label": "gRPC Service",
+        "config": {
+          "enabled": true,
+          "services": [
+            {
+              "name": "UserService",
+              "methods": ["GetUser", "CreateUser", "UpdateUser"]
+            }
+          ],
+          "requestsPerSecond": 10000,
+          "avgPayloadSize": 1024,
+          "responseLatency": 20,
+          "compression": "gzip"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn-1",
+      "source": "api-gateway-1",
+      "target": "nginx-1",
+      "type": "http",
+      "label": "API Traffic",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 1000,
+        "priorityLevel": "high"
+      },
+      "sourcePort": 0,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-2",
+      "source": "nginx-1",
+      "target": "rest-1",
+      "type": "http",
+      "label": "REST API",
+      "data": {
+        "latencyMs": 15,
+        "bandwidthMbps": 200,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-3",
+      "source": "api-gateway-1",
+      "target": "grpc-1",
+      "type": "grpc",
+      "label": "gRPC Service",
+      "data": {
+        "latencyMs": 8,
+        "bandwidthMbps": 2000,
+        "priorityLevel": "critical"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-4",
+      "source": "rest-1",
+      "target": "postgres-1",
+      "type": "sync",
+      "label": "Database",
+      "data": {
+        "latencyMs": 25,
+        "bandwidthMbps": 100,
+        "priorityLevel": "high"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-5",
+      "source": "rest-1",
+      "target": "redis-1",
+      "type": "async",
+      "label": "Cache",
+      "data": {
+        "latencyMs": 2,
+        "bandwidthMbps": 500,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 2,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-6",
+      "source": "rest-1",
+      "target": "kafka-1",
+      "type": "async",
+      "label": "Events",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 1000,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 3,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-7",
+      "source": "kafka-1",
+      "target": "rabbitmq-1",
+      "type": "async",
+      "label": "Message Bridge",
+      "data": {
+        "latencyMs": 20,
+        "bandwidthMbps": 500,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-8",
+      "source": "prometheus-1",
+      "target": "kafka-1",
+      "type": "http",
+      "label": "Metrics",
+      "data": {
+        "latencyMs": 10,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 0,
+      "targetPort": 4
+    },
+    {
+      "id": "conn-9",
+      "source": "prometheus-1",
+      "target": "rabbitmq-1",
+      "type": "http",
+      "label": "Metrics",
+      "data": {
+        "latencyMs": 10,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 1
+    },
+    {
+      "id": "conn-10",
+      "source": "grafana-1",
+      "target": "prometheus-1",
+      "type": "http",
+      "label": "Query",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 50,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 0,
+      "targetPort": 5
+    },
+    {
+      "id": "conn-11",
+      "source": "api-gateway-1",
+      "target": "keycloak-1",
+      "type": "http",
+      "label": "Auth",
+      "data": {
+        "latencyMs": 20,
+        "bandwidthMbps": 50,
+        "priorityLevel": "critical"
+      },
+      "sourcePort": 2,
+      "targetPort": 0
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-1",
+      "name": "API Layer",
+      "nodeIds": ["api-gateway-1", "nginx-1"],
+      "color": "hsl(220, 70%, 50%)",
+      "position": { "x": 350, "y": 80 },
+      "size": { "width": 200, "height": 250 },
+      "showName": true
+    },
+    {
+      "id": "group-2",
+      "name": "Messaging",
+      "nodeIds": ["kafka-1", "rabbitmq-1"],
+      "color": "hsl(30, 70%, 50%)",
+      "position": { "x": 150, "y": 480 },
+      "size": { "width": 300, "height": 100 },
+      "showName": true
+    },
+    {
+      "id": "group-3",
+      "name": "Data Storage",
+      "nodeIds": ["postgres-1", "redis-1"],
+      "color": "hsl(200, 70%, 50%)",
+      "position": { "x": 150, "y": 680 },
+      "size": { "width": 300, "height": 100 },
+      "showName": true
+    },
+    {
+      "id": "group-4",
+      "name": "Observability",
+      "nodeIds": ["prometheus-1", "grafana-1"],
+      "color": "hsl(10, 70%, 50%)",
+      "position": { "x": 150, "y": 880 },
+      "size": { "width": 300, "height": 100 },
+      "showName": true
+    },
+    {
+      "id": "group-5",
+      "name": "Services",
+      "nodeIds": ["rest-1", "grpc-1"],
+      "color": "hsl(270, 70%, 50%)",
+      "position": { "x": 150, "y": 1080 },
+      "size": { "width": 300, "height": 100 },
+      "showName": true
+    }
+  ],
+  "zoom": 0.8,
+  "pan": { "x": 0, "y": 0 }
+}

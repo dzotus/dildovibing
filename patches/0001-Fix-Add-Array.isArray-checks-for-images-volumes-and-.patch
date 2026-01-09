@@ -1,0 +1,137 @@
+From 51c7ae92e8ddaefd0af9cae5170b1da2893d7984 Mon Sep 17 00:00:00 2001
+From: dzotus <dzotus6@gmail.com>
+Date: Wed, 7 Jan 2026 04:14:26 +0300
+Subject: [PATCH] Fix: Add Array.isArray checks for images, volumes, and
+ networks in DockerEmulationEngine to prevent reduce errors
+
+---
+ src/core/DockerEmulationEngine.ts | 57 ++++++++++++++++++++++++-------
+ 1 file changed, 44 insertions(+), 13 deletions(-)
+
+diff --git a/src/core/DockerEmulationEngine.ts b/src/core/DockerEmulationEngine.ts
+index 9ba629c8..1285686a 100644
+--- a/src/core/DockerEmulationEngine.ts
++++ b/src/core/DockerEmulationEngine.ts
+@@ -257,6 +257,21 @@ export class DockerEmulationEngine {
+    */
+   initializeConfig(node: CanvasNode): void {
+     const config = (node.data.config || {}) as DockerConfig;
++    
++    // Ensure arrays are properly initialized
++    if (!Array.isArray(config.images)) {
++      config.images = [];
++    }
++    if (!Array.isArray(config.networks)) {
++      config.networks = [];
++    }
++    if (!Array.isArray(config.volumes)) {
++      config.volumes = [];
++    }
++    if (!Array.isArray(config.containers)) {
++      config.containers = [];
++    }
++    
+     this.config = config;
+     
+     // Set mode
+@@ -401,19 +416,19 @@ export class DockerEmulationEngine {
+       // Sync images
+       const providerImages = await this.currentProvider.listImages();
+       if (this.config) {
+-        this.config.images = providerImages;
++        this.config.images = Array.isArray(providerImages) ? providerImages : [];
+       }
+       
+       // Sync networks
+       const providerNetworks = await this.currentProvider.listNetworks();
+       if (this.config) {
+-        this.config.networks = providerNetworks;
++        this.config.networks = Array.isArray(providerNetworks) ? providerNetworks : [];
+       }
+       
+       // Sync volumes
+       const providerVolumes = await this.currentProvider.listVolumes();
+       if (this.config) {
+-        this.config.volumes = providerVolumes;
++        this.config.volumes = Array.isArray(providerVolumes) ? providerVolumes : [];
+       }
+       
+       this.lastSyncTime = Date.now();
+@@ -508,6 +523,21 @@ export class DockerEmulationEngine {
+    */
+   updateConfig(node: CanvasNode): void {
+     const newConfig = (node.data.config || {}) as DockerConfig;
++    
++    // Ensure arrays are properly initialized
++    if (!Array.isArray(newConfig.images)) {
++      newConfig.images = [];
++    }
++    if (!Array.isArray(newConfig.networks)) {
++      newConfig.networks = [];
++    }
++    if (!Array.isArray(newConfig.volumes)) {
++      newConfig.volumes = [];
++    }
++    if (!Array.isArray(newConfig.containers)) {
++      newConfig.containers = [];
++    }
++    
+     const oldConfig = this.config;
+     const oldMode = this.mode;
+     this.config = newConfig;
+@@ -519,7 +549,7 @@ export class DockerEmulationEngine {
+     }
+     
+     // Sync containers: add new, update existing, remove deleted
+-    if (newConfig.containers) {
++    if (newConfig.containers && Array.isArray(newConfig.containers)) {
+       const configContainerIds = new Set(newConfig.containers.map(c => c.id));
+       
+       // Remove containers that are no longer in config
+@@ -609,17 +639,18 @@ export class DockerEmulationEngine {
+       .filter(c => c.status === 'paused').length;
+ 
+     // Update image counts
+-    this.dockerMetrics.imagesTotal = this.config.images?.length || 0;
+-    this.dockerMetrics.imagesSize = (this.config.images || [])
+-      .reduce((sum, img) => sum + img.size, 0);
++    const images = Array.isArray(this.config.images) ? this.config.images : [];
++    this.dockerMetrics.imagesTotal = images.length;
++    this.dockerMetrics.imagesSize = images.reduce((sum, img) => sum + (img.size || 0), 0);
+ 
+     // Update network counts
+-    this.dockerMetrics.networksTotal = this.config.networks?.length || 0;
++    const networks = Array.isArray(this.config.networks) ? this.config.networks : [];
++    this.dockerMetrics.networksTotal = networks.length;
+ 
+     // Update volume counts
+-    this.dockerMetrics.volumesTotal = this.config.volumes?.length || 0;
+-    this.dockerMetrics.volumesSize = (this.config.volumes || [])
+-      .reduce((sum, vol) => sum + (vol.size || 0), 0);
++    const volumes = Array.isArray(this.config.volumes) ? this.config.volumes : [];
++    this.dockerMetrics.volumesTotal = volumes.length;
++    this.dockerMetrics.volumesSize = volumes.reduce((sum, vol) => sum + (vol.size || 0), 0);
+   }
+ 
+   /**
+@@ -774,7 +805,7 @@ export class DockerEmulationEngine {
+    * Симулирует операции с образами
+    */
+   private simulateImageOperations(currentTime: number, hasIncomingConnections: boolean): void {
+-    if (!this.config?.images || this.config.images.length === 0) return;
++    if (!this.config?.images || !Array.isArray(this.config.images) || this.config.images.length === 0) return;
+ 
+     // Base operation rate: 0.05-0.5 ops/sec
+     const baseRate = Math.min(0.5, 0.05 + (this.config.images.length / 50));
+@@ -1262,7 +1293,7 @@ export class DockerEmulationEngine {
+     const image = await this.currentProvider.pullImage(repository, tag);
+     
+     if (this.config) {
+-      if (!this.config.images) {
++      if (!Array.isArray(this.config.images)) {
+         this.config.images = [];
+       }
+       const existingIndex = this.config.images.findIndex(img => img.id === image.id);
+-- 
+2.52.0.windows.1
+
