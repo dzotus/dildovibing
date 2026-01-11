@@ -52,6 +52,7 @@ import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { SparkEmulationEngine } from './SparkEmulationEngine';
+import { TensorFlowServingEmulationEngine } from './TensorFlowServingEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
@@ -308,6 +309,9 @@ export class EmulationEngine {
 
   // Spark emulation engines per node
   private sparkEngines: Map<string, SparkEmulationEngine> = new Map();
+
+  // TensorFlow Serving emulation engines per node
+  private tensorFlowServingEngines: Map<string, TensorFlowServingEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -1013,6 +1017,8 @@ export class EmulationEngine {
         this.terraformEngines.delete(nodeId);
         this.ansibleEngines.delete(nodeId);
         this.traefikEngines.delete(nodeId);
+        this.sparkEngines.delete(nodeId);
+        this.tensorFlowServingEngines.delete(nodeId);
         this.harborEngines.delete(nodeId);
         this.prometheusEngines.delete(nodeId);
         this.grafanaEngines.delete(nodeId);
@@ -1477,6 +1483,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform TensorFlow Serving updates (models, predictions, batching, metrics)
+    for (const [nodeId, tensorFlowServingEngine] of this.tensorFlowServingEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        tensorFlowServingEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateTensorFlowServing method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'tensorflow-serving', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1660,6 +1690,9 @@ export class EmulationEngine {
           break;
         case 'spark':
           this.simulateSpark(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'tensorflow-serving':
+          this.simulateTensorFlowServing(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6372,6 +6405,63 @@ export class EmulationEngine {
   }
 
   /**
+   * TensorFlow Serving emulation
+   */
+  private simulateTensorFlowServing(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.tensorFlowServingEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const tfMetrics = engine.getMetrics();
+    
+    // Throughput: predictions per second
+    metrics.throughput = tfMetrics.throughput;
+    
+    // Latency: average prediction latency
+    metrics.latency = tfMetrics.averageLatency;
+    
+    // Error rate: failed predictions / total predictions
+    metrics.errorRate = tfMetrics.errorRate;
+    
+    // Utilization: based on batch utilization and CPU/GPU usage
+    let utilization = tfMetrics.batchUtilization;
+    if (tfMetrics.gpuUtilization !== undefined) {
+      utilization = Math.max(utilization, tfMetrics.gpuUtilization);
+    }
+    utilization = Math.max(utilization, tfMetrics.cpuUtilization);
+    metrics.utilization = Math.min(1, utilization);
+    
+    metrics.customMetrics = {
+      totalModels: tfMetrics.totalModels,
+      servingModels: tfMetrics.servingModels,
+      loadingModels: tfMetrics.loadingModels,
+      unavailableModels: tfMetrics.unavailableModels,
+      totalPredictions: tfMetrics.totalPredictions,
+      successfulPredictions: tfMetrics.successfulPredictions,
+      failedPredictions: tfMetrics.failedPredictions,
+      averageLatency: tfMetrics.averageLatency,
+      p50Latency: tfMetrics.p50Latency,
+      p99Latency: tfMetrics.p99Latency,
+      requestsPerSecond: tfMetrics.requestsPerSecond,
+      throughput: tfMetrics.throughput,
+      errorRate: tfMetrics.errorRate,
+      batchUtilization: tfMetrics.batchUtilization,
+      gpuUtilization: tfMetrics.gpuUtilization || 0,
+      memoryUsage: tfMetrics.memoryUsage,
+      cpuUtilization: tfMetrics.cpuUtilization,
+    };
+  }
+
+  /**
    * Traefik emulation
    */
   private simulateTraefik(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8013,6 +8103,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize TensorFlow Serving Emulation Engine for TensorFlow Serving node
+   */
+  private initializeTensorFlowServingEngine(node: CanvasNode): void {
+    const engine = new TensorFlowServingEmulationEngine();
+    engine.initializeConfig(node);
+    this.tensorFlowServingEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize Traefik Emulation Engine for Traefik node
    */
   private initializeTraefikEngine(node: CanvasNode): void {
@@ -8570,6 +8669,10 @@ export class EmulationEngine {
 
   public getSparkEmulationEngine(nodeId: string): SparkEmulationEngine | undefined {
     return this.sparkEngines.get(nodeId);
+  }
+
+  public getTensorFlowServingEmulationEngine(nodeId: string): TensorFlowServingEmulationEngine | undefined {
+    return this.tensorFlowServingEngines.get(nodeId);
   }
 
   public getKubernetesEmulationEngine(nodeId: string): KubernetesEmulationEngine | undefined {
