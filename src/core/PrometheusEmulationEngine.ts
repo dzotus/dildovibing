@@ -160,20 +160,33 @@ export class PrometheusEmulationEngine {
       // Создаем scrape_config для каждого job
       for (const [jobName, targets] of targetsByJob.entries()) {
         const firstTarget = targets[0];
-        const scrapeInterval = firstTarget.interval || globalInterval;
+        const scrapeInterval = firstTarget.scrapeInterval || firstTarget.interval || globalInterval;
         const metricsPath = firstTarget.metricsPath || '/metrics';
 
-        // Извлекаем targets (host:port) из endpoints
-        const staticTargets = targets.map(t => {
-          try {
-            const url = new URL(t.endpoint);
-            return `${url.hostname}${url.port ? ':' + url.port : ''}`;
-          } catch {
-            // Если не валидный URL, пытаемся извлечь напрямую
-            const match = t.endpoint.match(/^https?:\/\/([^\/]+)/);
-            return match ? match[1] : t.endpoint;
+        // Извлекаем targets (host:port) из endpoints или используем готовый массив targets
+        const staticTargets: string[] = [];
+        
+        for (const t of targets) {
+          // Если у target есть массив targets (новая структура)
+          if (Array.isArray(t.targets)) {
+            staticTargets.push(...t.targets);
           }
-        });
+          // Если у target есть endpoint (старая структура)
+          else if (t.endpoint) {
+            try {
+              const url = new URL(t.endpoint);
+              staticTargets.push(`${url.hostname}${url.port ? ':' + url.port : ''}`);
+            } catch {
+              // Если не валидный URL, пытаемся извлечь напрямую
+              const match = t.endpoint.match(/^https?:\/\/([^\/]+)/);
+              staticTargets.push(match ? match[1] : t.endpoint);
+            }
+          }
+          // Если target - это просто строка
+          else if (typeof t === 'string') {
+            staticTargets.push(t);
+          }
+        }
 
         scrapeConfigs.push({
           job_name: jobName,

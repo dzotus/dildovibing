@@ -1,0 +1,1436 @@
+{
+  "version": 1,
+  "name": "Apache Spark Full Test Configuration - Production Ready",
+  "createdAt": "2024-12-20T12:00:00.000Z",
+  "updatedAt": "2024-12-20T12:00:00.000Z",
+  "zoom": 0.8,
+  "pan": { "x": 0, "y": 0 },
+  "groups": [],
+  "nodes": [
+    {
+      "id": "kafka-source",
+      "type": "kafka",
+      "position": { "x": 200, "y": 400 },
+      "data": {
+        "label": "Kafka Source Cluster",
+        "config": {
+          "enabled": true,
+          "brokers": ["kafka-1:9092", "kafka-2:9092", "kafka-3:9092"],
+          "topics": [
+            {
+              "name": "user-events",
+              "partitions": 12,
+              "replication": 3
+            },
+            {
+              "name": "order-events",
+              "partitions": 24,
+              "replication": 3
+            },
+            {
+              "name": "click-stream",
+              "partitions": 16,
+              "replication": 3
+            },
+            {
+              "name": "payment-events",
+              "partitions": 12,
+              "replication": 3
+            },
+            {
+              "name": "spark-processed",
+              "partitions": 8,
+              "replication": 3
+            }
+          ],
+          "topicCount": 5,
+          "partitions": 12,
+          "replicationFactor": 3,
+          "throughputMsgs": 150000,
+          "groupId": "spark-consumer-group",
+          "clientId": "kafka-source-client"
+        }
+      }
+    },
+    {
+      "id": "postgres-source",
+      "type": "postgres",
+      "position": { "x": 200, "y": 600 },
+      "data": {
+        "label": "PostgreSQL Source DB",
+        "config": {
+          "enabled": true,
+          "host": "postgres-source",
+          "port": 5432,
+          "database": "transactional_db",
+          "username": "spark_user",
+          "password": "secure_password_123",
+          "maxConnections": 300,
+          "queryLatency": 20,
+          "indexCount": 75,
+          "replication": {
+            "enabled": true,
+            "replicas": 2
+          },
+          "pooling": {
+            "min": 20,
+            "max": 300,
+            "idleTimeout": 30000
+          },
+          "tables": [
+            {
+              "name": "users",
+              "rows": 5000000,
+              "size": 2621440000
+            },
+            {
+              "name": "orders",
+              "rows": 25000000,
+              "size": 10737418240
+            },
+            {
+              "name": "products",
+              "rows": 500000,
+              "size": 524288000
+            },
+            {
+              "name": "order_items",
+              "rows": 100000000,
+              "size": 42949672960
+            },
+            {
+              "name": "transactions",
+              "rows": 50000000,
+              "size": 21474836480
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "spark-cluster",
+      "type": "spark",
+      "position": { "x": 700, "y": 500 },
+      "data": {
+        "label": "Apache Spark Cluster",
+        "config": {
+          "enabled": true,
+          "master": "spark://spark-master:7077",
+          "appName": "data-processing-pipeline",
+          "sparkMaster": "spark://spark-master:7077",
+          "sparkAppName": "data-processing-pipeline",
+          "driverMemory": "8g",
+          "executorMemory": "16g",
+          "executorCores": 8,
+          "enableDynamicAllocation": true,
+          "minExecutors": 3,
+          "maxExecutors": 30,
+          "enableCheckpointing": true,
+          "checkpointDirectory": "/spark/checkpoint",
+          "enableStreaming": true,
+          "streamingBatchInterval": 5000,
+          "jobs": [
+            {
+              "id": "job-streaming-processor",
+              "name": "Streaming Event Processor",
+              "status": "RUNNING",
+              "startTime": "2024-12-20T10:00:00.000Z",
+              "submissionTime": 1703068800000,
+              "stages": 6,
+              "tasks": 800,
+              "executors": 8,
+              "inputBytes": 107374182400,
+              "outputBytes": 53687091200,
+              "shuffleRead": 21474836480,
+              "shuffleWrite": 10737418240,
+              "duration": 1800000
+            },
+            {
+              "id": "job-batch-analytics",
+              "name": "Batch Analytics Job",
+              "status": "RUNNING",
+              "startTime": "2024-12-20T10:05:00.000Z",
+              "submissionTime": 1703069100000,
+              "stages": 10,
+              "tasks": 2000,
+              "executors": 8,
+              "inputBytes": 214748364800,
+              "outputBytes": 107374182400,
+              "shuffleRead": 42949672960,
+              "shuffleWrite": 21474836480,
+              "duration": 2400000
+            },
+            {
+              "id": "job-etl-pipeline",
+              "name": "ETL Pipeline",
+              "status": "SUCCEEDED",
+              "startTime": "2024-12-20T09:00:00.000Z",
+              "endTime": "2024-12-20T09:45:00.000Z",
+              "submissionTime": 1703066400000,
+              "completionTime": 1703069100000,
+              "stages": 15,
+              "tasks": 3500,
+              "executors": 8,
+              "inputBytes": 536870912000,
+              "outputBytes": 268435456000,
+              "shuffleRead": 107374182400,
+              "shuffleWrite": 53687091200,
+              "duration": 2700000
+            },
+            {
+              "id": "job-realtime-aggregation",
+              "name": "Real-time Aggregation",
+              "status": "RUNNING",
+              "startTime": "2024-12-20T10:10:00.000Z",
+              "submissionTime": 1703069400000,
+              "stages": 4,
+              "tasks": 600,
+              "executors": 6,
+              "inputBytes": 53687091200,
+              "outputBytes": 26843545600,
+              "shuffleRead": 10737418240,
+              "shuffleWrite": 5368709120,
+              "duration": 900000
+            },
+            {
+              "id": "job-machine-learning",
+              "name": "ML Model Training",
+              "status": "RUNNING",
+              "startTime": "2024-12-20T10:15:00.000Z",
+              "submissionTime": 1703069700000,
+              "stages": 12,
+              "tasks": 1500,
+              "executors": 8,
+              "inputBytes": 322122547200,
+              "outputBytes": 161061273600,
+              "shuffleRead": 64424509440,
+              "shuffleWrite": 32212254720,
+              "duration": 3600000
+            },
+            {
+              "id": "job-data-migration",
+              "name": "Data Migration Job",
+              "status": "SUCCEEDED",
+              "startTime": "2024-12-20T08:30:00.000Z",
+              "endTime": "2024-12-20T09:15:00.000Z",
+              "submissionTime": 1703062200000,
+              "completionTime": 1703064900000,
+              "stages": 8,
+              "tasks": 1200,
+              "executors": 6,
+              "inputBytes": 429496729600,
+              "outputBytes": 214748364800,
+              "shuffleRead": 85899345920,
+              "shuffleWrite": 42949672960,
+              "duration": 2700000
+            },
+            {
+              "id": "job-failed-job",
+              "name": "Failed Processing Job",
+              "status": "FAILED",
+              "startTime": "2024-12-20T09:50:00.000Z",
+              "endTime": "2024-12-20T09:55:00.000Z",
+              "submissionTime": 1703069400000,
+              "completionTime": 1703069700000,
+              "stages": 5,
+              "tasks": 400,
+              "executors": 4,
+              "inputBytes": 10737418240,
+              "outputBytes": 0,
+              "shuffleRead": 2147483648,
+              "shuffleWrite": 1073741824,
+              "duration": 300000
+            },
+            {
+              "id": "job-killed-job",
+              "name": "Killed Long Running Job",
+              "status": "KILLED",
+              "startTime": "2024-12-20T08:00:00.000Z",
+              "endTime": "2024-12-20T09:30:00.000Z",
+              "submissionTime": 1703059200000,
+              "completionTime": 1703064600000,
+              "stages": 20,
+              "tasks": 5000,
+              "executors": 10,
+              "inputBytes": 1073741824000,
+              "outputBytes": 536870912000,
+              "shuffleRead": 214748364800,
+              "shuffleWrite": 107374182400,
+              "duration": 5400000
+            }
+          ],
+          "stages": [
+            {
+              "id": "stage-streaming-1",
+              "jobId": "job-streaming-processor",
+              "name": "Read from Kafka",
+              "status": "ACTIVE",
+              "numTasks": 150,
+              "numActiveTasks": 150,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 10737418240,
+              "outputBytes": 5368709120,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 120000,
+              "submissionTime": 1703068800000,
+              "stageType": "map"
+            },
+            {
+              "id": "stage-streaming-2",
+              "jobId": "job-streaming-processor",
+              "name": "Parse and Validate Events",
+              "status": "ACTIVE",
+              "numTasks": 200,
+              "numActiveTasks": 200,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 5368709120,
+              "outputBytes": 4294967296,
+              "shuffleRead": 0,
+              "shuffleWrite": 2147483648,
+              "duration": 180000,
+              "submissionTime": 1703068920000,
+              "stageType": "map",
+              "shuffleNetworkWrite": 2147483648,
+              "shuffleSpillMemory": 1073741824,
+              "shuffleSpillDisk": 536870912,
+              "shuffleFetchWaitTime": 150
+            },
+            {
+              "id": "stage-streaming-3",
+              "jobId": "job-streaming-processor",
+              "name": "Transform Events",
+              "status": "ACTIVE",
+              "numTasks": 180,
+              "numActiveTasks": 180,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 4294967296,
+              "outputBytes": 3221225472,
+              "shuffleRead": 2147483648,
+              "shuffleWrite": 1610612736,
+              "duration": 150000,
+              "submissionTime": 1703069100000,
+              "stageType": "shuffle",
+              "shuffleNetworkRead": 2147483648,
+              "shuffleNetworkWrite": 1610612736,
+              "shuffleSpillMemory": 536870912,
+              "shuffleSpillDisk": 268435456,
+              "shuffleFetchWaitTime": 200
+            },
+            {
+              "id": "stage-streaming-4",
+              "jobId": "job-streaming-processor",
+              "name": "Aggregate Metrics",
+              "status": "ACTIVE",
+              "numTasks": 120,
+              "numActiveTasks": 120,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 3221225472,
+              "outputBytes": 1610612736,
+              "shuffleRead": 1610612736,
+              "shuffleWrite": 805306368,
+              "duration": 200000,
+              "submissionTime": 1703069250000,
+              "stageType": "reduce",
+              "shuffleNetworkRead": 1610612736,
+              "shuffleNetworkWrite": 805306368,
+              "shuffleSpillMemory": 268435456,
+              "shuffleSpillDisk": 134217728,
+              "shuffleFetchWaitTime": 180
+            },
+            {
+              "id": "stage-streaming-5",
+              "jobId": "job-streaming-processor",
+              "name": "Write to ClickHouse",
+              "status": "ACTIVE",
+              "numTasks": 100,
+              "numActiveTasks": 100,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 1610612736,
+              "outputBytes": 805306368,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 90000,
+              "submissionTime": 1703069450000,
+              "stageType": "action"
+            },
+            {
+              "id": "stage-streaming-6",
+              "jobId": "job-streaming-processor",
+              "name": "Publish Results to Kafka",
+              "status": "ACTIVE",
+              "numTasks": 50,
+              "numActiveTasks": 50,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 805306368,
+              "outputBytes": 402653184,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 60000,
+              "submissionTime": 1703069540000,
+              "stageType": "action"
+            },
+            {
+              "id": "stage-batch-1",
+              "jobId": "job-batch-analytics",
+              "name": "Read from PostgreSQL",
+              "status": "ACTIVE",
+              "numTasks": 300,
+              "numActiveTasks": 300,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 21474836480,
+              "outputBytes": 10737418240,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 300000,
+              "submissionTime": 1703069100000,
+              "stageType": "map"
+            },
+            {
+              "id": "stage-batch-2",
+              "jobId": "job-batch-analytics",
+              "name": "Join Tables",
+              "status": "ACTIVE",
+              "numTasks": 400,
+              "numActiveTasks": 400,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 10737418240,
+              "outputBytes": 8589934592,
+              "shuffleRead": 0,
+              "shuffleWrite": 4294967296,
+              "duration": 450000,
+              "submissionTime": 1703069400000,
+              "stageType": "shuffle",
+              "shuffleNetworkWrite": 4294967296,
+              "shuffleSpillMemory": 2147483648,
+              "shuffleSpillDisk": 1073741824,
+              "shuffleFetchWaitTime": 300
+            },
+            {
+              "id": "stage-batch-3",
+              "jobId": "job-batch-analytics",
+              "name": "Calculate Aggregations",
+              "status": "ACTIVE",
+              "numTasks": 500,
+              "numActiveTasks": 500,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 8589934592,
+              "outputBytes": 6442450944,
+              "shuffleRead": 4294967296,
+              "shuffleWrite": 3221225472,
+              "duration": 600000,
+              "submissionTime": 1703069850000,
+              "stageType": "reduce",
+              "shuffleNetworkRead": 4294967296,
+              "shuffleNetworkWrite": 3221225472,
+              "shuffleSpillMemory": 1610612736,
+              "shuffleSpillDisk": 805306368,
+              "shuffleFetchWaitTime": 400
+            },
+            {
+              "id": "stage-batch-4",
+              "jobId": "job-batch-analytics",
+              "name": "Window Functions",
+              "status": "ACTIVE",
+              "numTasks": 350,
+              "numActiveTasks": 350,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 6442450944,
+              "outputBytes": 4831838208,
+              "shuffleRead": 3221225472,
+              "shuffleWrite": 2415919104,
+              "duration": 500000,
+              "submissionTime": 1703070450000,
+              "stageType": "shuffle",
+              "shuffleNetworkRead": 3221225472,
+              "shuffleNetworkWrite": 2415919104,
+              "shuffleSpillMemory": 1207959552,
+              "shuffleSpillDisk": 603979776,
+              "shuffleFetchWaitTime": 350
+            },
+            {
+              "id": "stage-batch-5",
+              "jobId": "job-batch-analytics",
+              "name": "Write Results",
+              "status": "ACTIVE",
+              "numTasks": 450,
+              "numActiveTasks": 450,
+              "numCompleteTasks": 0,
+              "numFailedTasks": 0,
+              "inputBytes": 4831838208,
+              "outputBytes": 2415919104,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 400000,
+              "submissionTime": 1703070950000,
+              "stageType": "action"
+            },
+            {
+              "id": "stage-etl-1",
+              "jobId": "job-etl-pipeline",
+              "name": "Extract Source Data",
+              "status": "COMPLETE",
+              "numTasks": 500,
+              "numActiveTasks": 0,
+              "numCompleteTasks": 500,
+              "numFailedTasks": 0,
+              "inputBytes": 53687091200,
+              "outputBytes": 26843545600,
+              "shuffleRead": 0,
+              "shuffleWrite": 0,
+              "duration": 600000,
+              "submissionTime": 1703066400000,
+              "completionTime": 1703067000000,
+              "stageType": "map"
+            },
+            {
+              "id": "stage-etl-2",
+              "jobId": "job-etl-pipeline",
+              "name": "Transform Data",
+              "status": "COMPLETE",
+              "numTasks": 600,
+              "numActiveTasks": 0,
+              "numCompleteTasks": 600,
+              "numFailedTasks": 0,
+              "inputBytes": 26843545600,
+              "outputBytes": 21474836480,
+              "shuffleRead": 0,
+              "shuffleWrite": 10737418240,
+              "duration": 720000,
+              "submissionTime": 1703067000000,
+              "completionTime": 1703067720000,
+              "stageType": "shuffle",
+              "shuffleNetworkWrite": 10737418240,
+              "shuffleSpillMemory": 5368709120,
+              "shuffleSpillDisk": 2684354560,
+              "shuffleFetchWaitTime": 500
+            },
+            {
+              "id": "stage-etl-3",
+              "jobId": "job-etl-pipeline",
+              "name": "Load to Target",
+              "status": "COMPLETE",
+              "numTasks": 400,
+              "numActiveTasks": 0,
+              "numCompleteTasks": 400,
+              "numFailedTasks": 0,
+              "inputBytes": 21474836480,
+              "outputBytes": 10737418240,
+              "shuffleRead": 10737418240,
+              "shuffleWrite": 0,
+              "duration": 480000,
+              "submissionTime": 1703067720000,
+              "completionTime": 1703068200000,
+              "stageType": "action",
+              "shuffleNetworkRead": 10737418240,
+              "shuffleFetchWaitTime": 600
+            }
+          ],
+          "executors": [
+            {
+              "id": "executor-1",
+              "host": "spark-worker-1.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 12288,
+              "memoryMax": 16384,
+              "diskUsed": 16384,
+              "diskMax": 32768,
+              "activeTasks": 12,
+              "totalTasks": 450,
+              "totalInputBytes": 53687091200,
+              "totalShuffleRead": 10737418240,
+              "totalShuffleWrite": 5368709120,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-2",
+              "host": "spark-worker-2.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 14336,
+              "memoryMax": 16384,
+              "diskUsed": 20480,
+              "diskMax": 32768,
+              "activeTasks": 15,
+              "totalTasks": 520,
+              "totalInputBytes": 64424509440,
+              "totalShuffleRead": 12884901888,
+              "totalShuffleWrite": 6442450944,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-3",
+              "host": "spark-worker-3.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 10240,
+              "memoryMax": 16384,
+              "diskUsed": 12288,
+              "diskMax": 32768,
+              "activeTasks": 10,
+              "totalTasks": 380,
+              "totalInputBytes": 42949672960,
+              "totalShuffleRead": 8589934592,
+              "totalShuffleWrite": 4294967296,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-4",
+              "host": "spark-worker-4.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 15360,
+              "memoryMax": 16384,
+              "diskUsed": 24576,
+              "diskMax": 32768,
+              "activeTasks": 18,
+              "totalTasks": 600,
+              "totalInputBytes": 75161927680,
+              "totalShuffleRead": 15032385536,
+              "totalShuffleWrite": 7516192768,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-5",
+              "host": "spark-worker-5.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 11264,
+              "memoryMax": 16384,
+              "diskUsed": 14336,
+              "diskMax": 32768,
+              "activeTasks": 11,
+              "totalTasks": 420,
+              "totalInputBytes": 48318382080,
+              "totalShuffleRead": 9663676416,
+              "totalShuffleWrite": 4831838208,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-6",
+              "host": "spark-worker-6.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 13312,
+              "memoryMax": 16384,
+              "diskUsed": 18432,
+              "diskMax": 32768,
+              "activeTasks": 14,
+              "totalTasks": 480,
+              "totalInputBytes": 59055800320,
+              "totalShuffleRead": 11811160064,
+              "totalShuffleWrite": 5905580032,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-7",
+              "host": "spark-worker-7.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 9216,
+              "memoryMax": 16384,
+              "diskUsed": 10240,
+              "diskMax": 32768,
+              "activeTasks": 9,
+              "totalTasks": 350,
+              "totalInputBytes": 37580963840,
+              "totalShuffleRead": 7516192768,
+              "totalShuffleWrite": 3758096384,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-8",
+              "host": "spark-worker-8.example.com",
+              "status": "ALIVE",
+              "cores": 8,
+              "memoryUsed": 16384,
+              "memoryMax": 16384,
+              "diskUsed": 28672,
+              "diskMax": 32768,
+              "activeTasks": 20,
+              "totalTasks": 700,
+              "totalInputBytes": 85899345920,
+              "totalShuffleRead": 17179869184,
+              "totalShuffleWrite": 8589934592,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703070000000
+            },
+            {
+              "id": "executor-9",
+              "host": "spark-worker-9.example.com",
+              "status": "DEAD",
+              "cores": 8,
+              "memoryUsed": 0,
+              "memoryMax": 16384,
+              "diskUsed": 0,
+              "diskMax": 32768,
+              "activeTasks": 0,
+              "totalTasks": 250,
+              "totalInputBytes": 21474836480,
+              "totalShuffleRead": 4294967296,
+              "totalShuffleWrite": 2147483648,
+              "startTime": 1703066400000,
+              "lastHeartbeat": 1703068800000
+            }
+          ],
+          "sqlQueries": [
+            {
+              "id": "query-1",
+              "query": "SELECT user_id, COUNT(*) as event_count, SUM(amount) as total_amount FROM user_events WHERE timestamp > NOW() - INTERVAL '1 hour' GROUP BY user_id",
+              "status": "SUCCEEDED",
+              "executionTime": 1850,
+              "rowsProcessed": 125000,
+              "startTime": 1703068800000,
+              "endTime": 1703068801850,
+              "logicalPlan": "Aggregate [user_id#123], [user_id#123, count(1) AS event_count#456L, sum(amount#789) AS total_amount#890L]\n  +- Filter (timestamp#234 > (current_timestamp() - 3600000))\n     +- Relation[user_id#123,amount#789,timestamp#234] user_events",
+              "physicalPlan": "*(2) HashAggregate(keys=[user_id#123], functions=[count(1), sum(amount#789)])\n  +- Exchange hashpartitioning(user_id#123, 200)\n     +- *(1) HashAggregate(keys=[user_id#123], functions=[partial_count(1), partial_sum(amount#789)])\n        +- *(1) Project [user_id#123, amount#789]\n           +- *(1) Filter (timestamp#234 > (current_timestamp() - 3600000))\n              +- *(1) Scan ExistingRDD[user_id#123,amount#789,timestamp#234]",
+              "explainPlan": "== Physical Plan ==\n*(2) HashAggregate(keys=[user_id#123], functions=[count(1), sum(amount#789)])\n+- Exchange hashpartitioning(user_id#123, 200)\n   +- *(1) HashAggregate(keys=[user_id#123], functions=[partial_count(1), partial_sum(amount#789)])\n      +- *(1) Project [user_id#123, amount#789]\n         +- *(1) Filter (timestamp#234 > (current_timestamp() - 3600000))\n            +- *(1) Scan ExistingRDD[user_id#123,amount#789,timestamp#234]\n\n(1) Scan ExistingRDD\n   Output [1]: [user_id#123, amount#789, timestamp#234]\n   PushedFilters: [IsNotNull(timestamp#234), GreaterThan(timestamp#234, SubtractTimestamp(current_timestamp(), 3600000, false))]\n   ReadSchema: struct<user_id:int,amount:double,timestamp:timestamp>"
+            },
+            {
+              "id": "query-2",
+              "query": "SELECT product_id, SUM(quantity) as total_sold, AVG(price) as avg_price FROM orders WHERE order_date >= '2024-12-01' GROUP BY product_id ORDER BY total_sold DESC LIMIT 100",
+              "status": "SUCCEEDED",
+              "executionTime": 4200,
+              "rowsProcessed": 100,
+              "startTime": 1703068805000,
+              "endTime": 1703068809200,
+              "logicalPlan": "GlobalLimit 100\n  +- LocalLimit 100\n     +- Sort [total_sold#456L DESC NULLS LAST], true\n        +- Aggregate [product_id#123], [product_id#123, sum(quantity#789) AS total_sold#456L, avg(price#890) AS avg_price#901D]\n           +- Filter (order_date#234 >= 2024-12-01)\n              +- Relation[product_id#123,quantity#789,price#890,order_date#234] orders",
+              "physicalPlan": "TakeOrderedAndProject(limit=100, orderBy=[total_sold#456L DESC NULLS LAST], output=[product_id#123,total_sold#456L,avg_price#901D])\n  +- *(2) HashAggregate(keys=[product_id#123], functions=[sum(quantity#789), avg(price#890)])\n     +- Exchange hashpartitioning(product_id#123, 200)\n        +- *(1) HashAggregate(keys=[product_id#123], functions=[partial_sum(quantity#789), partial_avg(price#890)])\n           +- *(1) Project [product_id#123, quantity#789, price#890]\n              +- *(1) Filter (order_date#234 >= 2024-12-01)\n                 +- *(1) Scan ExistingRDD[product_id#123,quantity#789,price#890,order_date#234]",
+              "explainPlan": "== Physical Plan ==\nTakeOrderedAndProject(limit=100, orderBy=[total_sold#456L DESC NULLS LAST], output=[product_id#123,total_sold#456L,avg_price#901D])\n+- *(2) HashAggregate(keys=[product_id#123], functions=[sum(quantity#789), avg(price#890)])\n   +- Exchange hashpartitioning(product_id#123, 200)\n      +- *(1) HashAggregate(keys=[product_id#123], functions=[partial_sum(quantity#789), partial_avg(price#890)])\n         +- *(1) Project [product_id#123, quantity#789, price#890]\n            +- *(1) Filter (order_date#234 >= 2024-12-01)\n               +- *(1) Scan ExistingRDD[product_id#123,quantity#789,price#890,order_date#234]\n\n(1) Scan ExistingRDD\n   Output [4]: [product_id#123, quantity#789, price#890, order_date#234]\n   PushedFilters: [IsNotNull(order_date#234), GreaterThanOrEqual(order_date#234, 2024-12-01)]\n   ReadSchema: struct<product_id:int,quantity:int,price:double,order_date:date>"
+            },
+            {
+              "id": "query-3",
+              "query": "WITH user_metrics AS (SELECT user_id, COUNT(*) as orders FROM orders GROUP BY user_id) SELECT AVG(orders) as avg_orders_per_user FROM user_metrics",
+              "status": "RUNNING",
+              "executionTime": 0,
+              "rowsProcessed": 0,
+              "startTime": 1703068810000,
+              "endTime": 0,
+              "logicalPlan": "Aggregate [avg(orders#456L) AS avg_orders_per_user#789D]\n  +- SubqueryAlias user_metrics\n     +- Aggregate [user_id#123], [user_id#123, count(1) AS orders#456L]\n        +- Relation[user_id#123] orders",
+              "physicalPlan": "*(2) HashAggregate(keys=[], functions=[avg(orders#456L)])\n  +- Exchange SinglePartition\n     +- *(1) HashAggregate(keys=[], functions=[partial_avg(orders#456L)])\n        +- SubqueryAlias user_metrics\n           +- *(3) HashAggregate(keys=[user_id#123], functions=[count(1)])\n              +- Exchange hashpartitioning(user_id#123, 200)\n                 +- *(2) HashAggregate(keys=[user_id#123], functions=[partial_count(1)])\n                    +- *(2) Project [user_id#123]\n                       +- *(2) Scan ExistingRDD[user_id#123]",
+              "explainPlan": "== Physical Plan ==\n*(2) HashAggregate(keys=[], functions=[avg(orders#456L)])\n+- Exchange SinglePartition\n   +- *(1) HashAggregate(keys=[], functions=[partial_avg(orders#456L)])\n      +- SubqueryAlias user_metrics\n         +- *(3) HashAggregate(keys=[user_id#123], functions=[count(1)])\n            +- Exchange hashpartitioning(user_id#123, 200)\n               +- *(2) HashAggregate(keys=[user_id#123], functions=[partial_count(1)])\n                  +- *(2) Project [user_id#123]\n                     +- *(2) Scan ExistingRDD[user_id#123]\n\n(2) Scan ExistingRDD\n   Output [1]: [user_id#123]\n   ReadSchema: struct<user_id:int>"
+            },
+            {
+              "id": "query-4",
+              "query": "SELECT * FROM (SELECT user_id, order_id, amount, ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY amount DESC) as rank FROM orders) WHERE rank <= 5",
+              "status": "SUCCEEDED",
+              "executionTime": 5600,
+              "rowsProcessed": 50000,
+              "startTime": 1703068815000,
+              "endTime": 1703068820600,
+              "logicalPlan": "Filter (rank#456 <= 5)\n  +- Project [user_id#123, order_id#234, amount#789, rank#456]\n     +- Window [row_number() windowspecdefinition(user_id#123, amount#789 DESC NULLS LAST, specifiedwindowframe(RowFrame, unboundedpreceding$(), currentrow$())) AS rank#456]\n        +- Relation[user_id#123,order_id#234,amount#789] orders",
+              "physicalPlan": "*(1) Filter (rank#456 <= 5)\n  +- Window [row_number() windowspecdefinition(user_id#123, amount#789 DESC NULLS LAST, specifiedwindowframe(RowFrame, unboundedpreceding$(), currentrow$())) AS rank#456]\n     +- *(2) Sort [user_id#123 ASC NULLS FIRST, amount#789 DESC NULLS LAST], false, 0\n        +- Exchange hashpartitioning(user_id#123, 200)\n           +- *(1) Sort [user_id#123 ASC NULLS FIRST, amount#789 DESC NULLS LAST], false, 0\n              +- *(1) Project [user_id#123, order_id#234, amount#789]\n                 +- *(1) Scan ExistingRDD[user_id#123,order_id#234,amount#789]",
+              "explainPlan": "== Physical Plan ==\n*(1) Filter (rank#456 <= 5)\n+- Window [row_number() windowspecdefinition(user_id#123, amount#789 DESC NULLS LAST, specifiedwindowframe(RowFrame, unboundedpreceding$(), currentrow$())) AS rank#456]\n   +- *(2) Sort [user_id#123 ASC NULLS FIRST, amount#789 DESC NULLS LAST], false, 0\n      +- Exchange hashpartitioning(user_id#123, 200)\n         +- *(1) Sort [user_id#123 ASC NULLS FIRST, amount#789 DESC NULLS LAST], false, 0\n            +- *(1) Project [user_id#123, order_id#234, amount#789]\n               +- *(1) Scan ExistingRDD[user_id#123,order_id#234,amount#789]\n\n(1) Scan ExistingRDD\n   Output [3]: [user_id#123, order_id#234, amount#789]\n   ReadSchema: struct<user_id:int,order_id:int,amount:double>"
+            },
+            {
+              "id": "query-5",
+              "query": "SELECT a.user_id, a.order_id, b.product_name FROM orders a JOIN products b ON a.product_id = b.product_id WHERE a.amount > 100",
+              "status": "FAILED",
+              "executionTime": 0,
+              "rowsProcessed": 0,
+              "startTime": 1703068821000,
+              "endTime": 1703068821500,
+              "logicalPlan": "Join Inner, (product_id#123 = product_id#456)\n  +- Filter (amount#789 > 100)\n     +- Relation[user_id#123,order_id#234,product_id#123,amount#789] orders\n  +- Relation[product_id#456,product_name#890] products",
+              "physicalPlan": "*(3) BroadcastHashJoin [product_id#123], [product_id#456], Inner, BuildRight\n  +- *(1) Filter (amount#789 > 100)\n     +- *(1) Project [user_id#123, order_id#234, product_id#123, amount#789]\n        +- *(1) Scan ExistingRDD[user_id#123,order_id#234,product_id#123,amount#789] orders\n  +- BroadcastExchange HashedRelationBroadcastMode(List(input[1, int, false]))\n     +- *(2) Project [product_id#456, product_name#890]\n        +- *(2) Scan ExistingRDD[product_id#456,product_name#890] products",
+              "explainPlan": "== Physical Plan ==\n*(3) BroadcastHashJoin [product_id#123], [product_id#456], Inner, BuildRight\n+- *(1) Filter (amount#789 > 100)\n   +- *(1) Project [user_id#123, order_id#234, product_id#123, amount#789]\n      +- *(1) Scan ExistingRDD[user_id#123,order_id#234,product_id#123,amount#789] orders\n+- BroadcastExchange HashedRelationBroadcastMode(List(input[1, int, false]))\n   +- *(2) Project [product_id#456, product_name#890]\n      +- *(2) Scan ExistingRDD[product_id#456,product_name#890] products\n\nError: Broadcast timeout after 300 seconds"
+            }
+          ],
+          "storageLevels": [
+            {
+              "id": "rdd-1",
+              "rddId": "rdd-user-events",
+              "name": "User Events RDD",
+              "storageLevel": "MEMORY_AND_DISK",
+              "memorySize": 2147483648,
+              "diskSize": 4294967296,
+              "cached": true
+            },
+            {
+              "id": "rdd-2",
+              "rddId": "rdd-order-aggregates",
+              "name": "Order Aggregates RDD",
+              "storageLevel": "MEMORY_ONLY",
+              "memorySize": 1073741824,
+              "diskSize": 0,
+              "cached": true
+            },
+            {
+              "id": "rdd-3",
+              "rddId": "rdd-joined-data",
+              "name": "Joined Data RDD",
+              "storageLevel": "MEMORY_AND_DISK_SER",
+              "memorySize": 536870912,
+              "diskSize": 1073741824,
+              "cached": true
+            },
+            {
+              "id": "rdd-4",
+              "rddId": "rdd-transformed-data",
+              "name": "Transformed Data RDD",
+              "storageLevel": "DISK_ONLY",
+              "memorySize": 0,
+              "diskSize": 2147483648,
+              "cached": true
+            },
+            {
+              "id": "rdd-5",
+              "rddId": "rdd-cached-results",
+              "name": "Cached Results RDD",
+              "storageLevel": "MEMORY_ONLY_SER",
+              "memorySize": 805306368,
+              "diskSize": 0,
+              "cached": true
+            },
+            {
+              "id": "rdd-6",
+              "rddId": "rdd-off-heap",
+              "name": "Off-Heap Storage RDD",
+              "storageLevel": "OFF_HEAP",
+              "memorySize": 1610612736,
+              "diskSize": 0,
+              "cached": true
+            },
+            {
+              "id": "rdd-7",
+              "rddId": "rdd-replicated",
+              "name": "Replicated RDD",
+              "storageLevel": "MEMORY_AND_DISK_2",
+              "memorySize": 1073741824,
+              "diskSize": 2147483648,
+              "cached": true
+            },
+            {
+              "id": "rdd-8",
+              "rddId": "rdd-temp-data",
+              "name": "Temporary Data RDD",
+              "storageLevel": "NONE",
+              "memorySize": 0,
+              "diskSize": 0,
+              "cached": false
+            }
+          ],
+          "environment": {
+            "SPARK_HOME": "/opt/spark",
+            "JAVA_HOME": "/usr/lib/jvm/java-11-openjdk",
+            "PYSPARK_PYTHON": "/usr/bin/python3",
+            "HADOOP_CONF_DIR": "/etc/hadoop/conf",
+            "SPARK_CONF_DIR": "/opt/spark/conf",
+            "SPARK_MASTER": "spark://spark-master:7077",
+            "SPARK_APP_NAME": "data-processing-pipeline",
+            "SPARK_DRIVER_MEMORY": "8g",
+            "SPARK_EXECUTOR_MEMORY": "16g",
+            "SPARK_EXECUTOR_CORES": "8",
+            "SPARK_DEFAULT_PARALLELISM": "200",
+            "SPARK_SQL_SHUFFLE_PARTITIONS": "200",
+            "SPARK_SERIALIZER": "org.apache.spark.serializer.KryoSerializer",
+            "SPARK_KRYO_REGISTRATOR": "com.example.MyKryoRegistrator",
+            "SPARK_SQL_EXECUTION_ARROW_ENABLED": "true",
+            "SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH": "10000",
+            "SPARK_DYNAMIC_ALLOCATION_ENABLED": "true",
+            "SPARK_DYNAMIC_ALLOCATION_MIN_EXECUTORS": "3",
+            "SPARK_DYNAMIC_ALLOCATION_MAX_EXECUTORS": "30",
+            "SPARK_DYNAMIC_ALLOCATION_INITIAL_EXECUTORS": "8",
+            "SPARK_SHUFFLE_SERVICE_ENABLED": "true",
+            "SPARK_NETWORK_TIMEOUT": "300s",
+            "SPARK_EXECUTOR_HEARTBEAT_INTERVAL": "10s",
+            "SPARK_BLOCK_MANAGER_PORT": "9999",
+            "SPARK_DRIVER_PORT": "7077",
+            "SPARK_UI_PORT": "4040",
+            "SPARK_HISTORY_SERVER_URL": "http://spark-history:18080",
+            "HADOOP_HOME": "/opt/hadoop",
+            "HIVE_HOME": "/opt/hive",
+            "HIVE_CONF_DIR": "/opt/hive/conf",
+            "YARN_CONF_DIR": "/etc/hadoop/conf",
+            "SCALA_HOME": "/opt/scala",
+            "MAVEN_HOME": "/opt/maven",
+            "PATH": "/opt/spark/bin:/usr/lib/jvm/java-11-openjdk/bin:/usr/bin:/bin",
+            "LD_LIBRARY_PATH": "/opt/hadoop/lib/native",
+            "SPARK_LOCAL_DIRS": "/tmp/spark-local",
+            "SPARK_WORKER_DIR": "/tmp/spark-worker",
+            "SPARK_LOG_DIR": "/var/log/spark",
+            "SPARK_PID_DIR": "/var/run/spark"
+          },
+          "jobCreationRate": 5,
+          "averageJobDuration": 900000,
+          "failureRate": 0.015,
+          "dataProcessingRate": 419430400,
+          "shuffleIntensity": 0.45,
+          "executorFailureRate": 0.003,
+          "durationVariation": 0.3
+        }
+      }
+    },
+    {
+      "id": "clickhouse-sink",
+      "type": "clickhouse",
+      "position": { "x": 1200, "y": 400 },
+      "data": {
+        "label": "ClickHouse Analytics DB",
+        "config": {
+          "enabled": true,
+          "host": "clickhouse-cluster",
+          "port": 8123,
+          "database": "analytics",
+          "username": "spark_writer",
+          "password": "secure_password_456",
+          "cluster": "analytics-cluster",
+          "engine": "MergeTree",
+          "replication": true,
+          "compression": "LZ4",
+          "maxMemoryUsage": 40000000000,
+          "tables": [
+            {
+              "name": "user_events_aggregated",
+              "rows": 250000000,
+              "size": 53687091200,
+              "engine": "MergeTree"
+            },
+            {
+              "name": "order_analytics",
+              "rows": 500000000,
+              "size": 107374182400,
+              "engine": "MergeTree"
+            },
+            {
+              "name": "real_time_metrics",
+              "rows": 5000000,
+              "size": 2684354560,
+              "engine": "MergeTree"
+            },
+            {
+              "name": "user_behavior",
+              "rows": 100000000,
+              "size": 21474836480,
+              "engine": "MergeTree"
+            }
+          ],
+          "maxConnections": 200,
+          "queryLatency": 45,
+          "indexCount": 50
+        }
+      }
+    },
+    {
+      "id": "kafka-sink",
+      "type": "kafka",
+      "position": { "x": 1200, "y": 600 },
+      "data": {
+        "label": "Kafka Sink Cluster",
+        "config": {
+          "enabled": true,
+          "brokers": ["kafka-sink-1:9092", "kafka-sink-2:9092", "kafka-sink-3:9092"],
+          "topics": [
+            {
+              "name": "spark-processed",
+              "partitions": 12,
+              "replication": 3
+            },
+            {
+              "name": "analytics-results",
+              "partitions": 16,
+              "replication": 3
+            },
+            {
+              "name": "ml-predictions",
+              "partitions": 8,
+              "replication": 3
+            }
+          ],
+          "topicCount": 3,
+          "partitions": 12,
+          "replicationFactor": 3,
+          "throughputMsgs": 80000,
+          "groupId": "spark-producer-group",
+          "clientId": "kafka-sink-client"
+        }
+      }
+    },
+    {
+      "id": "redis-cache",
+      "type": "redis",
+      "position": { "x": 700, "y": 800 },
+      "data": {
+        "label": "Redis Cache",
+        "config": {
+          "enabled": true,
+          "host": "redis-cluster",
+          "port": 6379,
+          "password": "redis_password_789",
+          "maxMemory": "16gb",
+          "maxMemoryPolicy": "allkeys-lru",
+          "databases": 16,
+          "persistence": {
+            "enabled": true,
+            "type": "aof"
+          },
+          "clustering": {
+            "enabled": true,
+            "nodes": 6
+          },
+          "keys": 2000000,
+          "hits": 96,
+          "misses": 4,
+          "evictions": 5000
+        }
+      }
+    },
+    {
+      "id": "prometheus",
+      "type": "prometheus",
+      "position": { "x": 700, "y": 200 },
+      "data": {
+        "label": "Prometheus",
+        "config": {
+          "enabled": true,
+          "scrapeInterval": 15000,
+          "evaluationInterval": 15000,
+          "retentionTime": "30d",
+          "targets": [
+            {
+              "job": "spark-metrics",
+              "targets": ["spark-master:8080", "spark-worker-1:8081", "spark-worker-2:8081", "spark-worker-3:8081"],
+              "scrapeInterval": "10s"
+            },
+            {
+              "job": "kafka-metrics",
+              "targets": ["kafka-1:9092", "kafka-2:9092"],
+              "scrapeInterval": "15s"
+            },
+            {
+              "job": "clickhouse-metrics",
+              "targets": ["clickhouse-cluster:8123"],
+              "scrapeInterval": "30s"
+            },
+            {
+              "job": "postgres-metrics",
+              "targets": ["postgres-source:5432"],
+              "scrapeInterval": "30s"
+            },
+            {
+              "job": "redis-metrics",
+              "targets": ["redis-cluster:6379"],
+              "scrapeInterval": "15s"
+            }
+          ],
+          "rules": [
+            {
+              "name": "spark_job_duration",
+              "expr": "spark_job_duration_seconds > 600",
+              "for": "5m"
+            },
+            {
+              "name": "high_memory_usage",
+              "expr": "spark_executor_memory_used / spark_executor_memory_max > 0.9",
+              "for": "2m"
+            },
+            {
+              "name": "high_error_rate",
+              "expr": "spark_job_error_rate > 0.1",
+              "for": "3m"
+            },
+            {
+              "name": "executor_failure",
+              "expr": "spark_executor_failures > 0",
+              "for": "1m"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "grafana",
+      "type": "grafana",
+      "position": { "x": 1000, "y": 200 },
+      "data": {
+        "label": "Grafana",
+        "config": {
+          "enabled": true,
+          "datasources": [
+            {
+              "name": "Prometheus",
+              "type": "prometheus",
+              "url": "http://prometheus:9090",
+              "access": "proxy"
+            },
+            {
+              "name": "ClickHouse",
+              "type": "clickhouse",
+              "url": "http://clickhouse-cluster:8123",
+              "access": "proxy"
+            }
+          ],
+          "dashboards": [
+            {
+              "name": "Spark Cluster Overview",
+              "uid": "spark-overview",
+              "panels": 20
+            },
+            {
+              "name": "Data Pipeline Metrics",
+              "uid": "data-pipeline",
+              "panels": 15
+            },
+            {
+              "name": "Job Performance",
+              "uid": "job-performance",
+              "panels": 12
+            },
+            {
+              "name": "Resource Utilization",
+              "uid": "resource-util",
+              "panels": 10
+            }
+          ],
+          "alerting": {
+            "enabled": true,
+            "notificationChannels": 5
+          }
+        }
+      }
+    },
+    {
+      "id": "kubernetes-cluster",
+      "type": "kubernetes",
+      "position": { "x": 700, "y": 1000 },
+      "data": {
+        "label": "Kubernetes Cluster",
+        "config": {
+          "enabled": true,
+          "namespace": "spark-pipeline",
+          "nodes": [
+            {
+              "name": "k8s-node-1",
+              "role": "worker",
+              "cpu": "32",
+              "memory": "128Gi",
+              "status": "Ready"
+            },
+            {
+              "name": "k8s-node-2",
+              "role": "worker",
+              "cpu": "32",
+              "memory": "128Gi",
+              "status": "Ready"
+            },
+            {
+              "name": "k8s-node-3",
+              "role": "worker",
+              "cpu": "32",
+              "memory": "128Gi",
+              "status": "Ready"
+            },
+            {
+              "name": "k8s-node-4",
+              "role": "worker",
+              "cpu": "32",
+              "memory": "128Gi",
+              "status": "Ready"
+            },
+            {
+              "name": "k8s-master",
+              "role": "master",
+              "cpu": "16",
+              "memory": "64Gi",
+              "status": "Ready"
+            }
+          ],
+          "pods": [
+            {
+              "name": "spark-driver",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            },
+            {
+              "name": "spark-executor-1",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            },
+            {
+              "name": "spark-executor-2",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            },
+            {
+              "name": "spark-executor-3",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            },
+            {
+              "name": "kafka-broker-1",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            },
+            {
+              "name": "clickhouse-server",
+              "namespace": "spark-pipeline",
+              "status": "Running",
+              "containers": 1
+            }
+          ],
+          "services": [
+            {
+              "name": "spark-master",
+              "type": "ClusterIP",
+              "ports": [{"port": 7077, "targetPort": 7077}, {"port": 8080, "targetPort": 8080}]
+            },
+            {
+              "name": "kafka-service",
+              "type": "ClusterIP",
+              "ports": [{"port": 9092, "targetPort": 9092}]
+            },
+            {
+              "name": "clickhouse-service",
+              "type": "ClusterIP",
+              "ports": [{"port": 8123, "targetPort": 8123}]
+            }
+          ],
+          "deployments": [
+            {
+              "name": "spark-driver-deployment",
+              "replicas": 1,
+              "ready": 1
+            },
+            {
+              "name": "spark-executor-deployment",
+              "replicas": 8,
+              "ready": 8
+            }
+          ],
+          "configMaps": [
+            {
+              "name": "spark-config",
+              "namespace": "spark-pipeline"
+            }
+          ],
+          "secrets": [
+            {
+              "name": "spark-secrets",
+              "namespace": "spark-pipeline"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "conn-kafka-to-spark",
+      "source": "kafka-source",
+      "target": "spark-cluster",
+      "type": "async",
+      "label": "Streaming Data",
+      "data": {
+        "latencyMs": 8,
+        "bandwidthMbps": 2000,
+        "priorityLevel": "high"
+      },
+      "sourcePort": 0,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-postgres-to-spark",
+      "source": "postgres-source",
+      "target": "spark-cluster",
+      "type": "sync",
+      "label": "Batch Data",
+      "data": {
+        "latencyMs": 20,
+        "bandwidthMbps": 800,
+        "priorityLevel": "high"
+      },
+      "sourcePort": 0,
+      "targetPort": 1
+    },
+    {
+      "id": "conn-spark-to-clickhouse",
+      "source": "spark-cluster",
+      "target": "clickhouse-sink",
+      "type": "http",
+      "label": "Analytics Results",
+      "data": {
+        "latencyMs": 40,
+        "bandwidthMbps": 1500,
+        "priorityLevel": "high"
+      },
+      "sourcePort": 0,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-spark-to-kafka-sink",
+      "source": "spark-cluster",
+      "target": "kafka-sink",
+      "type": "async",
+      "label": "Processed Events",
+      "data": {
+        "latencyMs": 12,
+        "bandwidthMbps": 1000,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-spark-to-redis",
+      "source": "spark-cluster",
+      "target": "redis-cache",
+      "type": "sync",
+      "label": "Cache Updates",
+      "data": {
+        "latencyMs": 2,
+        "bandwidthMbps": 500,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 2,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-spark-to-prometheus",
+      "source": "spark-cluster",
+      "target": "prometheus",
+      "type": "http",
+      "label": "Metrics",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 20,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 3,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-prometheus-to-grafana",
+      "source": "prometheus",
+      "target": "grafana",
+      "type": "http",
+      "label": "Metrics Data",
+      "data": {
+        "latencyMs": 8,
+        "bandwidthMbps": 150,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 0,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-clickhouse-to-grafana",
+      "source": "clickhouse-sink",
+      "target": "grafana",
+      "type": "http",
+      "label": "Query Data",
+      "data": {
+        "latencyMs": 25,
+        "bandwidthMbps": 100,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 0,
+      "targetPort": 1
+    },
+    {
+      "id": "conn-kafka-to-redis",
+      "source": "kafka-source",
+      "target": "redis-cache",
+      "type": "async",
+      "label": "Event Cache",
+      "data": {
+        "latencyMs": 3,
+        "bandwidthMbps": 200,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-kafka-to-prometheus",
+      "source": "kafka-source",
+      "target": "prometheus",
+      "type": "http",
+      "label": "Kafka Metrics",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 2,
+      "targetPort": 1
+    },
+    {
+      "id": "conn-postgres-to-prometheus",
+      "source": "postgres-source",
+      "target": "prometheus",
+      "type": "http",
+      "label": "PostgreSQL Metrics",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 2
+    },
+    {
+      "id": "conn-spark-to-kubernetes",
+      "source": "spark-cluster",
+      "target": "kubernetes-cluster",
+      "type": "http",
+      "label": "Resource Management",
+      "data": {
+        "latencyMs": 10,
+        "bandwidthMbps": 50,
+        "priorityLevel": "medium"
+      },
+      "sourcePort": 4,
+      "targetPort": 0
+    },
+    {
+      "id": "conn-clickhouse-to-prometheus",
+      "source": "clickhouse-sink",
+      "target": "prometheus",
+      "type": "http",
+      "label": "ClickHouse Metrics",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 3
+    },
+    {
+      "id": "conn-redis-to-prometheus",
+      "source": "redis-cache",
+      "target": "prometheus",
+      "type": "http",
+      "label": "Redis Metrics",
+      "data": {
+        "latencyMs": 5,
+        "bandwidthMbps": 10,
+        "priorityLevel": "low"
+      },
+      "sourcePort": 1,
+      "targetPort": 4
+    }
+  ]
+}

@@ -51,6 +51,7 @@ import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { TraefikEmulationEngine } from './TraefikEmulationEngine';
+import { SparkEmulationEngine } from './SparkEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
@@ -304,6 +305,9 @@ export class EmulationEngine {
 
   // Traefik emulation engines per node
   private traefikEngines: Map<string, TraefikEmulationEngine> = new Map();
+
+  // Spark emulation engines per node
+  private sparkEngines: Map<string, SparkEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -574,6 +578,9 @@ export class EmulationEngine {
             const engine = this.ansibleEngines.get(node.id)!;
             engine.updateConfig(node);
           }
+        }
+        if (node.type === 'spark') {
+          this.initializeSparkEngine(node);
         }
         // Initialize Harbor emulation engine for Harbor nodes
         if (node.type === 'harbor') {
@@ -916,6 +923,17 @@ export class EmulationEngine {
         } else {
           // Update config if engine already exists
           const engine = this.ansibleEngines.get(node.id)!;
+          engine.updateConfig(node);
+        }
+      }
+      
+      // Initialize Spark emulation engine for Spark nodes
+      if (node.type === 'spark') {
+        if (!this.sparkEngines.has(node.id)) {
+          this.initializeSparkEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.sparkEngines.get(node.id)!;
           engine.updateConfig(node);
         }
       }
@@ -1436,6 +1454,29 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Spark updates (jobs, stages, executors, metrics)
+    for (const [nodeId, sparkEngine] of this.sparkEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        sparkEngine.performUpdate(now);
+        
+        // Metrics are already updated in simulateSpark method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'spark', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1616,6 +1657,9 @@ export class EmulationEngine {
           break;
         case 'docker':
           this.simulateDocker(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'spark':
+          this.simulateSpark(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -3914,7 +3958,7 @@ export class EmulationEngine {
       const redisConfig = node.data.config as any;
       
       // Sync keys from UI configuration with runtime state
-      if (redisConfig?.keys) {
+      if (redisConfig?.keys && Array.isArray(redisConfig.keys)) {
         routingEngine.syncKeysFromConfig(redisConfig.keys);
       }
       
@@ -6263,6 +6307,71 @@ export class EmulationEngine {
   }
 
   /**
+   * Spark emulation
+   */
+  private simulateSpark(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.sparkEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const sparkMetrics = engine.getMetrics();
+    
+    // Throughput: data processing throughput (bytes per second converted to messages per second)
+    // Assuming average message size of 1KB
+    const avgMessageSize = 1024; // bytes
+    metrics.throughput = sparkMetrics.throughput / avgMessageSize;
+    
+    // Latency: average job duration (convert from ms to ms, already in ms)
+    metrics.latency = sparkMetrics.averageJobDuration || 0;
+    
+    // Error rate: failed jobs / total jobs
+    const totalJobs = sparkMetrics.succeededJobs + sparkMetrics.failedJobs;
+    metrics.errorRate = totalJobs > 0 
+      ? sparkMetrics.failedJobs / totalJobs 
+      : 0;
+    
+    // Utilization: active jobs / max concurrent jobs (assuming max 5)
+    const maxConcurrentJobs = 5;
+    metrics.utilization = Math.min(1, sparkMetrics.activeJobs / maxConcurrentJobs);
+    
+    // Also consider executor utilization
+    if (sparkMetrics.totalExecutors > 0) {
+      const executorUtilization = sparkMetrics.aliveExecutors / sparkMetrics.totalExecutors;
+      metrics.utilization = Math.max(metrics.utilization, executorUtilization * 0.7); // 70% weight
+    }
+    
+    metrics.customMetrics = {
+      totalJobs: sparkMetrics.totalJobs,
+      activeJobs: sparkMetrics.activeJobs,
+      succeededJobs: sparkMetrics.succeededJobs,
+      failedJobs: sparkMetrics.failedJobs,
+      totalStages: sparkMetrics.totalStages,
+      activeStages: sparkMetrics.activeStages,
+      totalExecutors: sparkMetrics.totalExecutors,
+      aliveExecutors: sparkMetrics.aliveExecutors,
+      totalCores: sparkMetrics.totalCores,
+      totalMemory: sparkMetrics.totalMemory,
+      totalMemoryUsed: sparkMetrics.totalMemoryUsed,
+      totalInputBytes: sparkMetrics.totalInputBytes,
+      totalOutputBytes: sparkMetrics.totalOutputBytes,
+      totalShuffleRead: sparkMetrics.totalShuffleRead,
+      totalShuffleWrite: sparkMetrics.totalShuffleWrite,
+      jobsPerHour: sparkMetrics.jobsPerHour,
+      averageJobDuration: sparkMetrics.averageJobDuration,
+      throughput: sparkMetrics.throughput,
+    };
+  }
+
+  /**
    * Traefik emulation
    */
   private simulateTraefik(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -7560,7 +7669,7 @@ export class EmulationEngine {
       persistenceType: config.persistenceType || 'rdb',
       enableCluster: config.enableCluster ?? false,
       clusterNodes: config.clusterNodes || [],
-      keys: config.keys || [],
+      keys: Array.isArray(config.keys) ? config.keys : [],
     });
 
     this.redisRoutingEngines.set(node.id, routingEngine);
@@ -7892,6 +8001,15 @@ export class EmulationEngine {
     const engine = new AnsibleEmulationEngine();
     engine.initializeConfig(node);
     this.ansibleEngines.set(node.id, engine);
+  }
+
+  /**
+   * Initialize Spark Emulation Engine for Spark node
+   */
+  private initializeSparkEngine(node: CanvasNode): void {
+    const engine = new SparkEmulationEngine();
+    engine.initializeConfig(node);
+    this.sparkEngines.set(node.id, engine);
   }
 
   /**
@@ -8448,6 +8566,10 @@ export class EmulationEngine {
    */
   public getDockerEmulationEngine(nodeId: string): DockerEmulationEngine | undefined {
     return this.dockerEngines.get(nodeId);
+  }
+
+  public getSparkEmulationEngine(nodeId: string): SparkEmulationEngine | undefined {
+    return this.sparkEngines.get(nodeId);
   }
 
   public getKubernetesEmulationEngine(nodeId: string): KubernetesEmulationEngine | undefined {

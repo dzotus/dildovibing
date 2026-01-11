@@ -136,7 +136,8 @@ export class RedisRoutingEngine {
     }
     
     // Load initial keys from config
-    if (config.keys) {
+    // Check if keys is an array (not a number representing key count)
+    if (config.keys && Array.isArray(config.keys)) {
       for (const key of config.keys) {
         this.setKey(key.key, key.type, key.value, key.ttl);
       }

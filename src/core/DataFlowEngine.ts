@@ -145,6 +145,9 @@ export class DataFlowEngine {
     this.registerHandler('terraform', this.createTerraformHandler());
     this.registerHandler('harbor', this.createHarborHandler());
     this.registerHandler('docker', this.createDockerHandler());
+    
+    // Big Data / ML
+    this.registerHandler('spark', this.createSparkHandler());
   }
 
   /**
@@ -5465,6 +5468,123 @@ export class DataFlowEngine {
     }
     
     return results;
+  }
+
+  /**
+   * Create handler for Spark component
+   */
+  private createSparkHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getSparkEmulationEngine(node.id);
+
+        if (!engine) {
+          message.status = 'failed';
+          message.error = 'Spark engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'process-data';
+
+        // Spark operations: process-data (create job), query (SQL query), streaming (streaming job)
+        if (operation === 'process-data' || operation === 'job' || !operation) {
+          // Process incoming data - create a Spark job
+          const dataSize = message.size || 0;
+          const jobName = payload.jobName || `Data Processing Job ${Date.now()}`;
+          
+          // Create a new Spark job
+          const sparkJob = {
+            id: `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            name: jobName,
+            status: 'RUNNING' as const,
+            startTime: Date.now(),
+            stages: 3 + Math.floor(Math.random() * 5), // 3-7 stages
+            tasks: 10 + Math.floor(Math.random() * 90), // 10-100 tasks
+            executors: engine.getExecutors().filter(e => e.status === 'ALIVE').length,
+            inputBytes: dataSize,
+            outputBytes: Math.floor(dataSize * 0.8), // 80% output
+            shuffleRead: Math.floor(dataSize * 0.3), // 30% shuffle
+            shuffleWrite: Math.floor(dataSize * 0.3),
+            submissionTime: Date.now(),
+          };
+
+          engine.addJob(sparkJob);
+
+          // Simulate processing latency (Spark jobs take time)
+          message.latency = 100 + Math.random() * 200; // 100-300ms initial latency
+          message.status = 'delivered';
+          message.payload = {
+            ...message.payload,
+            sparkJobId: sparkJob.id,
+            jobName: sparkJob.name,
+            status: 'RUNNING',
+            message: 'Spark job created and started',
+          };
+
+          return message;
+        } else if (operation === 'query' || operation === 'sql') {
+          // SQL query operation - use SparkEmulationEngine
+          const sqlQuery = payload.sql || payload.query || '';
+          
+          if (!sqlQuery) {
+            message.status = 'failed';
+            message.error = 'SQL query is required';
+            return message;
+          }
+
+          // Execute SQL query through SparkEmulationEngine
+          const sparkSQLQuery = engine.executeSQL(sqlQuery, Date.now());
+          
+          // Estimate latency based on query
+          const estimatedDuration = sparkSQLQuery.executionTime || 2000;
+          message.latency = estimatedDuration;
+          message.status = 'delivered';
+          message.payload = {
+            ...message.payload,
+            sqlQueryId: sparkSQLQuery.id,
+            explainPlan: sparkSQLQuery.explainPlan,
+            physicalPlan: sparkSQLQuery.physicalPlan,
+            logicalPlan: sparkSQLQuery.logicalPlan,
+            results: this.generateQueryResults('spark', sqlQuery),
+            query: sqlQuery,
+            processed: true,
+            status: 'RUNNING',
+          };
+
+          return message;
+        } else if (operation === 'streaming') {
+          // Streaming job - use SparkEmulationEngine
+          const streamConfig = payload.streamConfig || {};
+          const batchInterval = streamConfig.batchInterval || config.streamingBatchInterval || 1000;
+          const streamingJobName = streamConfig.name || `Streaming Job ${Date.now()}`;
+
+          // Create streaming job through SparkEmulationEngine
+          const streamingJob = engine.createStreamingJob(streamingJobName, batchInterval, Date.now());
+
+          message.latency = batchInterval;
+          message.status = 'delivered';
+          message.payload = {
+            ...message.payload,
+            streamingJobId: streamingJob.id,
+            streaming: true,
+            batchInterval,
+            message: 'Streaming job started',
+            status: 'ACTIVE',
+          };
+
+          return message;
+        } else {
+          // Unknown operation
+          message.status = 'failed';
+          message.error = `Unknown Spark operation: ${operation}`;
+          return message;
+        }
+      },
+
+      getSupportedFormats: () => ['json', 'text', 'binary'],
+    };
   }
 }
 
