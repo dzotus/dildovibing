@@ -149,6 +149,7 @@ export class DataFlowEngine {
     // Big Data / ML
     this.registerHandler('spark', this.createSparkHandler());
     this.registerHandler('tensorflow-serving', this.createTensorFlowServingHandler());
+    this.registerHandler('pytorch-serve', this.createPyTorchServeHandler());
   }
 
   /**
@@ -5599,6 +5600,84 @@ export class DataFlowEngine {
         if (!engine) {
           message.status = 'failed';
           message.error = 'TensorFlow Serving engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        
+        // Extract model name and version from payload or metadata
+        const modelName = payload.model || payload.modelName || message.metadata?.model || message.metadata?.modelName || '';
+        const version = payload.version || message.metadata?.version || '1';
+        const input = payload.input || payload.instances || payload.data || message.payload;
+
+        if (!modelName) {
+          message.status = 'failed';
+          message.error = 'Model name is required';
+          return message;
+        }
+
+        // Add prediction to pending queue - it will be processed in performUpdate
+        // This improves simulation accuracy by processing predictions in the engine's update cycle
+        try {
+          const resultPromise = engine.addPendingPrediction(modelName, version, input);
+          
+          // For simulation, we handle the promise asynchronously
+          // The prediction will be processed in the engine's performUpdate cycle
+          resultPromise.then((result) => {
+            if (result.success) {
+              message.status = 'delivered';
+              message.latency = result.latency;
+              message.payload = {
+                ...message.payload,
+                model: modelName,
+                version: version,
+                latency: result.latency,
+                predictions: result.output,
+              };
+            } else {
+              message.status = 'failed';
+              message.error = result.error || 'Prediction failed';
+            }
+            message.metadata = {
+              ...message.metadata,
+              model: modelName,
+              version: version,
+            };
+          }).catch((error) => {
+            message.status = 'failed';
+            message.error = error instanceof Error ? error.message : 'Prediction error';
+          });
+          
+          // Mark as in-transit while processing
+          message.status = 'in-transit';
+          message.metadata = {
+            ...message.metadata,
+            model: modelName,
+            version: version,
+          };
+        } catch (error) {
+          message.status = 'failed';
+          message.error = error instanceof Error ? error.message : 'Prediction error';
+        }
+
+        return message;
+      },
+
+      getSupportedFormats: () => ['json'],
+    };
+  }
+
+  /**
+   * Create handler for PyTorch Serve component
+   */
+  private createPyTorchServeHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getPyTorchServeEmulationEngine(node.id);
+
+        if (!engine) {
+          message.status = 'failed';
+          message.error = 'PyTorch Serve engine not initialized';
           return message;
         }
 

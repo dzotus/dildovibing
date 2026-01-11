@@ -53,6 +53,7 @@ import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
 import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { SparkEmulationEngine } from './SparkEmulationEngine';
 import { TensorFlowServingEmulationEngine } from './TensorFlowServingEmulationEngine';
+import { PyTorchServeEmulationEngine } from './PyTorchServeEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
@@ -312,6 +313,9 @@ export class EmulationEngine {
 
   // TensorFlow Serving emulation engines per node
   private tensorFlowServingEngines: Map<string, TensorFlowServingEmulationEngine> = new Map();
+
+  // PyTorch Serve emulation engines per node
+  private pytorchServeEngines: Map<string, PyTorchServeEmulationEngine> = new Map();
 
   constructor() {
     this.initializeMetrics();
@@ -1507,6 +1511,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform PyTorch Serve updates (models, predictions, batching, metrics)
+    for (const [nodeId, pytorchServeEngine] of this.pytorchServeEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        pytorchServeEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulatePyTorchServe method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'pytorch-serve', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1693,6 +1721,9 @@ export class EmulationEngine {
           break;
         case 'tensorflow-serving':
           this.simulateTensorFlowServing(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'pytorch-serve':
+          this.simulatePyTorchServe(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6462,6 +6493,63 @@ export class EmulationEngine {
   }
 
   /**
+   * PyTorch Serve emulation
+   */
+  private simulatePyTorchServe(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.pytorchServeEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const pytorchMetrics = engine.getMetrics();
+    
+    // Throughput: predictions per second
+    metrics.throughput = pytorchMetrics.throughput;
+    
+    // Latency: average prediction latency
+    metrics.latency = pytorchMetrics.averageLatency;
+    
+    // Error rate: failed predictions / total predictions
+    metrics.errorRate = pytorchMetrics.errorRate;
+    
+    // Utilization: based on batch utilization and CPU/GPU usage
+    let utilization = pytorchMetrics.batchUtilization;
+    if (pytorchMetrics.gpuUtilization !== undefined) {
+      utilization = Math.max(utilization, pytorchMetrics.gpuUtilization);
+    }
+    utilization = Math.max(utilization, pytorchMetrics.cpuUtilization);
+    metrics.utilization = Math.min(1, utilization);
+    
+    metrics.customMetrics = {
+      totalModels: pytorchMetrics.totalModels,
+      servingModels: pytorchMetrics.servingModels,
+      loadingModels: pytorchMetrics.loadingModels,
+      unavailableModels: pytorchMetrics.unavailableModels,
+      totalPredictions: pytorchMetrics.totalPredictions,
+      successfulPredictions: pytorchMetrics.successfulPredictions,
+      failedPredictions: pytorchMetrics.failedPredictions,
+      averageLatency: pytorchMetrics.averageLatency,
+      p50Latency: pytorchMetrics.p50Latency,
+      p99Latency: pytorchMetrics.p99Latency,
+      requestsPerSecond: pytorchMetrics.requestsPerSecond,
+      throughput: pytorchMetrics.throughput,
+      errorRate: pytorchMetrics.errorRate,
+      batchUtilization: pytorchMetrics.batchUtilization,
+      gpuUtilization: pytorchMetrics.gpuUtilization || 0,
+      memoryUsage: pytorchMetrics.memoryUsage,
+      cpuUtilization: pytorchMetrics.cpuUtilization,
+    };
+  }
+
+  /**
    * Traefik emulation
    */
   private simulateTraefik(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8112,6 +8200,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize PyTorch Serve Emulation Engine for PyTorch Serve node
+   */
+  private initializePyTorchServeEngine(node: CanvasNode): void {
+    const engine = new PyTorchServeEmulationEngine();
+    engine.initializeConfig(node);
+    this.pytorchServeEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize Traefik Emulation Engine for Traefik node
    */
   private initializeTraefikEngine(node: CanvasNode): void {
@@ -8673,6 +8770,10 @@ export class EmulationEngine {
 
   public getTensorFlowServingEmulationEngine(nodeId: string): TensorFlowServingEmulationEngine | undefined {
     return this.tensorFlowServingEngines.get(nodeId);
+  }
+
+  public getPyTorchServeEmulationEngine(nodeId: string): PyTorchServeEmulationEngine | undefined {
+    return this.pytorchServeEngines.get(nodeId);
   }
 
   public getKubernetesEmulationEngine(nodeId: string): KubernetesEmulationEngine | undefined {
