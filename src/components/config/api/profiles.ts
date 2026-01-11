@@ -365,5 +365,160 @@ export const API_PROFILES: Record<string, ComponentProfile> = {
       },
     ],
   },
+  websocket: {
+    id: 'websocket',
+    title: 'WebSocket Server',
+    description: 'Real-time bidirectional communication protocol for full-duplex connections.',
+    badge: 'WebSocket',
+    defaults: {
+      endpoint: 'ws://localhost:8080/ws',
+      protocol: 'ws',
+      enableCompression: true,
+      enablePingPong: true,
+      pingInterval: 30,
+      maxConnections: 1000,
+      maxMessageSize: 1024,
+      roomsEnabled: true,
+      subscriptionsEnabled: true,
+      authentication: {
+        enabled: false,
+        method: 'none',
+      },
+      rateLimit: {
+        enabled: false,
+        messagesPerSecond: 1000,
+        connectionsPerSecond: 100,
+      },
+    },
+    sections: [
+      {
+        id: 'endpoint',
+        title: 'Endpoint Configuration',
+        fields: [
+          {
+            id: 'endpoint',
+            label: 'WebSocket Endpoint',
+            type: 'text',
+            placeholder: 'ws://localhost:8080/ws',
+          },
+          {
+            id: 'protocol',
+            label: 'Protocol',
+            type: 'select',
+            options: [
+              { label: 'WS (WebSocket)', value: 'ws' },
+              { label: 'WSS (Secure WebSocket)', value: 'wss' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'performance',
+        title: 'Performance',
+        fields: [
+          {
+            id: 'enableCompression',
+            label: 'Enable Compression',
+            type: 'toggle',
+            description: 'Compress messages to reduce bandwidth',
+          },
+          {
+            id: 'enablePingPong',
+            label: 'Enable Ping/Pong',
+            type: 'toggle',
+            description: 'Keep-alive mechanism',
+          },
+          {
+            id: 'pingInterval',
+            label: 'Ping Interval',
+            type: 'number',
+            min: 1,
+            max: 300,
+            suffix: 'sec',
+          },
+          {
+            id: 'maxConnections',
+            label: 'Max Connections',
+            type: 'number',
+            min: 1,
+            max: 100000,
+          },
+          {
+            id: 'maxMessageSize',
+            label: 'Max Message Size',
+            type: 'number',
+            min: 1,
+            max: 10240,
+            suffix: 'KB',
+          },
+        ],
+      },
+      {
+        id: 'features',
+        title: 'Features',
+        fields: [
+          {
+            id: 'roomsEnabled',
+            label: 'Enable Rooms',
+            type: 'toggle',
+            description: 'Group connections for broadcasting',
+          },
+          {
+            id: 'subscriptionsEnabled',
+            label: 'Enable Subscriptions',
+            type: 'toggle',
+            description: 'Subscribe to topics for event delivery',
+          },
+        ],
+      },
+      {
+        id: 'security',
+        title: 'Security',
+        fields: [
+          {
+            id: 'authentication.enabled',
+            label: 'Enable Authentication',
+            type: 'toggle',
+            description: 'Require authentication for connections',
+          },
+          {
+            id: 'authentication.method',
+            label: 'Authentication Method',
+            type: 'select',
+            options: [
+              { label: 'Token', value: 'token' },
+              { label: 'API Key', value: 'apiKey' },
+              { label: 'Basic Auth', value: 'basic' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'rate-limiting',
+        title: 'Rate Limiting',
+        fields: [
+          {
+            id: 'rateLimit.enabled',
+            label: 'Enable Rate Limiting',
+            type: 'toggle',
+          },
+          {
+            id: 'rateLimit.messagesPerSecond',
+            label: 'Messages Per Second',
+            type: 'number',
+            min: 1,
+            max: 100000,
+          },
+          {
+            id: 'rateLimit.connectionsPerSecond',
+            label: 'Connections Per Second',
+            type: 'number',
+            min: 1,
+            max: 10000,
+          },
+        ],
+      },
+    ],
+  },
 };
 

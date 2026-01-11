@@ -30,6 +30,7 @@ import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 import { GraphQLEmulationEngine } from './GraphQLEmulationEngine';
 import { SOAPEmulationEngine } from './SOAPEmulationEngine';
+import { WebSocketEmulationEngine } from './WebSocketEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
 import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
 import { alertSystem } from './AlertSystem';
@@ -236,6 +237,9 @@ export class EmulationEngine {
   
   // SOAP emulation engines per node
   private soapEngines: Map<string, SOAPEmulationEngine> = new Map();
+  
+  // WebSocket emulation engines per node
+  private websocketEngines: Map<string, WebSocketEmulationEngine> = new Map();
 
   // Loki emulation engines per node
   private lokiEngines: Map<string, LokiEmulationEngine> = new Map();
@@ -737,6 +741,17 @@ export class EmulationEngine {
         }
       }
 
+      // Initialize WebSocket emulation engine for WebSocket nodes
+      // Always reinitialize to pick up config changes
+      if (node.type === 'websocket') {
+        if (!this.websocketEngines.has(node.id)) {
+          this.initializeWebSocketEngine(node);
+        } else {
+          const engine = this.websocketEngines.get(node.id)!;
+          engine.updateConfig((node.data.config || {}) as any);
+        }
+      }
+
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
@@ -971,6 +986,7 @@ export class EmulationEngine {
         this.grafanaEngines.delete(nodeId);
         this.graphQLEngines.delete(nodeId);
         this.soapEngines.delete(nodeId);
+        this.websocketEngines.delete(nodeId);
         this.lokiEngines.delete(nodeId);
         this.jaegerEngines.delete(nodeId);
         this.lastRabbitMQUpdate.delete(nodeId);
@@ -3607,6 +3623,35 @@ export class EmulationEngine {
   }
 
   /**
+   * Update WebSocket metrics in node config (for UI display)
+   */
+  private updateWebSocketMetricsInConfig(
+    node: CanvasNode,
+    wsEngine: WebSocketEmulationEngine
+  ): void {
+    const config = (node.data.config as any) || {};
+    
+    // Update connections
+    const activeConnections = wsEngine.getActiveConnections();
+    config.connections = activeConnections;
+    config.totalConnections = wsEngine.getWebSocketMetrics().connectionsTotal;
+    config.activeConnections = wsEngine.getWebSocketMetrics().connectionsActive;
+    
+    // Update rooms
+    const rooms = wsEngine.getRooms();
+    config.rooms = rooms;
+    
+    // Update subscriptions
+    const subscriptions = wsEngine.getSubscriptions();
+    config.subscriptions = subscriptions;
+    
+    // Update messages (limited history)
+    const messages = wsEngine.getMessageHistory(100);
+    config.messages = messages;
+    config.totalMessages = wsEngine.getWebSocketMetrics().messagesTotal;
+  }
+
+  /**
    * SQS emulation
    */
   private simulateSQS(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -5129,7 +5174,54 @@ export class EmulationEngine {
       }
     }
     
-    // Default behavior for WebSocket, etc.
+    // For WebSocket, use emulation engine if available
+    if (node.type === 'websocket') {
+      const wsEngine = this.websocketEngines.get(node.id);
+      if (wsEngine) {
+        wsEngine.updateMetrics(hasIncomingConnections, this.simulationTime);
+        const wsMetrics = wsEngine.getWebSocketMetrics();
+        
+        // Calculate metrics from WebSocket engine
+        metrics.throughput = wsMetrics.messagesPerSecond;
+        metrics.latency = wsMetrics.averageLatency;
+        metrics.latencyP50 = wsMetrics.latencyP50;
+        metrics.latencyP99 = wsMetrics.latencyP99;
+        metrics.errorRate = wsMetrics.errorRate;
+        metrics.utilization = wsMetrics.utilization;
+        
+        // Custom metrics from WebSocket engine
+        metrics.customMetrics = {
+          'connections_total': wsMetrics.connectionsTotal,
+          'connections_active': wsMetrics.connectionsActive,
+          'connections_per_second': wsMetrics.connectionsPerSecond,
+          'messages_per_second': wsMetrics.messagesPerSecond,
+          'messages_total': wsMetrics.messagesTotal,
+          'messages_sent': wsMetrics.messagesSent,
+          'messages_received': wsMetrics.messagesReceived,
+          'bytes_sent': wsMetrics.bytesSent,
+          'bytes_received': wsMetrics.bytesReceived,
+          'average_latency': wsMetrics.averageLatency,
+          'latency_p50': wsMetrics.latencyP50 || 0,
+          'latency_p95': wsMetrics.latencyP95 || 0,
+          'latency_p99': wsMetrics.latencyP99 || 0,
+          'error_rate': wsMetrics.errorRate,
+          'connection_error_rate': wsMetrics.connectionErrorRate,
+          'ping_pong_success_rate': wsMetrics.pingPongSuccessRate,
+          'compression_ratio': wsMetrics.compressionRatio,
+          'rooms_count': wsMetrics.roomsCount,
+          'subscriptions_count': wsMetrics.subscriptionsCount,
+          'avg_connections_per_room': wsMetrics.averageConnectionsPerRoom,
+          'avg_subscriptions_per_connection': wsMetrics.averageSubscriptionsPerConnection,
+        };
+        
+        // Update connections, rooms, subscriptions in config
+        this.updateWebSocketMetricsInConfig(node, wsEngine);
+        
+        return;
+      }
+    }
+    
+    // Default behavior for other APIs
     const rps = config.requestsPerSecond || 100;
     const responseLatency = config.responseLatency || 50;
     
@@ -7581,6 +7673,17 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize WebSocket Emulation Engine for WebSocket node
+   */
+  private initializeWebSocketEngine(node: CanvasNode): void {
+    const wsEngine = new WebSocketEmulationEngine();
+    wsEngine.initialize(node, async (sourceId, targetId, message) => {
+      return await dataFlowEngine.sendMessage(sourceId, targetId, message);
+    });
+    this.websocketEngines.set(node.id, wsEngine);
+  }
+
+  /**
    * Initialize Jaeger Emulation Engine for Jaeger node
    */
   private initializeJaegerEngine(node: CanvasNode): void {
@@ -8325,6 +8428,13 @@ export class EmulationEngine {
    */
   public getSOAPEmulationEngine(nodeId: string): SOAPEmulationEngine | undefined {
     return this.soapEngines.get(nodeId);
+  }
+
+  /**
+   * Get WebSocket emulation engine for a node
+   */
+  public getWebSocketEmulationEngine(nodeId: string): WebSocketEmulationEngine | undefined {
+    return this.websocketEngines.get(nodeId);
   }
 
   /**

@@ -2526,7 +2526,98 @@ export class DataFlowEngine {
       };
     }
     
-    // Default handler for other API types (WebSocket)
+    // Special handling for WebSocket
+    if (type === 'websocket') {
+      return {
+        processData: (node, message, config) => {
+          // Get WebSocket emulation engine
+          const wsEngine = emulationEngine.getWebSocketEmulationEngine(node.id);
+          
+          if (wsEngine) {
+            // WebSocket handles bidirectional communication
+            // Messages are processed and can trigger responses or broadcasts
+            const wsConfig = (config as any) || {};
+            const connectionId = (message.metadata?.connectionId as string) || `conn-${Date.now()}`;
+            
+            // Обрабатываем входящее сообщение через движок эмуляции
+            // Это включает broadcast в комнаты, доставку подписчикам и отправку в целевые компоненты
+            const processResult = wsEngine.processIncomingMessage(
+              connectionId,
+              message.payload,
+              message.metadata
+            );
+            
+            // Проверяем, была ли ошибка при обработке
+            if (!processResult.processed) {
+              // Формируем ответ с ошибкой
+              const errorResponse = {
+                status: 'error',
+                type: 'websocket',
+                connectionId,
+                data: message.payload,
+                timestamp: Date.now(),
+                processed: false,
+                error: processResult.error || 'Failed to process message',
+              };
+              
+              message.payload = errorResponse;
+              message.status = 'error';
+              return message;
+            }
+            
+            // Формируем ответ с информацией о обработке
+            const response = {
+              status: 'success',
+              type: 'websocket',
+              connectionId,
+              data: message.payload,
+              timestamp: Date.now(),
+              processed: processResult.processed,
+              broadcastToRoom: processResult.broadcastToRoom,
+              deliveredToSubscriptions: processResult.deliveredToSubscriptions,
+              forwarded: processResult.forwarded,
+            };
+            
+            message.payload = response;
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Fallback if engine not available
+          const response = {
+            status: 'success',
+            data: message.payload,
+            timestamp: Date.now(),
+          };
+          
+          message.payload = response;
+          message.status = 'delivered';
+          return message;
+        },
+        
+        transformData: (node, message, targetType, config) => {
+          // WebSocket can transform between formats
+          const wsConfig = (config as any) || {};
+          
+          // If target expects different format, transform
+          if (targetType === 'rest' && message.format === 'binary') {
+            // Convert binary to JSON for REST
+            message.format = 'json';
+            message.payload = { data: 'Binary data converted to JSON' };
+          } else if (targetType === 'grpc' && message.format === 'text') {
+            // Convert text to JSON for gRPC
+            message.format = 'json';
+            message.payload = { message: message.payload };
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'text', 'binary'],
+      };
+    }
+    
+    // Default handler for other API types
     return {
       processData: (node, message, config) => {
         // APIs process requests and return responses
@@ -2547,12 +2638,7 @@ export class DataFlowEngine {
       },
       
       getSupportedFormats: () => {
-        switch (type) {
-          case 'websocket':
-            return ['json', 'text', 'binary'];
-          default:
-            return ['json'];
-        }
+        return ['json'];
       },
     };
   }
