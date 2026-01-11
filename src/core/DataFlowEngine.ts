@@ -111,6 +111,7 @@ export class DataFlowEngine {
     this.registerHandler('grpc', this.createAPIHandler('grpc'));
     this.registerHandler('graphql', this.createAPIHandler('graphql'));
     this.registerHandler('websocket', this.createAPIHandler('websocket'));
+    this.registerHandler('webhook', this.createWebhookHandler());
     
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
@@ -2640,6 +2641,77 @@ export class DataFlowEngine {
       getSupportedFormats: () => {
         return ['json'];
       },
+    };
+  }
+
+  /**
+   * Create handler for Webhook endpoint
+   */
+  private createWebhookHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        // Get Webhook emulation engine from emulation engine
+        const webhookEngine = emulationEngine.getWebhookEmulationEngine(node.id);
+        
+        if (!webhookEngine) {
+          // No engine, use default behavior
+          message.status = 'delivered';
+          return message;
+        }
+
+        // Extract webhook request information from message
+        const payload = message.payload as any;
+        const url = payload?.url || message.metadata?.url || payload?.path || '/';
+        const method = (payload?.method || message.metadata?.method || 'POST') as string;
+        const headers = payload?.headers || message.metadata?.headers || {};
+        const body = payload?.body || payload || message.payload;
+        const ip = payload?.ip || message.metadata?.ip || headers['x-forwarded-for']?.split(',')[0]?.trim();
+        const event = payload?.event || message.metadata?.event || headers['x-event'] || headers['x-github-event'] || '';
+
+        // Process webhook request
+        const webhookResult = webhookEngine.processWebhookRequest({
+          url,
+          method,
+          headers,
+          body,
+          event,
+          ip,
+        });
+
+        if (webhookResult.success) {
+          message.status = 'delivered';
+          message.latency = webhookResult.latency;
+          message.metadata = {
+            ...message.metadata,
+            webhookDeliveryId: webhookResult.deliveryId,
+            webhookAttempts: webhookResult.attempts,
+            webhookStatus: webhookResult.status,
+          };
+        } else {
+          message.status = 'failed';
+          message.error = webhookResult.error || `Webhook processing failed (HTTP ${webhookResult.status})`;
+          message.latency = webhookResult.latency;
+          message.metadata = {
+            ...message.metadata,
+            webhookDeliveryId: webhookResult.deliveryId,
+            webhookAttempts: webhookResult.attempts,
+            webhookStatus: webhookResult.status,
+          };
+        }
+
+        return message;
+      },
+      
+      transformData: (node, message, targetType, config) => {
+        // Webhook endpoint transforms to JSON
+        if (message.format !== 'json') {
+          message.format = 'json';
+          message.status = 'transformed';
+        }
+        return message;
+      },
+      
+      getSupportedFormats: () => ['json'],
     };
   }
 

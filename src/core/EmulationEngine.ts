@@ -17,6 +17,7 @@ import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { RestApiRoutingEngine } from './RestApiRoutingEngine';
 import { GRPCRoutingEngine } from './GRPCRoutingEngine';
 import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
+import { WebhookEmulationEngine } from './WebhookEmulationEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
@@ -204,6 +205,9 @@ export class EmulationEngine {
 
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
+  
+  // Webhook emulation engines per node
+  private webhookEngines: Map<string, WebhookEmulationEngine> = new Map();
   
   // Redis routing engines per node
   private redisRoutingEngines: Map<string, RedisRoutingEngine> = new Map();
@@ -755,6 +759,16 @@ export class EmulationEngine {
       // Initialize Webhook Relay routing engine for Webhook Relay nodes
       if (node.type === 'webhook-relay') {
         this.initializeWebhookRelayRoutingEngine(node);
+      }
+      
+      // Initialize Webhook emulation engine for Webhook nodes
+      if (node.type === 'webhook') {
+        if (!this.webhookEngines.has(node.id)) {
+          this.initializeWebhookEngine(node);
+        } else {
+          const engine = this.webhookEngines.get(node.id)!;
+          engine.updateConfig((node.data.config || {}) as any);
+        }
       }
       
       // Initialize ClickHouse routing engine for ClickHouse nodes
@@ -1533,6 +1547,9 @@ export class EmulationEngine {
         case 'graphql':
         case 'websocket':
           this.simulateAPI(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'webhook':
+          this.simulateWebhook(node, config, metrics, hasIncomingConnections);
           break;
         case 'soap':
           this.simulateSOAP(node, config, metrics, hasIncomingConnections);
@@ -5247,6 +5264,53 @@ export class EmulationEngine {
   }
 
   /**
+   * Webhook Endpoint emulation
+   */
+  private simulateWebhook(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.webhookEngines.get(node.id);
+    
+    if (!engine) {
+      // No engine, use default API-like behavior
+      this.simulateAPI(node, config, metrics, hasIncomingConnections);
+      return;
+    }
+    
+    // Get metrics from webhook engine
+    const webhookMetrics = engine.getMetrics();
+    
+    if (!hasIncomingConnections) {
+      // No incoming requests, reset metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Use webhook engine metrics
+    metrics.throughput = webhookMetrics.requestsPerSecond;
+    metrics.latency = webhookMetrics.averageLatency || 50;
+    metrics.errorRate = webhookMetrics.errorRate / 100; // Convert percentage to 0-1
+    metrics.utilization = webhookMetrics.utilization / 100; // Convert percentage to 0-1
+    
+    // Custom metrics from webhook engine
+    metrics.customMetrics = {
+      'rps': webhookMetrics.requestsPerSecond,
+      'endpoints_total': webhookMetrics.endpointsTotal,
+      'endpoints_enabled': webhookMetrics.endpointsEnabled,
+      'deliveries_total': webhookMetrics.deliveriesTotal,
+      'deliveries_success': webhookMetrics.deliveriesSuccess,
+      'deliveries_failed': webhookMetrics.deliveriesFailed,
+      'deliveries_pending': webhookMetrics.deliveriesPending,
+      'success_rate': webhookMetrics.successRate,
+      'retries_total': webhookMetrics.retriesTotal,
+      'p50_latency': Math.round(metrics.latency * 0.5),
+      'p99_latency': Math.round(metrics.latency * 2),
+      'errors': Math.round(metrics.throughput * metrics.errorRate),
+    };
+  }
+
+  /**
    * Kong Gateway emulation
    */
   private simulateKong(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -7470,6 +7534,15 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize Webhook emulation engine for a node
+   */
+  private initializeWebhookEngine(node: CanvasNode): void {
+    const engine = new WebhookEmulationEngine();
+    engine.initializeConfig(node);
+    this.webhookEngines.set(node.id, engine);
+  }
+
+  /**
    * Initialize Redis routing engine for a node
    */
   private initializeRedisRoutingEngine(node: CanvasNode): void {
@@ -8305,6 +8378,13 @@ export class EmulationEngine {
    */
   public getWebhookRelayRoutingEngine(nodeId: string): WebhookRelayRoutingEngine | undefined {
     return this.webhookRelayRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get Webhook emulation engine for a node
+   */
+  public getWebhookEmulationEngine(nodeId: string): WebhookEmulationEngine | undefined {
+    return this.webhookEngines.get(nodeId);
   }
 
   /**
