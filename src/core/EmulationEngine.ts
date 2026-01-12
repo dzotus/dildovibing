@@ -61,6 +61,7 @@ import { errorCollector } from './ErrorCollector';
 import { CloudAPIGatewayEmulationEngine } from './api-gateway/CloudAPIGatewayEmulationEngine';
 import type { BaseAPIGatewayConfig } from './api-gateway/types';
 import { CRMEmulationEngine } from './CRMEmulationEngine';
+import { ERPEmulationEngine } from './ERPEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -324,6 +325,9 @@ export class EmulationEngine {
   
   // CRM emulation engines per node
   private crmEngines: Map<string, CRMEmulationEngine> = new Map();
+  
+  // ERP emulation engines per node
+  private erpEngines: Map<string, ERPEmulationEngine> = new Map();
 
   // (MLflow emulation engines removed)
 
@@ -963,6 +967,17 @@ export class EmulationEngine {
         } else {
           // Update config if engine already exists
           const engine = this.crmEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
+      // Initialize ERP emulation engine for ERP nodes
+      if (node.type === 'erp') {
+        if (!this.erpEngines.has(node.id)) {
+          this.initializeERPEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.erpEngines.get(node.id)!;
           engine.initializeConfig(node);
         }
       }
@@ -1643,6 +1658,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform ERP updates (orders, inventory, transactions, employees, manufacturing, supply chain, metrics)
+    for (const [nodeId, erpEngine] of this.erpEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        erpEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateERP method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'erp', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // (MLflow updates removed)
     
     // Process OpenTelemetry Collector batch flush
@@ -1840,6 +1879,9 @@ export class EmulationEngine {
           break;
       case 'crm':
           this.simulateCRM(node, config, metrics, hasIncomingConnections);
+          break;
+      case 'erp':
+          this.simulateERP(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6609,6 +6651,70 @@ export class EmulationEngine {
   }
 
   /**
+   * ERP emulation
+   */
+  private simulateERP(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.erpEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const erpMetrics = engine.getMetrics();
+    
+    // Throughput: API requests per second
+    metrics.throughput = erpMetrics.requestsPerSecond;
+    
+    // Latency: average response time
+    metrics.latency = erpMetrics.averageResponseTime;
+    
+    // Error rate: API error rate
+    metrics.errorRate = erpMetrics.errorRate;
+    
+    // Utilization: system utilization (API, database, manufacturing)
+    metrics.utilization = erpMetrics.systemUtilization;
+    
+    metrics.customMetrics = {
+      ordersTotal: erpMetrics.ordersTotal,
+      ordersPending: erpMetrics.ordersPending,
+      ordersProcessing: erpMetrics.ordersProcessing,
+      ordersShipped: erpMetrics.ordersShipped,
+      ordersDelivered: erpMetrics.ordersDelivered,
+      ordersValue: erpMetrics.ordersValue,
+      inventoryItemsTotal: erpMetrics.inventoryItemsTotal,
+      inventoryValue: erpMetrics.inventoryValue,
+      inventoryLowStock: erpMetrics.inventoryLowStock,
+      inventoryOutOfStock: erpMetrics.inventoryOutOfStock,
+      inventoryTurnover: erpMetrics.inventoryTurnover,
+      transactionsTotal: erpMetrics.transactionsTotal,
+      revenue: erpMetrics.revenue,
+      expenses: erpMetrics.expenses,
+      profit: erpMetrics.profit,
+      accountsReceivable: erpMetrics.accountsReceivable,
+      accountsPayable: erpMetrics.accountsPayable,
+      employeesTotal: erpMetrics.employeesTotal,
+      employeesActive: erpMetrics.employeesActive,
+      employeesOnLeave: erpMetrics.employeesOnLeave,
+      totalPayroll: erpMetrics.totalPayroll,
+      manufacturingOrdersTotal: erpMetrics.manufacturingOrdersTotal,
+      manufacturingOrdersInProgress: erpMetrics.manufacturingOrdersInProgress,
+      manufacturingOrdersCompleted: erpMetrics.manufacturingOrdersCompleted,
+      manufacturingCapacity: erpMetrics.manufacturingCapacity,
+      supplyItemsTotal: erpMetrics.supplyItemsTotal,
+      supplyItemsInTransit: erpMetrics.supplyItemsInTransit,
+      supplyItemsDelayed: erpMetrics.supplyItemsDelayed,
+      supplyValue: erpMetrics.supplyValue,
+    };
+  }
+
+  /**
    * TensorFlow Serving emulation
    */
   private simulateTensorFlowServing(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8460,6 +8566,15 @@ export class EmulationEngine {
     this.crmEngines.set(node.id, engine);
   }
 
+  /**
+   * Initialize ERP Emulation Engine for ERP node
+   */
+  private initializeERPEngine(node: CanvasNode): void {
+    const engine = new ERPEmulationEngine();
+    engine.initializeConfig(node);
+    this.erpEngines.set(node.id, engine);
+  }
+
   // (MLflow Emulation Engine initialization removed)
 
   /**
@@ -9039,6 +9154,13 @@ export class EmulationEngine {
    */
   public getCRMEmulationEngine(nodeId: string): CRMEmulationEngine | undefined {
     return this.crmEngines.get(nodeId);
+  }
+
+  /**
+   * Get ERP emulation engine for a node
+   */
+  public getERPEmulationEngine(nodeId: string): ERPEmulationEngine | undefined {
+    return this.erpEngines.get(nodeId);
   }
 
   // (MLflow emulation engine accessor removed)
