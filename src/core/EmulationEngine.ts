@@ -60,6 +60,7 @@ import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
 import { CloudAPIGatewayEmulationEngine } from './api-gateway/CloudAPIGatewayEmulationEngine';
 import type { BaseAPIGatewayConfig } from './api-gateway/types';
+import { CRMEmulationEngine } from './CRMEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -320,6 +321,9 @@ export class EmulationEngine {
 
   // Feature Store emulation engines per node
   private featureStoreEngines: Map<string, FeatureStoreEmulationEngine> = new Map();
+  
+  // CRM emulation engines per node
+  private crmEngines: Map<string, CRMEmulationEngine> = new Map();
 
   // (MLflow emulation engines removed)
 
@@ -952,6 +956,17 @@ export class EmulationEngine {
         }
       }
       
+      // Initialize CRM emulation engine for CRM nodes
+      if (node.type === 'crm') {
+        if (!this.crmEngines.has(node.id)) {
+          this.initializeCRMEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.crmEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
       // Initialize TensorFlow Serving emulation engine for TensorFlow Serving nodes
       if (node.type === 'tensorflow-serving') {
         if (!this.tensorFlowServingEngines.has(node.id)) {
@@ -1066,6 +1081,7 @@ export class EmulationEngine {
         this.tensorFlowServingEngines.delete(nodeId);
         this.pytorchServeEngines.delete(nodeId);
         this.featureStoreEngines.delete(nodeId);
+        this.crmEngines.delete(nodeId);
         // (MLflow engines map removed)
         this.harborEngines.delete(nodeId);
         this.prometheusEngines.delete(nodeId);
@@ -1603,6 +1619,30 @@ export class EmulationEngine {
       }
     }
     
+    // Perform CRM updates (contacts, deals, accounts, leads, cases, activities, metrics)
+    for (const [nodeId, crmEngine] of this.crmEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        crmEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateCRM method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'crm', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // (MLflow updates removed)
     
     // Process OpenTelemetry Collector batch flush
@@ -1797,6 +1837,9 @@ export class EmulationEngine {
           break;
       case 'feature-store':
           this.simulateFeatureStore(node, config, metrics, hasIncomingConnections);
+          break;
+      case 'crm':
+          this.simulateCRM(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6509,6 +6552,63 @@ export class EmulationEngine {
   }
 
   /**
+   * CRM emulation
+   */
+  private simulateCRM(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.crmEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const crmMetrics = engine.getMetrics();
+    
+    // Throughput: API requests per second
+    metrics.throughput = crmMetrics.requestsPerSecond;
+    
+    // Latency: average response time
+    metrics.latency = crmMetrics.averageResponseTime;
+    
+    // Error rate: API error rate
+    metrics.errorRate = crmMetrics.errorRate;
+    
+    // Utilization: average of API and database utilization
+    metrics.utilization = (crmMetrics.apiUtilization + crmMetrics.databaseUtilization) / 2;
+    
+    metrics.customMetrics = {
+      contactsTotal: crmMetrics.contactsTotal,
+      contactsLeads: crmMetrics.contactsLeads,
+      contactsCustomers: crmMetrics.contactsCustomers,
+      dealsTotal: crmMetrics.dealsTotal,
+      dealsActive: crmMetrics.dealsActive,
+      dealsWon: crmMetrics.dealsWon,
+      dealsLost: crmMetrics.dealsLost,
+      pipelineValue: crmMetrics.pipelineValue,
+      wonValue: crmMetrics.wonValue,
+      accountsTotal: crmMetrics.accountsTotal,
+      leadsTotal: crmMetrics.leadsTotal,
+      leadsConverted: crmMetrics.leadsConverted,
+      casesTotal: crmMetrics.casesTotal,
+      casesOpen: crmMetrics.casesOpen,
+      casesResolved: crmMetrics.casesResolved,
+      averageResolutionTime: crmMetrics.averageResolutionTime,
+      activitiesTotal: crmMetrics.activitiesTotal,
+      activitiesToday: crmMetrics.activitiesToday,
+      conversionRate: crmMetrics.conversionRate,
+      dealWinRate: crmMetrics.dealWinRate,
+      apiUtilization: crmMetrics.apiUtilization,
+      databaseUtilization: crmMetrics.databaseUtilization,
+    };
+  }
+
+  /**
    * TensorFlow Serving emulation
    */
   private simulateTensorFlowServing(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8351,6 +8451,15 @@ export class EmulationEngine {
     this.featureStoreEngines.set(node.id, engine);
   }
 
+  /**
+   * Initialize CRM Emulation Engine for CRM node
+   */
+  private initializeCRMEngine(node: CanvasNode): void {
+    const engine = new CRMEmulationEngine();
+    engine.initializeConfig(node);
+    this.crmEngines.set(node.id, engine);
+  }
+
   // (MLflow Emulation Engine initialization removed)
 
   /**
@@ -8923,6 +9032,13 @@ export class EmulationEngine {
 
   public getFeatureStoreEmulationEngine(nodeId: string): FeatureStoreEmulationEngine | undefined {
     return this.featureStoreEngines.get(nodeId);
+  }
+
+  /**
+   * Get CRM emulation engine for a node
+   */
+  public getCRMEmulationEngine(nodeId: string): CRMEmulationEngine | undefined {
+    return this.crmEngines.get(nodeId);
   }
 
   // (MLflow emulation engine accessor removed)
