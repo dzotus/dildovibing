@@ -54,6 +54,7 @@ import { TraefikEmulationEngine } from './TraefikEmulationEngine';
 import { SparkEmulationEngine } from './SparkEmulationEngine';
 import { TensorFlowServingEmulationEngine } from './TensorFlowServingEmulationEngine';
 import { PyTorchServeEmulationEngine } from './PyTorchServeEmulationEngine';
+import { FeatureStoreEmulationEngine } from './FeatureStoreEmulationEngine';
 import { IstioRoutingEngine } from './IstioRoutingEngine';
 import { ServiceMeshRoutingEngine } from './ServiceMeshRoutingEngine';
 import { errorCollector } from './ErrorCollector';
@@ -316,6 +317,11 @@ export class EmulationEngine {
 
   // PyTorch Serve emulation engines per node
   private pytorchServeEngines: Map<string, PyTorchServeEmulationEngine> = new Map();
+
+  // Feature Store emulation engines per node
+  private featureStoreEngines: Map<string, FeatureStoreEmulationEngine> = new Map();
+
+  // (MLflow emulation engines removed)
 
   constructor() {
     this.initializeMetrics();
@@ -946,6 +952,41 @@ export class EmulationEngine {
         }
       }
       
+      // Initialize TensorFlow Serving emulation engine for TensorFlow Serving nodes
+      if (node.type === 'tensorflow-serving') {
+        if (!this.tensorFlowServingEngines.has(node.id)) {
+          this.initializeTensorFlowServingEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.tensorFlowServingEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
+      // Initialize PyTorch Serve emulation engine for PyTorch Serve nodes
+      if (node.type === 'pytorch-serve') {
+        if (!this.pytorchServeEngines.has(node.id)) {
+          this.initializePyTorchServeEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.pytorchServeEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
+      // Initialize Feature Store emulation engine for Feature Store nodes
+      if (node.type === 'feature-store') {
+        if (!this.featureStoreEngines.has(node.id)) {
+          this.initializeFeatureStoreEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.featureStoreEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
+      // (MLflow emulation engine initialization removed)
+      
       // Initialize Traefik emulation engine for Traefik nodes
       if (node.type === 'traefik') {
         if (!this.traefikEngines.has(node.id)) {
@@ -1023,6 +1064,9 @@ export class EmulationEngine {
         this.traefikEngines.delete(nodeId);
         this.sparkEngines.delete(nodeId);
         this.tensorFlowServingEngines.delete(nodeId);
+        this.pytorchServeEngines.delete(nodeId);
+        this.featureStoreEngines.delete(nodeId);
+        // (MLflow engines map removed)
         this.harborEngines.delete(nodeId);
         this.prometheusEngines.delete(nodeId);
         this.grafanaEngines.delete(nodeId);
@@ -1535,6 +1579,32 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Feature Store updates (feature serving, caching, metrics)
+    for (const [nodeId, featureStoreEngine] of this.featureStoreEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        featureStoreEngine.performUpdate(now, hasIncomingConnections);
+        
+        // Metrics are already updated in simulateFeatureStore method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'feature-store', operation: 'performUpdate' },
+        });
+      }
+    }
+    
+    // (MLflow updates removed)
+    
     // Process OpenTelemetry Collector batch flush
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
@@ -1722,8 +1792,11 @@ export class EmulationEngine {
         case 'tensorflow-serving':
           this.simulateTensorFlowServing(node, config, metrics, hasIncomingConnections);
           break;
-        case 'pytorch-serve':
+      case 'pytorch-serve':
           this.simulatePyTorchServe(node, config, metrics, hasIncomingConnections);
+          break;
+      case 'feature-store':
+          this.simulateFeatureStore(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6550,6 +6623,70 @@ export class EmulationEngine {
   }
 
   /**
+   * Feature Store emulation
+   */
+  private simulateFeatureStore(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.featureStoreEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const featureStoreMetrics = engine.getMetrics();
+    
+    // Throughput: requests per second
+    metrics.throughput = featureStoreMetrics.throughput;
+    
+    // Latency: average request latency
+    metrics.latency = featureStoreMetrics.averageLatency;
+    
+    // Error rate: failed requests / total requests
+    metrics.errorRate = featureStoreMetrics.errorRate;
+    
+    // Utilization: based on online/offline store utilization
+    const utilization = Math.max(
+      featureStoreMetrics.onlineStoreUtilization,
+      featureStoreMetrics.offlineStoreUtilization
+    );
+    metrics.utilization = Math.min(1, utilization);
+    
+    metrics.customMetrics = {
+      totalFeatures: featureStoreMetrics.totalFeatures,
+      activeFeatures: featureStoreMetrics.activeFeatures,
+      deprecatedFeatures: featureStoreMetrics.deprecatedFeatures,
+      totalFeatureSets: featureStoreMetrics.totalFeatureSets,
+      requestsTotal: featureStoreMetrics.requestsTotal,
+      requestsOnline: featureStoreMetrics.requestsOnline,
+      requestsOffline: featureStoreMetrics.requestsOffline,
+      requestsSuccess: featureStoreMetrics.requestsSuccess,
+      requestsErrors: featureStoreMetrics.requestsErrors,
+      averageLatency: featureStoreMetrics.averageLatency,
+      p50Latency: featureStoreMetrics.p50Latency,
+      p99Latency: featureStoreMetrics.p99Latency,
+      requestsPerSecond: featureStoreMetrics.requestsPerSecond,
+      throughput: featureStoreMetrics.throughput,
+      errorRate: featureStoreMetrics.errorRate,
+      cacheHits: featureStoreMetrics.cacheHits,
+      cacheMisses: featureStoreMetrics.cacheMisses,
+      cacheHitRate: featureStoreMetrics.cacheHitRate,
+      onlineStoreUtilization: featureStoreMetrics.onlineStoreUtilization,
+      offlineStoreUtilization: featureStoreMetrics.offlineStoreUtilization,
+      validationPassed: featureStoreMetrics.validationPassed,
+      validationFailed: featureStoreMetrics.validationFailed,
+      totalFeatureUsage: featureStoreMetrics.totalFeatureUsage,
+    };
+  }
+
+  // (MLflow emulation removed)
+
+  /**
    * Traefik emulation
    */
   private simulateTraefik(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8208,6 +8345,14 @@ export class EmulationEngine {
     this.pytorchServeEngines.set(node.id, engine);
   }
 
+  private initializeFeatureStoreEngine(node: CanvasNode): void {
+    const engine = new FeatureStoreEmulationEngine();
+    engine.initializeConfig(node);
+    this.featureStoreEngines.set(node.id, engine);
+  }
+
+  // (MLflow Emulation Engine initialization removed)
+
   /**
    * Initialize Traefik Emulation Engine for Traefik node
    */
@@ -8775,6 +8920,12 @@ export class EmulationEngine {
   public getPyTorchServeEmulationEngine(nodeId: string): PyTorchServeEmulationEngine | undefined {
     return this.pytorchServeEngines.get(nodeId);
   }
+
+  public getFeatureStoreEmulationEngine(nodeId: string): FeatureStoreEmulationEngine | undefined {
+    return this.featureStoreEngines.get(nodeId);
+  }
+
+  // (MLflow emulation engine accessor removed)
 
   public getKubernetesEmulationEngine(nodeId: string): KubernetesEmulationEngine | undefined {
     return this.kubernetesEngines.get(nodeId);

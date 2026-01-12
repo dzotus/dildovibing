@@ -97,7 +97,6 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
     case 'spark':
     case 'tensorflow-serving':
     case 'pytorch-serve':
-    case 'mlflow':
     case 'feature-store':
       return <MLConfig componentId={componentId} componentType={componentType} />;
     case 'crm':

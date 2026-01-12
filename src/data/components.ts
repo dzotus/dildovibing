@@ -77,7 +77,6 @@ export const COMPONENT_LIBRARY: ComponentType[] = [
   { id: 'spark', type: 'spark', label: 'Apache Spark', icon: '⚙️', color: '#E25A1C', category: 'ml' },
   { id: 'tensorflow-serving', type: 'tensorflow-serving', label: 'TensorFlow Serving', icon: '🧠', color: '#FF6F00', category: 'ml' },
   { id: 'pytorch-serve', type: 'pytorch-serve', label: 'PyTorch Serve', icon: '🔥', color: '#EE4C2C', category: 'ml' },
-  { id: 'mlflow', type: 'mlflow', label: 'MLflow', icon: '🧪', color: '#4285F4', category: 'ml' },
   { id: 'feature-store', type: 'feature-store', label: 'Feature Store', icon: '📦', color: '#8E44AD', category: 'ml' },
 
   // Business / Apps

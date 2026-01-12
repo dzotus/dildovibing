@@ -150,6 +150,7 @@ export class DataFlowEngine {
     this.registerHandler('spark', this.createSparkHandler());
     this.registerHandler('tensorflow-serving', this.createTensorFlowServingHandler());
     this.registerHandler('pytorch-serve', this.createPyTorchServeHandler());
+    this.registerHandler('feature-store', this.createFeatureStoreHandler());
   }
 
   /**
@@ -5744,6 +5745,152 @@ export class DataFlowEngine {
       getSupportedFormats: () => ['json'],
     };
   }
+
+  /**
+   * Create handler for Feature Store component
+   */
+  private createFeatureStoreHandler(): ComponentDataHandler {
+    return {
+      processData: (node, message, config) => {
+        const engine = emulationEngine.getFeatureStoreEmulationEngine(node.id);
+
+        if (!engine) {
+          message.status = 'failed';
+          message.error = 'Feature Store engine not initialized';
+          return message;
+        }
+
+        const payload = (message.payload || {}) as any;
+        const operation: string | undefined =
+          message.metadata?.operation || payload.operation || payload.action || 'get-features';
+        
+        // Extract feature names and entity IDs
+        const featureNames = payload.features || payload.featureNames || message.metadata?.features || [];
+        const entityIds = payload.entities || payload.entityIds || message.metadata?.entities;
+        const requestType = (payload.requestType || message.metadata?.requestType || 'online') as 'online' | 'offline';
+        const pointInTime = payload.pointInTime || message.metadata?.pointInTime;
+
+        // Feature Store operations
+        if (operation === 'get-features' || operation === 'get-feature-set' || !operation) {
+          if (!Array.isArray(featureNames) || featureNames.length === 0) {
+            message.status = 'failed';
+            message.error = 'Feature names are required';
+            return message;
+          }
+
+          // Process feature request
+          const result = engine.processFeatureRequest(
+            featureNames,
+            entityIds,
+            requestType,
+            pointInTime
+          );
+
+          message.latency = (message.latency || 0) + result.latency;
+
+          if (result.success) {
+            message.status = 'delivered';
+            message.payload = {
+              ...message.payload,
+              features: result.data,
+              cacheHit: result.cacheHit,
+              requestType,
+            };
+            message.metadata = {
+              ...message.metadata,
+              operation: 'get-features',
+              features: featureNames,
+              requestType,
+              cacheHit: result.cacheHit,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.error || 'Feature request failed';
+          }
+
+          return message;
+        } else if (operation === 'write-features' || operation === 'write') {
+          // Write features operation
+          const features = payload.features || payload.data || {};
+          
+          if (Object.keys(features).length === 0) {
+            message.status = 'failed';
+            message.error = 'Features data is required';
+            return message;
+          }
+
+          // Extract entity IDs and store type
+          const entityIds = payload.entities || payload.entityIds || message.metadata?.entities;
+          const storeType = (payload.storeType || message.metadata?.storeType || 'online') as 'online' | 'offline';
+          const writeTimestamp = payload.timestamp || message.metadata?.timestamp;
+
+          // Write features to the store
+          const result = engine.writeFeatures(
+            features,
+            entityIds,
+            storeType,
+            writeTimestamp
+          );
+
+          message.latency = (message.latency || 0) + result.latency;
+
+          if (result.success) {
+            message.status = 'delivered';
+            message.payload = {
+              ...message.payload,
+              written: true,
+              featuresWritten: result.written,
+              features: Object.keys(features),
+            };
+            message.metadata = {
+              ...message.metadata,
+              operation: 'write-features',
+              storeType,
+            };
+          } else {
+            message.status = 'failed';
+            message.error = result.error || 'Feature write failed';
+          }
+
+          return message;
+        } else if (operation === 'validate-features' || operation === 'validate') {
+          // Validate features operation
+          const features = payload.features || payload.data || {};
+          
+          if (Object.keys(features).length === 0) {
+            message.status = 'failed';
+            message.error = 'Features data is required for validation';
+            return message;
+          }
+
+          // Validation is handled in processFeatureRequest
+          // This is a separate validation endpoint
+          message.latency = (message.latency || 0) + 5; // 5ms validation latency
+          message.status = 'delivered';
+          message.payload = {
+            ...message.payload,
+            validated: true,
+            features: Object.keys(features),
+          };
+          message.metadata = {
+            ...message.metadata,
+            operation: 'validate-features',
+          };
+
+          return message;
+        } else {
+          // Unknown operation
+          message.status = 'failed';
+          message.error = `Unknown Feature Store operation: ${operation}`;
+          return message;
+        }
+      },
+
+      getSupportedFormats: () => ['json', 'text'],
+    };
+  }
+
+  // (MLflow handler removed)
 }
 
 export const dataFlowEngine = new DataFlowEngine();

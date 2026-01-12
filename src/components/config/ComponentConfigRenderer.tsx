@@ -61,7 +61,6 @@ const SparkConfigAdvanced = lazy(() => import('./ml/SparkConfigAdvanced').then(m
 const TensorFlowServingConfigAdvanced = lazy(() => import('./ml/TensorFlowServingConfigAdvanced').then(m => ({ default: m.TensorFlowServingConfigAdvanced })));
 const PyTorchServeConfigAdvanced = lazy(() => import('./ml/PyTorchServeConfigAdvanced').then(m => ({ default: m.PyTorchServeConfigAdvanced })));
 const FeatureStoreConfigAdvanced = lazy(() => import('./ml/FeatureStoreConfigAdvanced').then(m => ({ default: m.FeatureStoreConfigAdvanced })));
-const MLflowConfigAdvanced = lazy(() => import('./ml/MLflowConfigAdvanced').then(m => ({ default: m.MLflowConfigAdvanced })));
 const CRMConfigAdvanced = lazy(() => import('./business/CRMConfigAdvanced').then(m => ({ default: m.CRMConfigAdvanced })));
 const ERPConfigAdvanced = lazy(() => import('./business/ERPConfigAdvanced').then(m => ({ default: m.ERPConfigAdvanced })));
 const RPABotConfigAdvanced = lazy(() => import('./business/RPABotConfigAdvanced').then(m => ({ default: m.RPABotConfigAdvanced })));
@@ -199,8 +198,6 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
       return <PyTorchServeConfigAdvanced componentId={componentId} />;
     case 'feature-store':
       return <FeatureStoreConfigAdvanced componentId={componentId} />;
-    case 'mlflow':
-      return <MLflowConfigAdvanced componentId={componentId} />;
     case 'crm':
       return <CRMConfigAdvanced componentId={componentId} />;
     case 'erp':
