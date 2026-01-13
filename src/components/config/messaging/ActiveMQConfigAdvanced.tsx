@@ -11,7 +11,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { 
   MessageSquare, 
   Database, 
@@ -33,7 +34,17 @@ import {
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Info, CheckCircle2, ArrowRight, Link2 } from 'lucide-react';
+import { Info, CheckCircle2, ArrowRight, Link2, Search, AlertCircle } from 'lucide-react';
+import { showSuccess, showError } from '@/utils/toast';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
 interface ActiveMQConfigProps {
   componentId: string;
@@ -47,6 +58,10 @@ interface Queue {
   dequeueCount?: number;
   memoryUsage?: number;
   memoryPercent?: number;
+  memoryLimit?: number; // Memory limit in MB for this queue
+  prefetch?: number; // Prefetch size for consumers
+  defaultPriority?: number; // Default message priority (0-9)
+  defaultTTL?: number; // Default message TTL in seconds
 }
 
 interface Topic {
@@ -56,6 +71,9 @@ interface Topic {
   dequeueCount?: number;
   memoryUsage?: number;
   memoryPercent?: number;
+  memoryLimit?: number; // Memory limit in MB for this topic
+  defaultPriority?: number; // Default message priority (0-9)
+  defaultTTL?: number; // Default message TTL in seconds
 }
 
 interface Connection {
@@ -96,6 +114,12 @@ interface ActiveMQConfig {
   memoryLimit?: number;
   storeUsage?: number;
   tempUsage?: number;
+  consumptionRate?: number;
+  avgMessageSize?: number;
+  protocolLatencies?: Record<string, number>;
+  memoryPressureThreshold?: number;
+  queueLatencyBase?: number;
+  queueLatencyFactor?: number;
   acls?: Array<{
     principal: string;
     resource: string;
@@ -105,7 +129,7 @@ interface ActiveMQConfig {
 }
 
 export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const { isRunning, start, stop, updateMetrics } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
@@ -122,13 +146,25 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const topics = config.topics || [];
   // Connections and subscriptions are runtime data - they are created automatically
   // when other components connect to this broker during simulation
-  const connections = config.connections || []; // Created dynamically from canvas connections
+  const activeMQConnections = config.connections || []; // Created dynamically from canvas connections
   const subscriptions = config.subscriptions || []; // Created dynamically when clients subscribe to topics
   const persistenceEnabled = config.persistenceEnabled ?? true;
   const maxConnections = config.maxConnections || 1000;
   const memoryLimit = config.memoryLimit || 1024;
+  const consumptionRate = config.consumptionRate ?? 10;
   const storeUsage = config.storeUsage || 0;
   const tempUsage = config.tempUsage || 0;
+  const avgMessageSize = config.avgMessageSize ?? 1024;
+  const protocolLatencies = config.protocolLatencies || {
+    openwire: 2,
+    amqp: 5,
+    mqtt: 8,
+    stomp: 10,
+    ws: 12,
+  };
+  const memoryPressureThreshold = config.memoryPressureThreshold ?? 0.8;
+  const queueLatencyBase = config.queueLatencyBase ?? 0;
+  const queueLatencyFactor = config.queueLatencyFactor ?? 1;
   const acls = config.acls || [];
 
   const [showCreateAcl, setShowCreateAcl] = useState(false);
@@ -138,6 +174,27 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
     operation: 'read' as 'read' | 'write' | 'admin' | 'create',
     permission: 'allow' as 'allow' | 'deny',
   });
+
+  // Sync routing engine when config changes (queues, topics, consumptionRate)
+  useEffect(() => {
+    if (!node) return;
+    
+    const routingEngine = emulationEngine.getActiveMQRoutingEngine(componentId);
+    if (!routingEngine) return;
+
+    const currentConfig = (node.data.config as any) || {};
+    
+    // Update routing engine configuration
+    routingEngine.initialize({
+      queues: currentConfig.queues || [],
+      topics: currentConfig.topics || [],
+      subscriptions: currentConfig.subscriptions || [],
+      consumptionRate: currentConfig.consumptionRate ?? 10,
+    });
+
+    // Update nodes and connections to ensure routing engine is properly initialized
+    emulationEngine.updateNodesAndConnections(nodes, connections);
+  }, [componentId, queues.length, topics.length, consumptionRate, node?.id, nodes, connections]);
 
   const updateConfig = (updates: Partial<ActiveMQConfig>) => {
     updateNode(componentId, {
@@ -156,6 +213,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
         { name: queueName, queueSize: 0, consumerCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
       ],
     });
+    showSuccess('Queue added successfully');
   };
 
   const removeQueue = (index: number) => {
@@ -207,6 +265,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
         { name: topicName, subscriberCount: 0, enqueueCount: 0, dequeueCount: 0, memoryUsage: 0, memoryPercent: 0 },
       ],
     });
+    showSuccess('Topic added successfully');
   };
 
   const removeTopic = (index: number) => {
@@ -249,13 +308,78 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const [editingTopicIndex, setEditingTopicIndex] = useState<number | null>(null);
   const [topicNameErrors, setTopicNameErrors] = useState<Record<number, string>>({});
 
+  // Search and filter states
+  const [queueSearchQuery, setQueueSearchQuery] = useState('');
+  const [topicSearchQuery, setTopicSearchQuery] = useState('');
+  const [connectionSearchQuery, setConnectionSearchQuery] = useState('');
+  const [subscriptionSearchQuery, setSubscriptionSearchQuery] = useState('');
+
+  // Delete confirmation dialogs
+  const [deleteQueueIndex, setDeleteQueueIndex] = useState<number | null>(null);
+  const [deleteTopicIndex, setDeleteTopicIndex] = useState<number | null>(null);
+
+  // ACL validation
+  const [aclResourceError, setAclResourceError] = useState<string | null>(null);
+
+  // Subscription editing
+  const [editingSelectorIndex, setEditingSelectorIndex] = useState<number | null>(null);
+  const [selectorValues, setSelectorValues] = useState<Record<number, string>>({});
+
   // Topics can only be added/removed, not edited
   // Name editing is not allowed - topics are identified by name
 
   // Connections and subscriptions are created dynamically by clients at runtime
   // They cannot be manually added/removed through the UI
 
+  // Filter queues, topics, connections, subscriptions
+  const filteredQueues = queues.filter(q => 
+    q.name.toLowerCase().includes(queueSearchQuery.toLowerCase())
+  );
+  const filteredTopics = topics.filter(t => 
+    t.name.toLowerCase().includes(topicSearchQuery.toLowerCase())
+  );
+  const filteredConnections = activeMQConnections.filter(c => 
+    (c.clientId || '').toLowerCase().includes(connectionSearchQuery.toLowerCase()) ||
+    (c.remoteAddress || '').toLowerCase().includes(connectionSearchQuery.toLowerCase())
+  );
+  const filteredSubscriptions = subscriptions.filter(s => 
+    (s.clientId || '').toLowerCase().includes(subscriptionSearchQuery.toLowerCase()) ||
+    (s.destination || '').toLowerCase().includes(subscriptionSearchQuery.toLowerCase())
+  );
+
+  // Validate ACL resource format
+  const validateAclResource = (resource: string): string | null => {
+    if (!resource || resource.trim() === '') {
+      return 'Resource cannot be empty';
+    }
+    // Check format: queue://name, topic://name, or wildcard *
+    if (resource === '*') {
+      return null; // Wildcard is valid
+    }
+    if (!resource.includes('://')) {
+      return 'Resource must be in format queue://name or topic://name (or use * for all)';
+    }
+    const [prefix, name] = resource.split('://');
+    if (prefix !== 'queue' && prefix !== 'topic') {
+      return 'Resource prefix must be "queue" or "topic"';
+    }
+    if (!name || name.trim() === '') {
+      return 'Resource name cannot be empty';
+    }
+    if (name !== '*' && !/^[a-zA-Z0-9._*-]+$/.test(name)) {
+      return 'Resource name can only contain letters, numbers, dots, underscores, hyphens, and asterisks';
+    }
+    return null;
+  };
+
   const addAcl = () => {
+    // Validate resource format
+    const resourceError = validateAclResource(aclForm.resource);
+    if (resourceError) {
+      setAclResourceError(resourceError);
+      return;
+    }
+    setAclResourceError(null);
     if (!aclForm.principal || !aclForm.resource) {
       return; // Don't add if required fields are empty
     }
@@ -267,6 +391,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
     };
     updateConfig({ acls: [...acls, newAcl] });
     setShowCreateAcl(false);
+    showSuccess('ACL rule added successfully');
     // Reset form
     setAclForm({
       principal: '',
@@ -278,6 +403,39 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
 
   const removeAcl = (index: number) => {
     updateConfig({ acls: acls.filter((_, i) => i !== index) });
+    showSuccess('ACL rule removed successfully');
+  };
+
+  const handleRemoveQueue = (index: number) => {
+    const queue = queues[index];
+    if (queue && (queue.queueSize || 0) > 0) {
+      setDeleteQueueIndex(index);
+    } else {
+      confirmRemoveQueue(index);
+    }
+  };
+
+  const confirmRemoveQueue = (index: number) => {
+    updateConfig({ queues: queues.filter((_, i) => i !== index) });
+    setDeleteQueueIndex(null);
+    showSuccess('Queue removed successfully');
+  };
+
+  const handleRemoveTopic = (index: number) => {
+    const topic = topics[index];
+    // Check if topic has subscriptions
+    const hasSubscriptions = subscriptions.some(s => s.destination === topic.name);
+    if (hasSubscriptions) {
+      setDeleteTopicIndex(index);
+    } else {
+      confirmRemoveTopic(index);
+    }
+  };
+
+  const confirmRemoveTopic = (index: number) => {
+    updateConfig({ topics: topics.filter((_, i) => i !== index) });
+    setDeleteTopicIndex(null);
+    showSuccess('Topic removed successfully');
   };
 
   const totalMessages = queues.reduce((sum, q) => sum + (q.queueSize || 0), 0);
@@ -359,7 +517,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
               <CardTitle className="text-sm font-medium">Active Connections</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold">{connections.length}</span>
+              <span className="text-2xl font-bold">{activeMQConnections.length}</span>
               <p className="text-xs text-muted-foreground mt-1">Connected clients</p>
             </CardContent>
           </Card>
@@ -381,29 +539,29 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
         </div>
 
         <Tabs defaultValue="broker" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="broker">
-              <Settings className="h-4 w-4 mr-2" />
+          <TabsList className="flex w-full flex-wrap gap-1">
+            <TabsTrigger value="broker" className="gap-2">
+              <Settings className="h-4 w-4" />
               Broker
             </TabsTrigger>
-            <TabsTrigger value="queues">
-              <MessageSquare className="h-4 w-4 mr-2" />
+            <TabsTrigger value="queues" className="gap-2">
+              <MessageSquare className="h-4 w-4" />
               Queues ({queues.length})
             </TabsTrigger>
-            <TabsTrigger value="topics">
-              <Database className="h-4 w-4 mr-2" />
+            <TabsTrigger value="topics" className="gap-2">
+              <Database className="h-4 w-4" />
               Topics ({topics.length})
             </TabsTrigger>
-            <TabsTrigger value="connections">
-              <Network className="h-4 w-4 mr-2" />
-              Connections ({connections.length})
+            <TabsTrigger value="connections" className="gap-2">
+              <Network className="h-4 w-4" />
+              Connections ({activeMQConnections.length})
             </TabsTrigger>
-            <TabsTrigger value="subscriptions">
-              <Users className="h-4 w-4 mr-2" />
+            <TabsTrigger value="subscriptions" className="gap-2">
+              <Users className="h-4 w-4" />
               Subscriptions ({subscriptions.length})
             </TabsTrigger>
-            <TabsTrigger value="security">
-              <Shield className="h-4 w-4 mr-2" />
+            <TabsTrigger value="security" className="gap-2">
+              <Shield className="h-4 w-4" />
               Security
             </TabsTrigger>
           </TabsList>
@@ -515,6 +673,106 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                         onChange={(e) => updateConfig({ memoryLimit: Number(e.target.value) })}
                       />
                     </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="consumptionRate">Consumption Rate (msgs/sec per consumer)</Label>
+                      <Input
+                        id="consumptionRate"
+                        type="number"
+                        min="1"
+                        value={consumptionRate}
+                        onChange={(e) => updateConfig({ consumptionRate: Number(e.target.value) })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Number of messages per second that each consumer can process
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <Separator />
+                <div className="space-y-4">
+                  <h3 className="text-sm font-semibold">Advanced Performance Settings</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="avgMessageSize">Average Message Size (bytes)</Label>
+                      <Input
+                        id="avgMessageSize"
+                        type="number"
+                        min="1"
+                        value={avgMessageSize}
+                        onChange={(e) => updateConfig({ avgMessageSize: Number(e.target.value) })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Average size of messages in bytes (used for throughput calculation)
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="memoryPressureThreshold">Memory Pressure Threshold</Label>
+                      <Input
+                        id="memoryPressureThreshold"
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        value={memoryPressureThreshold}
+                        onChange={(e) => updateConfig({ memoryPressureThreshold: Number(e.target.value) })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Memory usage threshold (0.0-1.0) that triggers additional latency
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="queueLatencyBase">Queue Latency Base (ms)</Label>
+                      <Input
+                        id="queueLatencyBase"
+                        type="number"
+                        min="0"
+                        value={queueLatencyBase}
+                        onChange={(e) => updateConfig({ queueLatencyBase: Number(e.target.value) })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Base latency in milliseconds added to queue latency calculation
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="queueLatencyFactor">Queue Latency Factor</Label>
+                      <Input
+                        id="queueLatencyFactor"
+                        type="number"
+                        min="0"
+                        step="0.1"
+                        value={queueLatencyFactor}
+                        onChange={(e) => updateConfig({ queueLatencyFactor: Number(e.target.value) })}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Factor for calculating latency based on queue depth (ms per 1000 messages)
+                      </p>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Protocol Latencies (ms)</Label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Configure base latency for each protocol
+                    </p>
+                    <div className="grid grid-cols-2 gap-4">
+                      {(['openwire', 'amqp', 'mqtt', 'stomp', 'ws'] as const).map((proto) => (
+                        <div key={proto} className="space-y-2">
+                          <Label htmlFor={`protocol-${proto}`} className="text-xs capitalize">
+                            {proto === 'ws' ? 'WebSocket' : proto.toUpperCase()}
+                          </Label>
+                          <Input
+                            id={`protocol-${proto}`}
+                            type="number"
+                            min="0"
+                            value={protocolLatencies[proto] || 5}
+                            onChange={(e) => {
+                              const newLatencies = { ...protocolLatencies };
+                              newLatencies[proto] = Number(e.target.value);
+                              updateConfig({ protocolLatencies: newLatencies });
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -547,34 +805,75 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search queues..."
+                      value={queueSearchQuery}
+                      onChange={(e) => setQueueSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  {queueSearchQuery && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Showing {filteredQueues.length} of {queues.length} queues
+                    </p>
+                  )}
+                </div>
                 <div className="space-y-4">
-                  {queues.map((queue, index) => (
-                    <Card key={index} className="border-l-4 border-l-blue-500">
+                  {filteredQueues.map((queue, index) => {
+                    const originalIndex = queues.findIndex(q => q.name === queue.name);
+                    const queueSize = queue.queueSize || 0;
+                    const consumerCount = queue.consumerCount || 0;
+                    // Determine queue status
+                    let queueStatus: 'empty' | 'normal' | 'warning' | 'full' = 'empty';
+                    let statusColor = 'bg-gray-500';
+                    if (queueSize === 0) {
+                      queueStatus = 'empty';
+                      statusColor = 'bg-gray-500';
+                    } else if (queueSize < 100) {
+                      queueStatus = 'normal';
+                      statusColor = 'bg-green-500';
+                    } else if (queueSize < 1000) {
+                      queueStatus = 'warning';
+                      statusColor = 'bg-yellow-500';
+                    } else {
+                      queueStatus = 'full';
+                      statusColor = 'bg-red-500';
+                    }
+                    return (
+                    <Card key={originalIndex} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 flex-1">
                             <MessageSquare className="h-5 w-5 text-blue-500" />
-                            {editingQueueIndex === index ? (
+                            <div className="flex items-center gap-2">
+                              <Badge variant="outline" className={statusColor}>
+                                {queueStatus.charAt(0).toUpperCase() + queueStatus.slice(1)}
+                              </Badge>
+                            </div>
+                            {editingQueueIndex === originalIndex ? (
                               <div className="flex-1 space-y-1">
                                 <div className="flex items-center gap-2">
                                   <Input
                                     value={queue.name}
-                                    onChange={(e) => updateQueue(index, 'name', e.target.value)}
+                                    onChange={(e) => updateQueue(originalIndex, 'name', e.target.value)}
                                     placeholder="queue-name"
-                                    className={`flex-1 ${queueNameErrors[index] ? 'border-red-500' : ''}`}
+                                    className={`flex-1 ${queueNameErrors[originalIndex] ? 'border-red-500' : ''}`}
                                     onBlur={() => {
-                                      if (!queueNameErrors[index]) {
+                                      if (!queueNameErrors[originalIndex]) {
                                         setEditingQueueIndex(null);
                                       }
                                     }}
                                     onKeyDown={(e) => {
-                                      if (e.key === 'Enter' && !queueNameErrors[index]) {
+                                      if (e.key === 'Enter' && !queueNameErrors[originalIndex]) {
                                         setEditingQueueIndex(null);
                                       }
                                       if (e.key === 'Escape') {
                                         setEditingQueueIndex(null);
                                         const newErrors = { ...queueNameErrors };
-                                        delete newErrors[index];
+                                        delete newErrors[originalIndex];
                                         setQueueNameErrors(newErrors);
                                       }
                                     }}
@@ -584,17 +883,17 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                     size="sm"
                                     variant="outline"
                                     onClick={() => {
-                                      if (!queueNameErrors[index]) {
+                                      if (!queueNameErrors[originalIndex]) {
                                         setEditingQueueIndex(null);
                                       }
                                     }}
-                                    disabled={!!queueNameErrors[index]}
+                                    disabled={!!queueNameErrors[originalIndex]}
                                   >
                                     <X className="h-3 w-3" />
                                   </Button>
                                 </div>
-                                {queueNameErrors[index] && (
-                                  <p className="text-xs text-red-500">{queueNameErrors[index]}</p>
+                                {queueNameErrors[originalIndex] && (
+                                  <p className="text-xs text-red-500">{queueNameErrors[originalIndex]}</p>
                                 )}
                               </div>
                             ) : (
@@ -606,18 +905,18 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                   size="icon"
                                   variant="ghost"
                                   className="h-6 w-6"
-                                  onClick={() => setEditingQueueIndex(index)}
+                                  onClick={() => setEditingQueueIndex(originalIndex)}
                                 >
                                   <Edit2 className="h-3 w-3" />
                                 </Button>
                               </>
                             )}
                           </div>
-                          {editingQueueIndex !== index && (
+                          {editingQueueIndex !== originalIndex && (
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => removeQueue(index)}
+                              onClick={() => handleRemoveQueue(originalIndex)}
                               disabled={queues.length === 1}
                             >
                               <Trash2 className="h-4 w-4" />
@@ -626,36 +925,120 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                         </div>
                       </CardHeader>
                       <CardContent>
-                        <div className="grid grid-cols-4 gap-4">
-                          <div>
-                            <p className="text-xs text-muted-foreground">Queue Size</p>
-                            <p className="text-lg font-semibold">{queue.queueSize || 0}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Consumers</p>
-                            <p className="text-lg font-semibold">{queue.consumerCount || 0}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Enqueued</p>
-                            <p className="text-lg font-semibold">{(queue.enqueueCount || 0).toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Dequeued</p>
-                            <p className="text-lg font-semibold">{(queue.dequeueCount || 0).toLocaleString()}</p>
-                          </div>
-                        </div>
-                        {queue.memoryUsage !== undefined && (
-                          <div className="mt-4">
-                            <div className="flex justify-between text-xs mb-1">
-                              <span>Memory Usage</span>
-                              <span>{queue.memoryUsage} MB ({queue.memoryPercent || 0}%)</span>
+                        <div className="space-y-4">
+                          {/* Queue Size Progress */}
+                          {queueSize > 0 && (
+                            <div>
+                              <div className="flex justify-between text-xs mb-1">
+                                <span className="text-muted-foreground">Queue Size</span>
+                                <span className="font-medium">{queueSize} messages</span>
+                              </div>
+                              <Progress 
+                                value={Math.min(100, (queueSize / 1000) * 100)} 
+                                className="h-2"
+                              />
                             </div>
-                            <Progress value={queue.memoryPercent || 0} className="h-2" />
+                          )}
+                          <div className="grid grid-cols-4 gap-4">
+                            <div>
+                              <p className="text-xs text-muted-foreground">Queue Size</p>
+                              <p className="text-lg font-semibold">{queue.queueSize || 0}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Consumers</p>
+                              <p className="text-lg font-semibold">{queue.consumerCount || 0}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Enqueued</p>
+                              <p className="text-lg font-semibold">{(queue.enqueueCount || 0).toLocaleString()}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">Dequeued</p>
+                              <p className="text-lg font-semibold">{(queue.dequeueCount || 0).toLocaleString()}</p>
+                            </div>
                           </div>
-                        )}
+                          <Separator />
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor={`queue-memory-limit-${originalIndex}`} className="text-xs">
+                                Memory Limit (MB)
+                              </Label>
+                              <Input
+                                id={`queue-memory-limit-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={queue.memoryLimit || ''}
+                                onChange={(e) => updateQueue(originalIndex, 'memoryLimit', e.target.value ? Number(e.target.value) : undefined)}
+                                placeholder="Unlimited"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Maximum memory usage for this queue (0 = unlimited)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`queue-prefetch-${originalIndex}`} className="text-xs">
+                                Prefetch Size
+                              </Label>
+                              <Input
+                                id={`queue-prefetch-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={queue.prefetch || ''}
+                                onChange={(e) => updateQueue(originalIndex, 'prefetch', e.target.value ? Number(e.target.value) : undefined)}
+                                placeholder="Default"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Number of messages to prefetch per consumer (0 = default)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`queue-priority-${originalIndex}`} className="text-xs">
+                                Default Priority (0-9)
+                              </Label>
+                              <Input
+                                id={`queue-priority-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                max="9"
+                                value={queue.defaultPriority !== undefined ? queue.defaultPriority : ''}
+                                onChange={(e) => updateQueue(originalIndex, 'defaultPriority', e.target.value ? Number(e.target.value) : undefined)}
+                                placeholder="Default"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Default message priority for this queue (0 = lowest, 9 = highest)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`queue-ttl-${originalIndex}`} className="text-xs">
+                                Default TTL (seconds)
+                              </Label>
+                              <Input
+                                id={`queue-ttl-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={queue.defaultTTL !== undefined ? queue.defaultTTL : ''}
+                                onChange={(e) => updateQueue(originalIndex, 'defaultTTL', e.target.value ? Number(e.target.value) : undefined)}
+                                placeholder="Unlimited"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Default message time-to-live in seconds (0 = unlimited)
+                              </p>
+                            </div>
+                          </div>
+                          {queue.memoryUsage !== undefined && (
+                            <div className="mt-4">
+                              <div className="flex justify-between text-xs mb-1">
+                                <span>Memory Usage</span>
+                                <span>{queue.memoryUsage} MB ({queue.memoryPercent || 0}%)</span>
+                              </div>
+                              <Progress value={queue.memoryPercent || 0} className="h-2" />
+                            </div>
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -687,34 +1070,53 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search topics..."
+                      value={topicSearchQuery}
+                      onChange={(e) => setTopicSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  {topicSearchQuery && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Showing {filteredTopics.length} of {topics.length} topics
+                    </p>
+                  )}
+                </div>
                 <div className="space-y-4">
-                  {topics.map((topic, index) => (
-                    <Card key={index} className="border-l-4 border-l-green-500">
+                  {filteredTopics.map((topic, index) => {
+                    const originalIndex = topics.findIndex(t => t.name === topic.name);
+                    const subscriberCount = topic.subscriberCount || 0;
+                    return (
+                    <Card key={originalIndex} className="border-l-4 border-l-green-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 flex-1">
                             <Database className="h-5 w-5 text-green-500" />
-                            {editingTopicIndex === index ? (
+                            {editingTopicIndex === originalIndex ? (
                               <div className="flex-1 space-y-1">
                                 <div className="flex items-center gap-2">
                                   <Input
                                     value={topic.name}
-                                    onChange={(e) => updateTopic(index, 'name', e.target.value)}
+                                    onChange={(e) => updateTopic(originalIndex, 'name', e.target.value)}
                                     placeholder="topic-name"
-                                    className={`flex-1 ${topicNameErrors[index] ? 'border-red-500' : ''}`}
+                                    className={`flex-1 ${topicNameErrors[originalIndex] ? 'border-red-500' : ''}`}
                                     onBlur={() => {
-                                      if (!topicNameErrors[index]) {
+                                      if (!topicNameErrors[originalIndex]) {
                                         setEditingTopicIndex(null);
                                       }
                                     }}
                                     onKeyDown={(e) => {
-                                      if (e.key === 'Enter' && !topicNameErrors[index]) {
+                                      if (e.key === 'Enter' && !topicNameErrors[originalIndex]) {
                                         setEditingTopicIndex(null);
                                       }
                                       if (e.key === 'Escape') {
                                         setEditingTopicIndex(null);
                                         const newErrors = { ...topicNameErrors };
-                                        delete newErrors[index];
+                                        delete newErrors[originalIndex];
                                         setTopicNameErrors(newErrors);
                                       }
                                     }}
@@ -724,17 +1126,17 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                     size="sm"
                                     variant="outline"
                                     onClick={() => {
-                                      if (!topicNameErrors[index]) {
+                                      if (!topicNameErrors[originalIndex]) {
                                         setEditingTopicIndex(null);
                                       }
                                     }}
-                                    disabled={!!topicNameErrors[index]}
+                                    disabled={!!topicNameErrors[originalIndex]}
                                   >
                                     <X className="h-3 w-3" />
                                   </Button>
                                 </div>
-                                {topicNameErrors[index] && (
-                                  <p className="text-xs text-red-500">{topicNameErrors[index]}</p>
+                                {topicNameErrors[originalIndex] && (
+                                  <p className="text-xs text-red-500">{topicNameErrors[originalIndex]}</p>
                                 )}
                               </div>
                             ) : (
@@ -746,18 +1148,18 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                   size="icon"
                                   variant="ghost"
                                   className="h-6 w-6"
-                                  onClick={() => setEditingTopicIndex(index)}
+                                  onClick={() => setEditingTopicIndex(originalIndex)}
                                 >
                                   <Edit2 className="h-3 w-3" />
                                 </Button>
                               </>
                             )}
                           </div>
-                          {editingTopicIndex !== index && (
+                          {editingTopicIndex !== originalIndex && (
                             <Button
                               variant="ghost"
                               size="icon"
-                              onClick={() => removeTopic(index)}
+                              onClick={() => handleRemoveTopic(originalIndex)}
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -783,6 +1185,58 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                             <p className="text-lg font-semibold">{topic.memoryUsage || 0} MB</p>
                           </div>
                         </div>
+                        <Separator />
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor={`topic-memory-limit-${originalIndex}`} className="text-xs">
+                              Memory Limit (MB)
+                            </Label>
+                            <Input
+                              id={`topic-memory-limit-${originalIndex}`}
+                              type="number"
+                              min="0"
+                              value={topic.memoryLimit || ''}
+                              onChange={(e) => updateTopic(originalIndex, 'memoryLimit', e.target.value ? Number(e.target.value) : undefined)}
+                              placeholder="Unlimited"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Maximum memory usage for this topic (0 = unlimited)
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`topic-priority-${originalIndex}`} className="text-xs">
+                              Default Priority (0-9)
+                            </Label>
+                            <Input
+                              id={`topic-priority-${originalIndex}`}
+                              type="number"
+                              min="0"
+                              max="9"
+                              value={topic.defaultPriority !== undefined ? topic.defaultPriority : ''}
+                              onChange={(e) => updateTopic(originalIndex, 'defaultPriority', e.target.value ? Number(e.target.value) : undefined)}
+                              placeholder="Default"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Default message priority for this topic (0 = lowest, 9 = highest)
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`topic-ttl-${originalIndex}`} className="text-xs">
+                              Default TTL (seconds)
+                            </Label>
+                            <Input
+                              id={`topic-ttl-${originalIndex}`}
+                              type="number"
+                              min="0"
+                              value={topic.defaultTTL !== undefined ? topic.defaultTTL : ''}
+                              onChange={(e) => updateTopic(originalIndex, 'defaultTTL', e.target.value ? Number(e.target.value) : undefined)}
+                              placeholder="Unlimited"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Default message time-to-live in seconds (0 = unlimited)
+                            </p>
+                          </div>
+                        </div>
                         {topic.memoryPercent !== undefined && (
                           <div className="mt-4">
                             <div className="flex justify-between text-xs mb-1">
@@ -794,7 +1248,8 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                         )}
                       </CardContent>
                     </Card>
-                  ))}
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -812,11 +1267,29 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                {connections.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">No active connections</p>
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search connections..."
+                      value={connectionSearchQuery}
+                      onChange={(e) => setConnectionSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  {connectionSearchQuery && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Showing {filteredConnections.length} of {activeMQConnections.length} connections
+                    </p>
+                  )}
+                </div>
+                {filteredConnections.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    {activeMQConnections.length === 0 ? 'No active connections' : 'No connections match your search'}
+                  </p>
                 ) : (
                   <div className="space-y-2">
-                    {connections.map((conn) => (
+                    {filteredConnections.map((conn) => (
                       <Card key={conn.id} className="border-l-4 border-l-purple-500">
                         <CardContent className="pt-4">
                           <div className="flex items-center justify-between">
@@ -865,41 +1338,148 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                {subscriptions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">No active subscriptions</p>
+                <div className="mb-4">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search subscriptions..."
+                      value={subscriptionSearchQuery}
+                      onChange={(e) => setSubscriptionSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                  </div>
+                  {subscriptionSearchQuery && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Showing {filteredSubscriptions.length} of {subscriptions.length} subscriptions
+                    </p>
+                  )}
+                </div>
+                {filteredSubscriptions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">
+                    {subscriptions.length === 0 ? 'No active subscriptions' : 'No subscriptions match your search'}
+                  </p>
                 ) : (
                   <div className="space-y-2">
-                    {subscriptions.map((sub) => (
-                      <Card key={sub.id} className="border-l-4 border-l-orange-500">
-                        <CardContent className="pt-4">
-                          <div className="flex items-center justify-between">
-                            <div className="flex-1 grid grid-cols-4 gap-4">
-                              <div>
-                                <p className="text-xs text-muted-foreground">Destination</p>
-                                <p className="text-sm font-medium">{sub.destination}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Client ID</p>
-                                <p className="text-sm font-medium">{sub.clientId}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Pending</p>
-                                <p className="text-sm font-medium">{sub.pendingQueueSize || 0}</p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">Dispatched</p>
-                                <p className="text-sm font-medium">{sub.dispatchedQueueSize || 0}</p>
+                    {filteredSubscriptions
+                      .filter((sub) => subscriptions.findIndex(s => s.id === sub.id) !== -1)
+                      .map((sub) => {
+                      const originalIndex = subscriptions.findIndex(s => s.id === sub.id);
+                      
+                      const updateSubscription = (field: keyof Subscription, value: any) => {
+                        const newSubscriptions = [...subscriptions];
+                        newSubscriptions[originalIndex] = { ...newSubscriptions[originalIndex], [field]: value };
+                        updateConfig({ subscriptions: newSubscriptions });
+                      };
+                      
+                      const selectorValue = selectorValues[originalIndex] !== undefined 
+                        ? selectorValues[originalIndex] 
+                        : (sub.selector || '');
+                      
+                      return (
+                        <Card key={sub.id} className="border-l-4 border-l-orange-500">
+                          <CardContent className="pt-4">
+                            <div className="flex items-center justify-between">
+                              <div className="flex-1 grid grid-cols-4 gap-4">
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Destination</p>
+                                  <p className="text-sm font-medium">{sub.destination}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Client ID</p>
+                                  <p className="text-sm font-medium">{sub.clientId}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Pending</p>
+                                  <p className="text-sm font-medium">{sub.pendingQueueSize || 0}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Dispatched</p>
+                                  <p className="text-sm font-medium">{sub.dispatchedQueueSize || 0}</p>
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          {sub.selector && (
-                            <p className="text-xs text-muted-foreground mt-2">
-                              Selector: {sub.selector}
-                            </p>
-                          )}
-                        </CardContent>
-                      </Card>
-                    ))}
+                            <Separator className="my-3" />
+                            <div className="space-y-3">
+                              <div className="space-y-2">
+                                <Label htmlFor={`sub-selector-${originalIndex}`} className="text-xs">
+                                  Message Selector
+                                </Label>
+                                {editingSelectorIndex === originalIndex ? (
+                                  <div className="flex gap-2">
+                                    <Input
+                                      id={`sub-selector-${originalIndex}`}
+                                      value={selectorValue}
+                                      onChange={(e) => {
+                                        setSelectorValues({ ...selectorValues, [originalIndex]: e.target.value });
+                                      }}
+                                      placeholder="e.g., priority > 5 OR type = 'order'"
+                                      className="flex-1"
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          updateSubscription('selector', selectorValue || undefined);
+                                          setEditingSelectorIndex(null);
+                                        }
+                                        if (e.key === 'Escape') {
+                                          setSelectorValues({ ...selectorValues, [originalIndex]: sub.selector || '' });
+                                          setEditingSelectorIndex(null);
+                                        }
+                                      }}
+                                      autoFocus
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        updateSubscription('selector', selectorValue || undefined);
+                                        setEditingSelectorIndex(null);
+                                      }}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      value={sub.selector || '(no selector)'}
+                                      readOnly
+                                      className="flex-1 bg-muted"
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => {
+                                        setSelectorValues({ ...selectorValues, [originalIndex]: sub.selector || '' });
+                                        setEditingSelectorIndex(originalIndex);
+                                      }}
+                                    >
+                                      <Edit2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                )}
+                                <p className="text-xs text-muted-foreground">
+                                  SQL-like selector to filter messages (e.g., &quot;priority &gt; 5&quot;, &quot;type = &apos;order&apos;&quot;)
+                                </p>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <div>
+                                  <Label htmlFor={`sub-durable-${originalIndex}`} className="text-xs">
+                                    Durable Subscription
+                                  </Label>
+                                  <p className="text-xs text-muted-foreground">
+                                    Subscription survives client disconnection
+                                  </p>
+                                </div>
+                                <Switch
+                                  id={`sub-durable-${originalIndex}`}
+                                  checked={sub.durable || false}
+                                  onCheckedChange={(checked) => updateSubscription('durable', checked)}
+                                />
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -957,10 +1537,20 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                           <Input
                             id="acl-resource"
                             value={aclForm.resource}
-                            onChange={(e) => setAclForm({ ...aclForm, resource: e.target.value })}
+                            onChange={(e) => {
+                              setAclForm({ ...aclForm, resource: e.target.value });
+                              // Validate on change
+                              const error = validateAclResource(e.target.value);
+                              setAclResourceError(error);
+                            }}
                             placeholder="queue://orders or topic://events"
+                            className={aclResourceError ? 'border-red-500' : ''}
                           />
-                          <p className="text-xs text-muted-foreground">Format: queue://name or topic://name (use * for all)</p>
+                          {aclResourceError ? (
+                            <p className="text-xs text-red-500">{aclResourceError}</p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">Format: queue://name or topic://name (use * for all)</p>
+                          )}
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-4">
@@ -1066,6 +1656,62 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Delete Queue Confirmation Dialog */}
+      <Dialog open={deleteQueueIndex !== null} onOpenChange={(open) => !open && setDeleteQueueIndex(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Queue</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the queue "{queues[deleteQueueIndex || 0]?.name}"?
+              {queues[deleteQueueIndex || 0] && (queues[deleteQueueIndex || 0].queueSize || 0) > 0 && (
+                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
+                  <p className="text-sm text-yellow-800">
+                    <AlertCircle className="h-4 w-4 inline mr-1" />
+                    This queue contains {queues[deleteQueueIndex || 0].queueSize} messages. All messages will be lost.
+                  </p>
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteQueueIndex(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => deleteQueueIndex !== null && confirmRemoveQueue(deleteQueueIndex)}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Topic Confirmation Dialog */}
+      <Dialog open={deleteTopicIndex !== null} onOpenChange={(open) => !open && setDeleteTopicIndex(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Topic</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete the topic "{topics[deleteTopicIndex || 0]?.name}"?
+              {topics[deleteTopicIndex || 0] && subscriptions.some(s => s.destination === topics[deleteTopicIndex || 0]?.name) && (
+                <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded">
+                  <p className="text-sm text-yellow-800">
+                    <AlertCircle className="h-4 w-4 inline mr-1" />
+                    This topic has active subscriptions. Subscribers will lose access to this topic.
+                  </p>
+                </div>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTopicIndex(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={() => deleteTopicIndex !== null && confirmRemoveTopic(deleteTopicIndex)}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

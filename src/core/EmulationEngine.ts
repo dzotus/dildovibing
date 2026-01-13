@@ -3031,14 +3031,25 @@ export class EmulationEngine {
     const persistenceEnabled = activeMQConfig.persistenceEnabled ?? true;
     const maxConnections = activeMQConfig.maxConnections || 1000;
     const memoryLimit = activeMQConfig.memoryLimit || 1024;
-    const storeUsage = activeMQConfig.storeUsage || 0;
-    const tempUsage = activeMQConfig.tempUsage || 0;
+    const avgMessageSize = activeMQConfig.avgMessageSize || 1024;
+    const memoryPressureThreshold = activeMQConfig.memoryPressureThreshold ?? 0.8;
+    const queueLatencyBase = activeMQConfig.queueLatencyBase || 0;
+    const queueLatencyFactor = activeMQConfig.queueLatencyFactor || 1;
+    
+    // Calculate real memory usage from routing engine
+    const storeUsage = routingEngine.getStoreUsage(persistenceEnabled);
+    const tempUsage = routingEngine.getTempUsage(persistenceEnabled);
+    
+    // Update config with real memory usage
+    activeMQConfig.storeUsage = storeUsage;
+    activeMQConfig.tempUsage = tempUsage;
+    
     const connections = activeMQConfig.connections || [];
     
     if (!hasIncomingConnections) {
       // No incoming data, reset metrics but keep queue/topic state
       metrics.throughput = 0;
-      metrics.latency = this.getProtocolBaseLatency(protocol);
+      metrics.latency = this.getProtocolBaseLatency(protocol, activeMQConfig.protocolLatencies);
       metrics.errorRate = 0;
       
       // Calculate utilization from existing queue/topic depth
@@ -3106,10 +3117,11 @@ export class EmulationEngine {
     const totalTopicMessages = routingEngine.getTotalTopicMessages();
     const totalMessages = totalQueueDepth + totalTopicMessages;
     
-    const protocolLatency = this.getProtocolBaseLatency(protocol);
+    const protocolLatency = this.getProtocolBaseLatency(protocol, activeMQConfig.protocolLatencies);
     const persistenceLatency = persistenceEnabled ? 5 : 0; // 5ms for persistence
-    const queueLatency = Math.min(50, totalMessages / 1000); // 1ms per 1000 messages, max 50ms
-    const memoryPressureLatency = memoryLimit > 0 && (storeUsage + tempUsage) > memoryLimit * 0.8 
+    // Use configurable queue latency formula: base + (totalMessages / 1000) * factor, max 50ms
+    const queueLatency = Math.min(50, queueLatencyBase + (totalMessages / 1000) * queueLatencyFactor);
+    const memoryPressureLatency = memoryLimit > 0 && (storeUsage + tempUsage) > memoryLimit * memoryPressureThreshold 
       ? 10 : 0; // Additional latency when memory is high
     
     metrics.latency = protocolLatency + persistenceLatency + queueLatency + memoryPressureLatency + Math.random() * 5;
@@ -3334,7 +3346,13 @@ export class EmulationEngine {
   /**
    * Get base latency for protocol (ms)
    */
-  private getProtocolBaseLatency(protocol: string): number {
+  private getProtocolBaseLatency(protocol: string, configuredLatencies?: Record<string, number>): number {
+    // Use configured latencies if provided, otherwise use defaults
+    if (configuredLatencies && configuredLatencies[protocol] !== undefined) {
+      return configuredLatencies[protocol];
+    }
+    
+    // Default latencies
     const protocolLatencies: Record<string, number> = {
       'openwire': 2,   // Native protocol, fastest
       'amqp': 5,
@@ -3356,6 +3374,7 @@ export class EmulationEngine {
       queues: config.queues || [],
       topics: config.topics || [],
       subscriptions: config.subscriptions || [],
+      consumptionRate: config.consumptionRate ?? 10, // Default 10 msgs/sec per consumer
     });
     
     this.activeMQRoutingEngines.set(node.id, routingEngine);
@@ -3372,43 +3391,141 @@ export class EmulationEngine {
   ): void {
     const config = (node.data.config as any) || {};
     const activeMQConfig = config;
+    const routingEngine = this.activeMQRoutingEngines.get(node.id);
     
-    // Update queue metrics
+    // Get incoming and outgoing connections
+    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    const outgoingConnections = this.connections.filter(c => c.source === node.id);
+    
+    // Count consumers from outgoing connections (consumers read from queues)
+    const queueConsumerCounts = new Map<string, number>();
+    for (const conn of outgoingConnections) {
+      const targetNode = this.nodes.find(n => n.id === conn.target);
+      if (!targetNode) continue;
+      
+      const targetConfig = targetNode.data.config as any;
+      const messagingConfig = targetConfig?.messaging || {};
+      
+      // If outgoing connection has messaging.queue, it's a consumer
+      if (messagingConfig.queue) {
+        const currentCount = queueConsumerCounts.get(messagingConfig.queue) || 0;
+        queueConsumerCounts.set(messagingConfig.queue, currentCount + 1);
+      }
+    }
+    
+    // Count subscribers from outgoing connections (subscribers read from topics)
+    const topicSubscriberCounts = new Map<string, number>();
+    const topicSubscriptions = new Map<string, Array<{
+      id: string;
+      destination: string;
+      clientId: string;
+      selector?: string;
+      pendingQueueSize?: number;
+      dispatchedQueueSize?: number;
+      dispatchedCounter?: number;
+      enqueueCounter?: number;
+      dequeueCounter?: number;
+    }>>();
+    
+    for (const conn of outgoingConnections) {
+      const targetNode = this.nodes.find(n => n.id === conn.target);
+      if (!targetNode) continue;
+      
+      const targetConfig = targetNode.data.config as any;
+      const messagingConfig = targetConfig?.messaging || {};
+      
+      // If outgoing connection has messaging.topic, it's a subscriber
+      if (messagingConfig.topic) {
+        const currentCount = topicSubscriberCounts.get(messagingConfig.topic) || 0;
+        topicSubscriberCounts.set(messagingConfig.topic, currentCount + 1);
+        
+        // Create subscription entry
+        if (!topicSubscriptions.has(messagingConfig.topic)) {
+          topicSubscriptions.set(messagingConfig.topic, []);
+        }
+        
+        const topicSubs = topicSubscriptions.get(messagingConfig.topic)!;
+        const clientId = targetConfig?.clientId || targetConfig?.username || `client-${conn.target.slice(0, 8)}`;
+        const selector = messagingConfig.selector;
+        
+        // Check if subscription already exists
+        const existingSub = topicSubs.find(sub => sub.clientId === clientId && sub.destination === messagingConfig.topic);
+        if (!existingSub) {
+          const topicMetricsData = topicMetrics.get(messagingConfig.topic);
+          topicSubs.push({
+            id: `sub-${conn.id}-${messagingConfig.topic}`,
+            destination: messagingConfig.topic,
+            clientId,
+            selector,
+            pendingQueueSize: 0,
+            dispatchedQueueSize: 0,
+            dispatchedCounter: topicMetricsData?.enqueueCount || 0,
+            enqueueCounter: topicMetricsData?.enqueueCount || 0,
+            dequeueCounter: topicMetricsData?.dequeueCount || 0,
+          });
+        }
+      }
+    }
+    
+    // Update queue metrics with consumer counts from outgoing connections
     const queues = config.queues || [];
     for (let i = 0; i < queues.length; i++) {
       const queue = queues[i];
       const metrics = queueMetrics.get(queue.name);
+      const consumerCountFromConnections = queueConsumerCounts.get(queue.name) || 0;
+      
+      // Update routing engine with actual consumer count
+      if (routingEngine) {
+        routingEngine.updateQueue(queue.name, { consumerCount: consumerCountFromConnections });
+      }
+      
       if (metrics) {
         queues[i] = {
           ...queue,
           queueSize: metrics.queueSize,
-          consumerCount: metrics.consumerCount,
+          consumerCount: consumerCountFromConnections, // Use count from outgoing connections
           enqueueCount: metrics.enqueueCount,
           dequeueCount: metrics.dequeueCount,
+        };
+      } else {
+        queues[i] = {
+          ...queue,
+          consumerCount: consumerCountFromConnections, // Update even if no metrics
         };
       }
     }
     config.queues = queues;
     
-    // Update topic metrics
+    // Update topic metrics with subscriber counts from outgoing connections
     const topics = config.topics || [];
     for (let i = 0; i < topics.length; i++) {
       const topic = topics[i];
       const metrics = topicMetrics.get(topic.name);
+      const subscriberCountFromConnections = topicSubscriberCounts.get(topic.name) || 0;
+      
+      // Update routing engine with actual subscriber count
+      if (routingEngine) {
+        routingEngine.updateTopic(topic.name, { subscriberCount: subscriberCountFromConnections });
+      }
+      
       if (metrics) {
         topics[i] = {
           ...topic,
-          subscriberCount: metrics.subscriberCount,
+          subscriberCount: subscriberCountFromConnections, // Use count from outgoing connections
           enqueueCount: metrics.enqueueCount,
           dequeueCount: metrics.dequeueCount,
+        };
+      } else {
+        topics[i] = {
+          ...topic,
+          subscriberCount: subscriberCountFromConnections, // Update even if no metrics
         };
       }
     }
     config.topics = topics;
     
-    // Create connections dynamically from incoming canvas connections
+    // Create connections dynamically from incoming and outgoing canvas connections
     // In real ActiveMQ, connections are created automatically when clients connect
-    const incomingConnections = this.connections.filter(c => c.target === node.id);
     const connections: Array<{
       id: string;
       remoteAddress?: string;
@@ -3417,8 +3534,10 @@ export class EmulationEngine {
       connectedSince?: string;
       messageCount?: number;
       protocol?: 'OpenWire' | 'AMQP' | 'MQTT' | 'STOMP' | 'WebSocket';
+      role?: 'producer' | 'consumer' | 'subscriber';
     }> = [];
     
+    // Add incoming connections (producers)
     for (const conn of incomingConnections) {
       const sourceNode = this.nodes.find(n => n.id === conn.source);
       if (!sourceNode) continue;
@@ -3429,7 +3548,7 @@ export class EmulationEngine {
       
       // Get connection metrics to estimate message count
       const connMetrics = this.connectionMetrics.get(conn.id);
-      const estimatedMessages = connMetrics ? Math.floor(connMetrics.traffic / 1024) : 0; // Rough estimate
+      const estimatedMessages = connMetrics ? Math.floor(connMetrics.traffic / 1024) : 0;
       
       connections.push({
         id: conn.id,
@@ -3443,13 +3562,44 @@ export class EmulationEngine {
                   protocol === 'mqtt' ? 'MQTT' :
                   protocol === 'stomp' ? 'STOMP' :
                   protocol === 'ws' ? 'WebSocket' : 'OpenWire',
+        role: messagingConfig.queue ? 'producer' : messagingConfig.topic ? 'producer' : 'producer',
+      });
+    }
+    
+    // Add outgoing connections (consumers/subscribers)
+    for (const conn of outgoingConnections) {
+      const targetNode = this.nodes.find(n => n.id === conn.target);
+      if (!targetNode) continue;
+      
+      const targetConfig = targetNode.data.config as any;
+      const messagingConfig = targetConfig?.messaging || {};
+      const protocol = activeMQConfig.protocol || 'openwire';
+      
+      // Get connection metrics to estimate message count
+      const connMetrics = this.connectionMetrics.get(conn.id);
+      const estimatedMessages = connMetrics ? Math.floor(connMetrics.traffic / 1024) : 0;
+      
+      const role = messagingConfig.queue ? 'consumer' : messagingConfig.topic ? 'subscriber' : 'consumer';
+      
+      connections.push({
+        id: conn.id,
+        remoteAddress: `${targetNode.data.label || targetNode.id}`,
+        clientId: targetConfig?.clientId || targetConfig?.username || `client-${conn.target.slice(0, 8)}`,
+        userName: activeMQConfig.username || 'admin',
+        connectedSince: new Date().toISOString(),
+        messageCount: estimatedMessages,
+        protocol: protocol === 'openwire' ? 'OpenWire' : 
+                  protocol === 'amqp' ? 'AMQP' :
+                  protocol === 'mqtt' ? 'MQTT' :
+                  protocol === 'stomp' ? 'STOMP' :
+                  protocol === 'ws' ? 'WebSocket' : 'OpenWire',
+        role,
       });
     }
     
     config.connections = connections;
     
-    // Create subscriptions dynamically based on topics and incoming connections
-    // In real ActiveMQ, subscriptions are created when clients subscribe to topics
+    // Create subscriptions dynamically based on outgoing connections to topics
     const subscriptions: Array<{
       id: string;
       destination: string;
@@ -3462,10 +3612,13 @@ export class EmulationEngine {
       dequeueCounter?: number;
     }> = [];
     
-    // For each topic, create subscriptions for connected consumers
+    // Collect subscriptions from topicSubscriptions map
+    for (const [topicName, subs] of topicSubscriptions.entries()) {
+      subscriptions.push(...subs);
+    }
+    
+    // Also check incoming connections for topic subscriptions (for backward compatibility)
     for (const topic of topics) {
-      // Find connections that might be subscribing to this topic
-      // (simplified: assume all incoming connections can subscribe to topics)
       for (const conn of incomingConnections) {
         const sourceNode = this.nodes.find(n => n.id === conn.source);
         if (!sourceNode) continue;
@@ -3473,19 +3626,26 @@ export class EmulationEngine {
         const sourceConfig = sourceNode.data.config as any;
         const messagingConfig = sourceConfig?.messaging || {};
         
-        // Check if this connection is for a topic (not a queue)
-        if (messagingConfig.topic === topic.name || !messagingConfig.queue) {
-          const topicMetricsData = topicMetrics.get(topic.name);
-          subscriptions.push({
-            id: `sub-${conn.id}-${topic.name}`,
-            destination: topic.name,
-            clientId: `client-${conn.source.slice(0, 8)}`,
-            pendingQueueSize: 0, // Will be updated by routing engine
-            dispatchedQueueSize: 0,
-            dispatchedCounter: topicMetricsData?.enqueueCount || 0,
-            enqueueCounter: topicMetricsData?.enqueueCount || 0,
-            dequeueCounter: topicMetricsData?.dequeueCount || 0,
-          });
+        // Check if this connection is for a topic (not a queue) and no outgoing connection exists
+        if (messagingConfig.topic === topic.name && !messagingConfig.queue) {
+          const existingSub = subscriptions.find(sub => 
+            sub.destination === topic.name && 
+            sub.clientId === `client-${conn.source.slice(0, 8)}`
+          );
+          
+          if (!existingSub) {
+            const topicMetricsData = topicMetrics.get(topic.name);
+            subscriptions.push({
+              id: `sub-${conn.id}-${topic.name}`,
+              destination: topic.name,
+              clientId: `client-${conn.source.slice(0, 8)}`,
+              pendingQueueSize: 0,
+              dispatchedQueueSize: 0,
+              dispatchedCounter: topicMetricsData?.enqueueCount || 0,
+              enqueueCounter: topicMetricsData?.enqueueCount || 0,
+              dequeueCounter: topicMetricsData?.dequeueCount || 0,
+            });
+          }
         }
       }
     }

@@ -11,6 +11,10 @@ export interface ActiveMQQueue {
   dequeueCount?: number;
   memoryUsage?: number;
   memoryPercent?: number;
+  memoryLimit?: number; // Memory limit in MB for this queue
+  prefetch?: number; // Prefetch size for consumers
+  defaultPriority?: number; // Default message priority (0-9)
+  defaultTTL?: number; // Default message TTL in seconds
 }
 
 export interface ActiveMQTopic {
@@ -20,6 +24,9 @@ export interface ActiveMQTopic {
   dequeueCount?: number;
   memoryUsage?: number;
   memoryPercent?: number;
+  memoryLimit?: number; // Memory limit in MB for this topic
+  defaultPriority?: number; // Default message priority (0-9)
+  defaultTTL?: number; // Default message TTL in seconds
 }
 
 export interface ActiveMQSubscription {
@@ -32,6 +39,7 @@ export interface ActiveMQSubscription {
   dispatchedCounter?: number;
   enqueueCounter?: number;
   dequeueCounter?: number;
+  durable?: boolean; // Whether this is a durable subscription
 }
 
 export interface QueuedMessage {
@@ -69,6 +77,7 @@ export class ActiveMQRoutingEngine {
     dequeueCount: number;
     lastUpdate: number;
   }> = new Map();
+  private consumptionRate: number = 10; // messages per second per consumer (default: 10, configurable)
 
   /**
    * Initialize with ActiveMQ configuration
@@ -77,7 +86,12 @@ export class ActiveMQRoutingEngine {
     queues?: ActiveMQQueue[];
     topics?: ActiveMQTopic[];
     subscriptions?: ActiveMQSubscription[];
+    consumptionRate?: number; // messages per second per consumer
   }) {
+    // Set consumption rate if provided
+    if (config.consumptionRate !== undefined) {
+      this.consumptionRate = config.consumptionRate;
+    }
     // Clear previous state
     this.queues.clear();
     this.topics.clear();
@@ -338,7 +352,7 @@ export class ActiveMQRoutingEngine {
 
       // Calculate consumption rate
       const consumers = queue.consumerCount || state.consumerCount || 0;
-      const consumptionRate = consumers * 10; // 10 msgs/sec per consumer (configurable)
+      const consumptionRate = consumers * this.consumptionRate; // msgs/sec per consumer (configurable)
       const consumptionDelta = (consumptionRate * deltaTimeMs) / 1000;
 
       // Consume messages
@@ -366,8 +380,8 @@ export class ActiveMQRoutingEngine {
           return true;
         });
 
-        // Simulate consumption (simplified: 10 msgs/sec per subscription)
-        const consumptionRate = 10; // msgs/sec per subscription
+        // Simulate consumption (use configurable consumption rate)
+        const consumptionRate = this.consumptionRate; // msgs/sec per subscription
         const consumptionDelta = (consumptionRate * deltaTimeMs) / 1000;
         const toConsume = Math.min(consumptionDelta, messages.length);
         const consumed = messages.splice(0, Math.floor(toConsume));
@@ -549,6 +563,54 @@ export class ActiveMQRoutingEngine {
         state.subscriberCount = updates.subscriberCount;
       }
     }
+  }
+
+  /**
+   * Get store usage (persistent messages) in bytes
+   */
+  public getStoreUsage(persistenceEnabled: boolean): number {
+    if (!persistenceEnabled) {
+      return 0; // No persistent storage if persistence is disabled
+    }
+    
+    let totalSize = 0;
+    // Count persistent messages in queues
+    for (const messages of this.queueMessages.values()) {
+      for (const msg of messages) {
+        totalSize += msg.size;
+      }
+    }
+    // Count persistent messages in subscriptions (durable subscriptions)
+    for (const messages of this.subscriptionMessages.values()) {
+      for (const msg of messages) {
+        totalSize += msg.size;
+      }
+    }
+    return totalSize;
+  }
+
+  /**
+   * Get temp usage (non-persistent messages) in bytes
+   */
+  public getTempUsage(persistenceEnabled: boolean): number {
+    if (persistenceEnabled) {
+      return 0; // All messages are persistent if persistence is enabled
+    }
+    
+    let totalSize = 0;
+    // Count non-persistent messages in queues
+    for (const messages of this.queueMessages.values()) {
+      for (const msg of messages) {
+        totalSize += msg.size;
+      }
+    }
+    // Count non-persistent messages in topics (non-durable subscriptions)
+    for (const messages of this.topicMessages.values()) {
+      for (const msg of messages) {
+        totalSize += msg.size;
+      }
+    }
+    return totalSize;
   }
 }
 
