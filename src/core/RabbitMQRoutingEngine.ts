@@ -18,6 +18,8 @@ export interface Queue {
   messageTtl?: number;
   maxLength?: number;
   maxPriority?: number;
+  queueType?: 'classic' | 'quorum' | 'stream'; // x-queue-type
+  singleActiveConsumer?: boolean; // x-single-active-consumer
 }
 
 export interface Exchange {
@@ -27,6 +29,7 @@ export interface Exchange {
   autoDelete: boolean;
   internal: boolean;
   arguments?: Record<string, any>;
+  alternateExchange?: string; // Exchange to route messages when no bindings match
 }
 
 export interface Binding {
@@ -65,6 +68,8 @@ export class RabbitMQRoutingEngine {
     total: number;
     lastUpdate: number;
   }> = new Map();
+  private consumptionRate: number = 10; // messages per second per consumer (default: 10)
+  private processingTime: number = 100; // milliseconds per message (default: 100)
 
   /**
    * Initialize with RabbitMQ configuration
@@ -73,7 +78,16 @@ export class RabbitMQRoutingEngine {
     queues?: Queue[];
     exchanges?: Exchange[];
     bindings?: Binding[];
+    consumptionRate?: number;
+    processingTime?: number;
   }) {
+    // Set consumption rate and processing time if provided
+    if (config.consumptionRate !== undefined) {
+      this.consumptionRate = config.consumptionRate;
+    }
+    if (config.processingTime !== undefined) {
+      this.processingTime = config.processingTime;
+    }
     // Clear previous state
     this.queues.clear();
     this.exchanges.clear();
@@ -138,6 +152,11 @@ export class RabbitMQRoutingEngine {
       if (this.shouldRouteToQueue(exchange, binding, routingKey, headers)) {
         targetQueues.push(binding.destination);
       }
+    }
+
+    // If no queues matched and alternate exchange is configured, route to alternate exchange
+    if (targetQueues.length === 0 && exchange.alternateExchange) {
+      return this.routeMessage(exchange.alternateExchange, routingKey, payload, size, headers, priority);
     }
 
     // Add message to target queues
@@ -217,17 +236,43 @@ export class RabbitMQRoutingEngine {
         return true;
 
       case 'headers':
-        // Headers: match based on headers (simplified - check if headers match binding arguments)
+        // Headers: match based on headers with x-match (all/any) support
         if (!headers || !binding.arguments) return false;
-        // In real RabbitMQ, headers exchange uses x-match (all/any) and header values
-        // Simplified: check if all binding arguments match headers
-        for (const [key, value] of Object.entries(binding.arguments)) {
-          if (key.startsWith('x-')) continue; // Skip x-match, x-match-type
-          if (headers[key] !== value) {
-            return false;
-          }
+        
+        // Get x-match mode (default: 'all')
+        const xMatch = (binding.arguments['x-match'] as string) || 'all';
+        
+        // Filter out x-match and x-match-type from comparison
+        const headerKeys = Object.keys(binding.arguments).filter(key => !key.startsWith('x-'));
+        
+        if (headerKeys.length === 0) {
+          // No headers to match, route to queue
+          return true;
         }
-        return true;
+        
+        if (xMatch === 'all') {
+          // All specified headers must match
+          for (const key of headerKeys) {
+            const bindingValue = binding.arguments[key];
+            const headerValue = headers[key];
+            if (headerValue !== bindingValue) {
+              return false;
+            }
+          }
+          return true;
+        } else if (xMatch === 'any') {
+          // At least one header must match
+          for (const key of headerKeys) {
+            const bindingValue = binding.arguments[key];
+            const headerValue = headers[key];
+            if (headerValue === bindingValue) {
+              return true;
+            }
+          }
+          return false;
+        }
+        
+        return false;
 
       default:
         return false;
@@ -301,7 +346,7 @@ export class RabbitMQRoutingEngine {
 
       // Calculate consumption rate
       const consumers = queue.consumers || 0;
-      const consumptionRate = consumers * 10; // 10 msgs/sec per consumer (configurable)
+      const consumptionRate = consumers * this.consumptionRate; // msgs/sec per consumer (configurable)
       const consumptionDelta = (consumptionRate * deltaTimeMs) / 1000;
 
       // Consume messages: move from ready queue to unacked (delivered to consumers)
@@ -312,9 +357,8 @@ export class RabbitMQRoutingEngine {
       
       // Simulate ack: remove from unacked after processing
       // In real RabbitMQ, messages are acked after processing
-      // Simplified: unacked messages are acked over time (processing time ~100ms per message)
-      const processingTime = 100; // ms per message
-      const ackRate = (deltaTimeMs / processingTime) * unackedMessages.length; // Process unacked messages
+      // Simplified: unacked messages are acked over time (processing time configurable)
+      const ackRate = (deltaTimeMs / this.processingTime) * unackedMessages.length; // Process unacked messages
       const acked = Math.min(ackRate, unackedMessages.length);
       unackedMessages.splice(0, Math.floor(acked)); // Remove acked messages
       this.unackedMessages.set(queueName, unackedMessages);

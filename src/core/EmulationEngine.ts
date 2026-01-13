@@ -6,6 +6,7 @@ import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 import { SQSRoutingEngine } from './SQSRoutingEngine';
 import { AzureServiceBusRoutingEngine } from './AzureServiceBusRoutingEngine';
 import { PubSubRoutingEngine } from './PubSubRoutingEngine';
+import { KafkaRoutingEngine } from './KafkaRoutingEngine';
 import { KongRoutingEngine } from './KongRoutingEngine';
 import { ApigeeRoutingEngine } from './ApigeeRoutingEngine';
 import { MuleSoftRoutingEngine } from './MuleSoftRoutingEngine';
@@ -169,6 +170,10 @@ export class EmulationEngine {
   // Pub/Sub routing engines per node
   private pubSubRoutingEngines: Map<string, PubSubRoutingEngine> = new Map();
   private lastPubSubUpdate: Map<string, number> = new Map();
+  
+  // Kafka routing engines per node
+  private kafkaRoutingEngines: Map<string, KafkaRoutingEngine> = new Map();
+  private lastKafkaUpdate: Map<string, number> = new Map();
   
   // Kong Gateway routing engines per node
   private kongRoutingEngines: Map<string, KongRoutingEngine> = new Map();
@@ -436,6 +441,9 @@ export class EmulationEngine {
         if (node.type === 'gcp-pubsub') {
           this.initializePubSubRoutingEngine(node);
         }
+        if (node.type === 'kafka') {
+          this.initializeKafkaRoutingEngine(node);
+        }
         if (node.type === 'kong') {
           this.initializeKongRoutingEngine(node);
         }
@@ -692,6 +700,11 @@ export class EmulationEngine {
       // Initialize Azure Service Bus routing engine for Azure Service Bus nodes
       if (node.type === 'azure-service-bus') {
         this.initializeAzureServiceBusRoutingEngine(node);
+      }
+      
+      // Initialize Kafka routing engine for Kafka nodes
+      if (node.type === 'kafka') {
+        this.initializeKafkaRoutingEngine(node);
       }
       
       // Initialize Pub/Sub routing engine for Pub/Sub nodes
@@ -1074,6 +1087,7 @@ export class EmulationEngine {
         this.activeMQRoutingEngines.delete(nodeId);
         this.sqsRoutingEngines.delete(nodeId);
         this.azureServiceBusRoutingEngines.delete(nodeId);
+        this.kafkaRoutingEngines.delete(nodeId);
         this.pubSubRoutingEngines.delete(nodeId);
         this.kongRoutingEngines.delete(nodeId);
         this.nginxRoutingEngines.delete(nodeId);
@@ -2221,6 +2235,13 @@ export class EmulationEngine {
    * Kafka broker emulation with realistic simulation based on actual configuration
    */
   private simulateKafka(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Initialize routing engine if not exists
+    if (!this.kafkaRoutingEngines.has(node.id)) {
+      this.initializeKafkaRoutingEngine(node);
+    }
+    
+    const routingEngine = this.kafkaRoutingEngines.get(node.id)!;
+    
     // Extract real Kafka configuration from node.data.config
     const kafkaConfig = node.data.config as any;
     const brokers = kafkaConfig?.brokers || ['localhost:9092'];
@@ -2233,6 +2254,38 @@ export class EmulationEngine {
     const avgReplicationFactor = topics.length > 0 
       ? topics.reduce((sum: number, topic: any) => sum + (topic.replication || 1), 0) / topics.length 
       : config.replicationFactor || 1;
+    
+    // Process retention and compaction periodically
+    const now = Date.now();
+    const lastUpdate = this.lastKafkaUpdate.get(node.id) || now;
+    const deltaTime = now - lastUpdate;
+    if (deltaTime >= 1000) { // Process every second
+      routingEngine.processRetentionAndCompaction(deltaTime);
+      // Check and complete rebalancing
+      routingEngine.checkRebalancing();
+      
+      // Update broker health based on component metrics
+      const kafkaConfig = node.data.config as any;
+      const brokers = kafkaConfig?.brokers || ['localhost:9092'];
+      const brokerHealthStatus = new Map<number, boolean>();
+      
+      // Determine broker health based on component error rate and utilization
+      // Higher error rate or utilization = higher chance of broker failure
+      const errorRate = metrics.errorRate || 0;
+      const utilization = metrics.utilization || 0;
+      
+      for (let i = 0; i < brokers.length; i++) {
+        // Simulate broker health: healthy if error rate < 0.3 and utilization < 0.95
+        // In real Kafka, this would be based on actual broker metrics
+        const isHealthy = errorRate < 0.3 && utilization < 0.95;
+        brokerHealthStatus.set(i, isHealthy);
+      }
+      
+      // Update broker health and trigger leader election if needed
+      routingEngine.updateBrokerHealth(brokerHealthStatus);
+      
+      this.lastKafkaUpdate.set(node.id, now);
+    }
     
     // Calculate incoming throughput from connections
     const incomingConnections = this.connections.filter(c => c.target === node.id);
@@ -2283,13 +2336,21 @@ export class EmulationEngine {
     metrics.throughput = baseThroughputMsgs * (1 + variation);
     
     // Calculate latency based on realistic factors
+    // Use configurable parameters from Kafka config
+    const replicaFetchWaitMaxMs = (kafkaConfig as any)?.replicaFetchWaitMaxMs || 500;
+    const replicaSocketTimeoutMs = (kafkaConfig as any)?.replicaSocketTimeoutMs || 30000;
+    const requestTimeoutMs = (kafkaConfig as any)?.requestTimeoutMs || 30000;
+    
     // Base latency: 2-5ms for broker processing
     // Partition overhead: ~1ms per 10 partitions
-    // Replication overhead: ~2-5ms per replication write (network + disk)
+    // Replication overhead: based on replica fetch wait time and socket timeout
     // Compression overhead: varies by type
     const baseLatency = 3;
     const partitionOverhead = Math.min(totalPartitions / 10, 10); // Max 10ms
-    const replicationNetworkLatency = Math.max(1, (avgReplicationFactor - 1) * 2); // 2ms per additional replica
+    
+    // Replication latency based on configured timeouts
+    // replicaFetchWaitMaxMs affects how long to wait for replicas
+    const replicationNetworkLatency = Math.max(1, (avgReplicationFactor - 1) * (replicaFetchWaitMaxMs / 250)); // Proportional to fetch wait
     const replicationDiskLatency = Math.max(0, (avgReplicationFactor - 1) * 1); // 1ms per additional replica
     
     // Compression type affects latency (decompression on read)
@@ -2298,10 +2359,16 @@ export class EmulationEngine {
     metrics.latency = baseLatency + partitionOverhead + replicationNetworkLatency + replicationDiskLatency + compressionOverhead;
     
     // Add network latency between brokers (if multiple brokers)
+    // Socket timeout affects inter-broker communication
     if (brokers.length > 1) {
-      const interBrokerLatency = Math.min(5, brokers.length * 0.5); // ~0.5ms per additional broker
+      const socketTimeoutFactor = Math.min(1, replicaSocketTimeoutMs / 30000); // Normalize to 30s
+      const interBrokerLatency = Math.min(5, brokers.length * 0.5 * socketTimeoutFactor); // ~0.5ms per additional broker
       metrics.latency += interBrokerLatency;
     }
+    
+    // Request timeout adds overhead for synchronous operations
+    const requestTimeoutOverhead = requestTimeoutMs > 30000 ? (requestTimeoutMs - 30000) / 10000 : 0; // Add overhead for longer timeouts
+    metrics.latency += requestTimeoutOverhead;
     
     // Error rate based on replication and under-replicated partitions
     const underReplicatedPartitions = this.calculateUnderReplicatedPartitions(topics, brokers.length);
@@ -2357,25 +2424,43 @@ export class EmulationEngine {
     metrics.errorRate = Math.max(0, Math.min(0.1, replicationComplexity + underReplicationErrorRate + aclErrorRate + 0.0001));
     
     // Utilization based on topic/partition count and throughput
-    const maxThroughput = 10000; // Estimated max throughput for broker
+    // Calculate max throughput from broker configuration
+    const numNetworkThreads = (kafkaConfig as any)?.numNetworkThreads || 3;
+    const numIoThreads = (kafkaConfig as any)?.numIoThreads || 8;
+    const socketSendBufferBytes = (kafkaConfig as any)?.socketSendBufferBytes || 100 * 1024; // 100KB default
+    const socketReceiveBufferBytes = (kafkaConfig as any)?.socketReceiveBufferBytes || 100 * 1024; // 100KB default
+    
+    // Estimate max throughput based on threads and buffer sizes
+    // Formula: network threads * IO threads * buffer factor
+    // Buffer factor accounts for socket buffer sizes (larger buffers = higher throughput)
+    const bufferFactor = Math.min(2, (socketSendBufferBytes + socketReceiveBufferBytes) / (200 * 1024)); // Normalize to 200KB
+    const maxThroughput = Math.round(numNetworkThreads * numIoThreads * 1000 * bufferFactor);
+    
     const throughputUtilization = Math.min(1, metrics.throughput / maxThroughput);
     const partitionUtilization = Math.min(1, totalPartitions / 200); // Assume 200 partitions max per broker
     metrics.utilization = Math.min(1, (throughputUtilization * 0.7) + (partitionUtilization * 0.3));
     
-    // Update topic-level metrics (messages, size)
-    const avgMessageSize = (config.avgPayloadSize || 1024); // bytes
-    const timeDelta = this.updateInterval / 1000; // seconds
-    
+    // Update topic-level metrics from routing engine (real data)
     for (const topic of topics) {
-      // Update messages based on throughput distribution
-      const topicThroughput = metrics.throughput / topicCount; // Distribute evenly across topics
-      const messagesIncrement = topicThroughput * timeDelta;
-      topic.messages = (topic.messages || 0) + messagesIncrement;
-      
-      // Update size (with compression consideration)
-      const compressionRatio = this.getCompressionRatio(topic.config?.compressionType);
-      const sizeIncrement = messagesIncrement * avgMessageSize * compressionRatio;
-      topic.size = (topic.size || 0) + sizeIncrement;
+      // Get real metrics from routing engine
+      const topicMetrics = routingEngine.getTopicMetrics(topic.name);
+      if (topicMetrics) {
+        // Update with real data from routing engine
+        topic.messages = topicMetrics.messages;
+        topic.size = topicMetrics.size;
+      } else {
+        // Fallback to calculated metrics if routing engine doesn't have data yet
+        const avgMessageSize = (config.avgPayloadSize || 1024); // bytes
+        const timeDelta = this.updateInterval / 1000; // seconds
+        const topicThroughput = metrics.throughput / topicCount; // Distribute evenly across topics
+        const messagesIncrement = topicThroughput * timeDelta;
+        topic.messages = (topic.messages || 0) + messagesIncrement;
+        
+        // Update size (with compression consideration)
+        const compressionRatio = this.getCompressionRatio(topic.config?.compressionType);
+        const sizeIncrement = messagesIncrement * avgMessageSize * compressionRatio;
+        topic.size = (topic.size || 0) + sizeIncrement;
+      }
       
       // Apply retention policy (cleanup old messages)
       if (topic.config?.retentionMs && topic.config.retentionMs > 0) {
@@ -2439,91 +2524,23 @@ export class EmulationEngine {
       }
     }
     
-    // Calculate consumer group lag dynamically with partition assignment
+    // Calculate consumer group lag from routing engine
     let totalLag = 0;
     for (const group of consumerGroups) {
-      const groupTopic = topics.find((t: any) => t.name === group.topic);
-      if (!groupTopic) continue;
+      // Get lag from routing engine
+      const lag = routingEngine.getConsumerGroupLag(group.id, group.topic);
+      group.lag = lag;
+      totalLag += lag;
       
-      // Partition assignment logic
-      const members = group.members || 1;
-      const topicPartitions = groupTopic.partitions || 1;
-      
-      // Calculate partition assignment (range assignment strategy)
-      const partitionAssignment = this.assignPartitionsToConsumers(members, topicPartitions);
-      
-      // Calculate consumption rate per partition
-      // Each partition can be consumed at ~200-500 msgs/sec (depends on consumer performance)
-      const consumptionRatePerPartition = 300; // msgs/sec per partition
-      
-      // Total consumption rate = sum of consumption rates for assigned partitions
-      let totalConsumptionRate = 0;
-      for (const assignment of partitionAssignment) {
-        const partitionsAssigned = assignment.partitions.length;
-        totalConsumptionRate += partitionsAssigned * consumptionRatePerPartition;
-      }
-      
-      // If there are more consumers than partitions, some consumers are idle
-      // If there are fewer consumers than partitions, some consumers handle multiple partitions
-      const effectiveConsumptionRate = Math.min(totalConsumptionRate, members * consumptionRatePerPartition);
-      
-      // Calculate topic throughput (produce rate) - distributed across partitions
-      const topicThroughput = (metrics.throughput / topicCount) || 0;
-      const throughputPerPartition = topicThroughput / topicPartitions;
-      
-      // Check ACL permissions for consumer group (Read operations)
-      // Consumer principal = groupId (in real Kafka, groupId is the principal)
-      const consumerPrincipal = group.id || `Group:${group.id}`;
-      
-      // Check Read permission for topic
-      const hasTopicReadPermission = this.checkACLPermission(
-        acls,
-        consumerPrincipal,
-        'Topic',
-        group.topic,
-        'Read'
-      );
-      
-      // Check Read permission for consumer group
-      const hasGroupReadPermission = this.checkACLPermission(
-        acls,
-        consumerPrincipal,
-        'Group',
-        group.id,
-        'Read'
-      );
-      
-      // If no Read permission, block consumption completely
-      let effectiveConsumptionRateWithACL = effectiveConsumptionRate;
-      if (!hasTopicReadPermission || !hasGroupReadPermission) {
-        // Consumer doesn't have Read permission - block all consumption
-        effectiveConsumptionRateWithACL = 0;
-      }
-      
-      // Lag calculation per partition
-      // Lag increases when production > consumption
-      const productionRate = topicThroughput;
-      const consumptionRate = effectiveConsumptionRateWithACL;
-      
-      // Lag increment (if production exceeds consumption)
-      const lagIncrement = Math.max(0, (productionRate - consumptionRate) * timeDelta);
-      
-      // Current lag
-      const currentLag = group.lag || 0;
-      
-      // Update lag: add increment and try to consume
-      const newLag = Math.max(0, currentLag + lagIncrement - (consumptionRate * timeDelta));
-      group.lag = newLag;
-      
-      totalLag += newLag;
-      
-      // Simulate rebalancing effects (if members changed recently)
-      // In real Kafka, rebalancing causes temporary pause in consumption
-      // We can simulate this by reducing consumption rate during rebalance
-      if (this.isRebalancing(node.id, group.id)) {
-        // Reduce consumption during rebalance (30-50% reduction)
-        group.lag = Math.min(newLag * 1.2, newLag + (productionRate * timeDelta * 0.3));
-        totalLag += (newLag * 0.2); // Additional lag during rebalance
+      // Update member count and reassign partitions if changed
+      const currentMembers = group.members || 1;
+      const groupState = (routingEngine as any).consumerGroups.get(group.id);
+      if (groupState && groupState.members !== currentMembers) {
+        const topic = topics.find((t: any) => t.name === group.topic);
+        if (topic) {
+          routingEngine.assignPartitionsToConsumers(group.id, currentMembers, topic.partitions);
+          groupState.members = currentMembers;
+        }
       }
     }
     
@@ -2537,7 +2554,7 @@ export class EmulationEngine {
       'total_lag': Math.round(totalLag),
       'avg_topic_messages': topicCount > 0 ? Math.round(topics.reduce((sum: number, t: any) => sum + (t.messages || 0), 0) / topicCount) : 0,
       'total_topic_size_mb': Math.round(topics.reduce((sum: number, t: any) => sum + (t.size || 0), 0) / 1024 / 1024 * 100) / 100,
-      'under_replicated_partitions': underReplicatedPartitions,
+      'under_replicated_partitions': routingEngine.getUnderReplicatedPartitions(),
     };
   }
   
@@ -2961,6 +2978,8 @@ export class EmulationEngine {
         { name: 'amq.fanout', type: 'fanout', durable: true, autoDelete: false, internal: false },
       ],
       bindings: config.bindings || [],
+      consumptionRate: config.consumptionRate ?? 10,
+      processingTime: config.processingTime ?? 100,
     });
     
     this.rabbitMQRoutingEngines.set(node.id, routingEngine);
@@ -3897,6 +3916,40 @@ export class EmulationEngine {
     
     this.pubSubRoutingEngines.set(node.id, routingEngine);
     this.lastPubSubUpdate.set(node.id, Date.now());
+  }
+
+  /**
+   * Initialize Kafka routing engine for a node
+   */
+  private initializeKafkaRoutingEngine(node: CanvasNode): void {
+    const config = (node.data.config as any) || {};
+    const routingEngine = new KafkaRoutingEngine();
+    
+    // Convert UI format to routing engine format
+    const topics = (config.topics || []).map((t: any) => ({
+      name: t.name,
+      partitions: t.partitions || 1,
+      replication: t.replication || 1,
+      config: t.config || {},
+      partitionInfo: t.partitionInfo || [],
+    }));
+    
+    const consumerGroups = (config.consumerGroups || []).map((group: any) => ({
+      id: group.id,
+      topic: group.topic,
+      members: group.members || 1,
+      offsetStrategy: group.offsetStrategy || 'latest',
+      autoCommit: group.autoCommit !== false,
+    }));
+    
+    routingEngine.initialize({
+      brokers: config.brokers || ['localhost:9092'],
+      topics: topics,
+      consumerGroups: consumerGroups,
+    });
+    
+    this.kafkaRoutingEngines.set(node.id, routingEngine);
+    this.lastKafkaUpdate.set(node.id, Date.now());
   }
 
   /**
@@ -9099,6 +9152,10 @@ export class EmulationEngine {
 
   public getPubSubRoutingEngine(nodeId: string): PubSubRoutingEngine | undefined {
     return this.pubSubRoutingEngines.get(nodeId);
+  }
+
+  public getKafkaRoutingEngine(nodeId: string): KafkaRoutingEngine | undefined {
+    return this.kafkaRoutingEngines.get(nodeId);
   }
 
   /**

@@ -1,4 +1,6 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -10,7 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Rabbit, 
   Database, 
@@ -50,6 +53,8 @@ interface Queue {
   messageTtl?: number;
   maxLength?: number;
   maxPriority?: number;
+  queueType?: 'classic' | 'quorum' | 'stream'; // x-queue-type
+  singleActiveConsumer?: boolean; // x-single-active-consumer
 }
 
 interface Exchange {
@@ -59,6 +64,7 @@ interface Exchange {
   autoDelete: boolean;
   internal: boolean;
   arguments?: Record<string, any>;
+  alternateExchange?: string; // Exchange to route messages when no bindings match
 }
 
 interface Binding {
@@ -87,11 +93,20 @@ interface RabbitMQConfig {
   exchanges?: Exchange[];
   bindings?: Binding[];
   policies?: Policy[];
+  consumptionRate?: number; // messages per second per consumer (default: 10)
+  processingTime?: number; // milliseconds per message (default: 100)
 }
 
 export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   const { nodes, updateNode, connections } = useCanvasStore();
+  const { isRunning } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
+  const nodeRef = useRef(node);
+
+  // Keep node ref updated
+  useEffect(() => {
+    nodeRef.current = node;
+  }, [node]);
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
@@ -102,6 +117,8 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   const password = config.password || '';
   const vhost = config.vhost || '/';
   const queues = config.queues || [];
+  const consumptionRate = config.consumptionRate ?? 10; // default 10 msgs/sec per consumer
+  const processingTime = config.processingTime ?? 100; // default 100ms per message
   // Standard RabbitMQ system exchanges (configuration, not data)
   const exchanges = config.exchanges || [
     { name: 'amq.direct', type: 'direct', durable: true, autoDelete: false, internal: false },
@@ -127,10 +144,11 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
     name: '',
     type: 'direct',
   });
-  const [newBinding, setNewBinding] = useState<{ source: string; destination: string; routingKey: string }>({
+  const [newBinding, setNewBinding] = useState<{ source: string; destination: string; routingKey: string; xMatch?: string }>({
     source: exchanges[0]?.name || '',
     destination: queues[0]?.name || '',
     routingKey: '',
+    xMatch: 'all',
   });
   const [newPolicy, setNewPolicy] = useState<{ name: string; pattern: string; applyTo: 'queues' | 'exchanges' | 'all' }>({
     name: '',
@@ -138,6 +156,96 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
     applyTo: 'all',
   });
   const [editingPolicyIndex, setEditingPolicyIndex] = useState<number | null>(null);
+  const [queueSearchQuery, setQueueSearchQuery] = useState('');
+  const [exchangeSearchQuery, setExchangeSearchQuery] = useState('');
+  const [bindingFilterExchange, setBindingFilterExchange] = useState<string>('');
+  const [policyFilterApplyTo, setPolicyFilterApplyTo] = useState<string>('');
+
+  // Sync metrics from routing engine in real-time
+  useEffect(() => {
+    if (!node || queues.length === 0 || !isRunning) return;
+    
+    const interval = setInterval(() => {
+      const routingEngine = emulationEngine.getRabbitMQRoutingEngine(componentId);
+      if (!routingEngine) return;
+
+      const allQueueMetrics = routingEngine.getAllQueueMetrics();
+      const currentConfig = (nodeRef.current?.data.config as any) || {};
+      const currentQueues = currentConfig.queues || [];
+      
+      const updatedQueues = currentQueues.map((queue: any) => {
+        const metrics = allQueueMetrics.get(queue.name);
+        if (metrics) {
+          return {
+            ...queue,
+            messages: metrics.messages,
+            ready: metrics.ready,
+            unacked: metrics.unacked,
+            consumers: metrics.consumers,
+          };
+        }
+        return queue;
+      });
+
+      // Check if metrics changed
+      const metricsChanged = updatedQueues.some((q: any, i: number) => 
+        q.messages !== currentQueues[i]?.messages ||
+        q.ready !== currentQueues[i]?.ready ||
+        q.unacked !== currentQueues[i]?.unacked ||
+        q.consumers !== currentQueues[i]?.consumers
+      );
+
+      if (metricsChanged && nodeRef.current) {
+        updateNode(componentId, {
+          data: {
+            ...nodeRef.current.data,
+            config: {
+              ...currentConfig,
+              queues: updatedQueues,
+            },
+          },
+        });
+      }
+    }, 500); // Update every 500ms
+
+    return () => clearInterval(interval);
+  }, [componentId, queues.length, node?.id, updateNode, isRunning]);
+
+  // Sync routing engine when config changes (queues, exchanges, bindings, consumptionRate, processingTime)
+  useEffect(() => {
+    if (!node) return;
+    
+    const routingEngine = emulationEngine.getRabbitMQRoutingEngine(componentId);
+    if (!routingEngine) return;
+
+    const currentConfig = (node.data.config as any) || {};
+    
+    // Update routing engine configuration
+    routingEngine.initialize({
+      queues: currentConfig.queues || [],
+      exchanges: currentConfig.exchanges || [],
+      bindings: currentConfig.bindings || [],
+      consumptionRate: currentConfig.consumptionRate ?? 10,
+      processingTime: currentConfig.processingTime ?? 100,
+    });
+
+    // Update consumption rate and processing time in routing engine if they exist
+    if (currentConfig.consumptionRate !== undefined || currentConfig.processingTime !== undefined) {
+      // These will be used in processConsumption method
+      // We need to update the routing engine to use these values
+      // For now, we'll pass them through the config when initializing
+    }
+
+    emulationEngine.updateNodesAndConnections(nodes, connections);
+  }, [componentId, queues.length, exchanges.length, bindings.length, consumptionRate, processingTime, node?.id, nodes, connections]);
+
+  // Sync consumers from UI to routing engine when changed
+  const syncConsumersToRoutingEngine = (queueName: string, consumers: number) => {
+    const routingEngine = emulationEngine.getRabbitMQRoutingEngine(componentId);
+    if (routingEngine) {
+      routingEngine.updateQueue(queueName, { consumers });
+    }
+  };
 
   const updateConfig = (updates: Partial<RabbitMQConfig>) => {
     updateNode(componentId, {
@@ -190,6 +298,11 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
     const newQueues = [...queues];
     newQueues[index] = { ...newQueues[index], [field]: value };
     updateConfig({ queues: newQueues });
+    
+    // Sync consumers to routing engine if consumers field changed
+    if (field === 'consumers' && typeof value === 'number') {
+      syncConsumersToRoutingEngine(newQueues[index].name, value);
+    }
   };
 
   const addExchange = () => {
@@ -225,20 +338,85 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
     updateConfig({ exchanges: newExchanges });
   };
 
+  // Validate routing key for topic exchanges
+  const validateTopicRoutingKey = (routingKey: string): { valid: boolean; warning?: string } => {
+    if (!routingKey) return { valid: true }; // Empty routing key is valid
+    
+    // Check for invalid wildcard usage
+    if (routingKey.includes('**')) {
+      return { valid: false, warning: 'Invalid: consecutive wildcards (**) are not allowed' };
+    }
+    
+    // Check for wildcard at invalid positions
+    if (routingKey.startsWith('*') || routingKey.startsWith('#')) {
+      return { valid: false, warning: 'Warning: wildcard at the start may not match as expected' };
+    }
+    
+    // Check for # not at the end
+    const hashIndex = routingKey.indexOf('#');
+    if (hashIndex !== -1 && hashIndex !== routingKey.length - 1) {
+      return { valid: false, warning: 'Invalid: # wildcard must be at the end of the pattern' };
+    }
+    
+    // Check for multiple # wildcards
+    if ((routingKey.match(/#/g) || []).length > 1) {
+      return { valid: false, warning: 'Invalid: only one # wildcard is allowed and must be at the end' };
+    }
+    
+    return { valid: true };
+  };
+
+  // Check if binding is valid (queue/exchange exist)
+  const validateBinding = (source: string, destination: string): { valid: boolean; error?: string } => {
+    const exchange = exchanges.find(e => e.name === source);
+    if (!exchange) {
+      return { valid: false, error: `Exchange "${source}" does not exist` };
+    }
+    
+    const queue = queues.find(q => q.name === destination);
+    if (!queue) {
+      return { valid: false, error: `Queue "${destination}" does not exist` };
+    }
+    
+    return { valid: true };
+  };
+
   const addBinding = () => {
     if (!newBinding.source || !newBinding.destination) {
       showError('Необходимо выбрать exchange и queue');
       return;
     }
+    
+    // Validate binding (check if exchange and queue exist)
+    const bindingValidation = validateBinding(newBinding.source, newBinding.destination);
+    if (!bindingValidation.valid) {
+      showError(bindingValidation.error || 'Invalid binding');
+      return;
+    }
+    
+    const selectedExchange = exchanges.find(e => e.name === newBinding.source);
+    
+    // Validate routing key for topic exchanges
+    if (selectedExchange?.type === 'topic' && newBinding.routingKey) {
+      const routingKeyValidation = validateTopicRoutingKey(newBinding.routingKey);
+      if (!routingKeyValidation.valid) {
+        showError(routingKeyValidation.warning || 'Invalid routing key');
+        return;
+      }
+    }
+    
     const binding: Binding = {
       id: `binding-${Date.now()}`,
       source: newBinding.source,
       destination: newBinding.destination,
       routingKey: newBinding.routingKey || '',
+      arguments: selectedExchange?.type === 'headers' && newBinding.xMatch ? {
+        'x-match': newBinding.xMatch,
+      } : undefined,
     };
     updateConfig({ bindings: [...bindings, binding] });
     setShowCreateBinding(false);
-    setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '' });
+    setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '', xMatch: 'all' });
     showSuccess('Binding создан');
   };
 
@@ -289,6 +467,28 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
   const totalMessages = queues.reduce((sum, q) => sum + (q.messages || 0), 0);
   const totalConsumers = queues.reduce((sum, q) => sum + (q.consumers || 0), 0);
 
+  // Filter queues by search query
+  const filteredQueues = queues.filter(queue => 
+    queue.name.toLowerCase().includes(queueSearchQuery.toLowerCase())
+  );
+
+  // Filter exchanges by search query
+  const filteredExchanges = exchanges.filter(exchange => 
+    exchange.name.toLowerCase().includes(exchangeSearchQuery.toLowerCase())
+  );
+
+  // Filter bindings
+  const filteredBindings = bindings.filter(binding => {
+    if (bindingFilterExchange && bindingFilterExchange !== 'all' && binding.source !== bindingFilterExchange) return false;
+    return true;
+  });
+
+  // Filter policies by applyTo
+  const filteredPolicies = policies.filter(policy => {
+    if (policyFilterApplyTo && policyFilterApplyTo !== 'all' && policy.applyTo !== policyFilterApplyTo) return false;
+    return true;
+  });
+
   return (
     <div className="h-full overflow-y-auto bg-background">
       <div className="p-6 space-y-6">
@@ -310,10 +510,6 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
               <div className={`h-2 w-2 rounded-full ${hasConnections ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
               {hasConnections ? 'Connected' : 'Not Connected'}
             </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              Management UI
-            </Button>
           </div>
         </div>
 
@@ -322,7 +518,7 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="queues" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="flex w-full flex-wrap gap-1">
             <TabsTrigger value="queues" className="gap-2">
               <MessageSquare className="h-4 w-4" />
               Queues
@@ -365,7 +561,17 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                {queues.length === 0 ? (
+                {queues.length > 0 && (
+                  <div className="mb-4">
+                    <Input
+                      placeholder="Search queues..."
+                      value={queueSearchQuery}
+                      onChange={(e) => setQueueSearchQuery(e.target.value)}
+                      className="max-w-sm"
+                    />
+                  </div>
+                )}
+                {filteredQueues.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <MessageSquare className="h-12 w-12 mx-auto mb-3 opacity-50" />
                     <p>No queues configured</p>
@@ -373,8 +579,10 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                   </div>
                 ) : (
                   <div className="space-y-4">
-                    {queues.map((queue, index) => (
-                    <Card key={index} className="border-border">
+                    {filteredQueues.map((queue, index) => {
+                      const originalIndex = queues.findIndex(q => q.name === queue.name);
+                      return (
+                    <Card key={originalIndex} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
@@ -387,18 +595,43 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                                 {queue.durable && <Badge variant="outline" className="text-xs">Durable</Badge>}
                                 {queue.exclusive && <Badge variant="outline" className="text-xs">Exclusive</Badge>}
                                 {queue.autoDelete && <Badge variant="outline" className="text-xs">Auto-Delete</Badge>}
+                                {/* Queue status badge */}
+                                {queue.maxLength ? (
+                                  queue.messages && queue.messages >= queue.maxLength ? (
+                                    <Badge variant="destructive" className="text-xs">Full</Badge>
+                                  ) : queue.messages && queue.messages >= queue.maxLength * 0.8 ? (
+                                    <Badge variant="outline" className="text-xs text-amber-600">Warning</Badge>
+                                  ) : queue.messages === 0 ? (
+                                    <Badge variant="outline" className="text-xs text-gray-500">Empty</Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-xs text-green-600">Normal</Badge>
+                                  )
+                                ) : queue.messages === 0 ? (
+                                  <Badge variant="outline" className="text-xs text-gray-500">Empty</Badge>
+                                ) : (
+                                  <Badge variant="outline" className="text-xs text-green-600">Normal</Badge>
+                                )}
                               </CardDescription>
                             </div>
                           </div>
-                          {queues.length > 1 && (
+                          <div className="flex items-center gap-2">
                             <Button
                               size="icon"
                               variant="ghost"
-                              onClick={() => removeQueue(index)}
+                              onClick={() => setEditingQueueIndex(editingQueueIndex === originalIndex ? null : originalIndex)}
                             >
-                              <Trash2 className="h-4 w-4" />
+                              <Settings className="h-4 w-4" />
                             </Button>
-                          )}
+                            {queues.length > 1 && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => removeQueue(originalIndex)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
@@ -407,7 +640,7 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                             <Label>Queue Name</Label>
                             <Input
                               value={queue.name}
-                              onChange={(e) => updateQueue(index, 'name', e.target.value)}
+                              onChange={(e) => updateQueue(originalIndex, 'name', e.target.value)}
                               placeholder="queue-name"
                             />
                           </div>
@@ -415,98 +648,234 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                             <Label>Properties</Label>
                             <div className="flex gap-2">
                               <div className="flex items-center gap-2">
-                                <Switch
-                                  checked={queue.durable}
-                                  onCheckedChange={(checked) => {
-                                    if (checked && queue.exclusive) {
-                                      // Exclusive queue cannot be durable
-                                      updateQueue(index, 'exclusive', false);
-                                    }
-                                    updateQueue(index, 'durable', checked);
-                                  }}
-                                  disabled={queue.exclusive}
-                                />
-                                <Label className="text-xs">Durable</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="flex items-center gap-2">
+                                        <Switch
+                                          checked={queue.durable}
+                                          onCheckedChange={(checked) => {
+                                            if (checked && queue.exclusive) {
+                                              // Exclusive queue cannot be durable
+                                              updateQueue(originalIndex, 'exclusive', false);
+                                            }
+                                            updateQueue(originalIndex, 'durable', checked);
+                                          }}
+                                          disabled={queue.exclusive}
+                                        />
+                                        <Label className="text-xs">Durable</Label>
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Queue survives broker restart</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </div>
                               <div className="flex items-center gap-2">
-                                <Switch
-                                  checked={queue.exclusive}
-                                  onCheckedChange={(checked) => {
-                                    if (checked) {
-                                      // Exclusive queue cannot be durable
-                                      updateQueue(index, 'durable', false);
-                                    }
-                                    updateQueue(index, 'exclusive', checked);
-                                  }}
-                                />
-                                <Label className="text-xs">Exclusive</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="flex items-center gap-2">
+                                        <Switch
+                                          checked={queue.exclusive}
+                                          onCheckedChange={(checked) => {
+                                            if (checked) {
+                                              // Exclusive queue cannot be durable
+                                              updateQueue(originalIndex, 'durable', false);
+                                            }
+                                            updateQueue(originalIndex, 'exclusive', checked);
+                                          }}
+                                        />
+                                        <Label className="text-xs">Exclusive</Label>
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Queue can only be used by one connection</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </div>
                               <div className="flex items-center gap-2">
-                                <Switch
-                                  checked={queue.autoDelete}
-                                  onCheckedChange={(checked) => updateQueue(index, 'autoDelete', checked)}
-                                />
-                                <Label className="text-xs">Auto-Delete</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="flex items-center gap-2">
+                                        <Switch
+                                          checked={queue.autoDelete}
+                                          onCheckedChange={(checked) => updateQueue(originalIndex, 'autoDelete', checked)}
+                                        />
+                                        <Label className="text-xs">Auto-Delete</Label>
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Queue is deleted when no longer in use</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </div>
                             </div>
                           </div>
                         </div>
                         {/* Advanced Queue Configuration */}
-                        {editingQueueIndex === index && (
+                        {editingQueueIndex === originalIndex && (
                           <div className="pt-4 border-t border-border space-y-4">
-                            <h4 className="font-semibold text-sm">Advanced Configuration</h4>
+                            <div className="flex items-center justify-between">
+                              <h4 className="font-semibold text-sm">Advanced Configuration</h4>
+                              <Button size="sm" variant="outline" onClick={() => setEditingQueueIndex(null)}>
+                                Done
+                              </Button>
+                            </div>
                             <div className="grid grid-cols-2 gap-4">
                               <div className="space-y-2">
-                                <Label>Dead Letter Exchange</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Dead Letter Exchange</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Exchange to send rejected/expired messages to</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 <Input
                                   value={queue.deadLetterExchange || ''}
-                                  onChange={(e) => updateQueue(index, 'deadLetterExchange', e.target.value)}
+                                  onChange={(e) => updateQueue(originalIndex, 'deadLetterExchange', e.target.value)}
                                   placeholder="dlx"
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label>Dead Letter Routing Key</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Dead Letter Routing Key</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Routing key for messages sent to DLX</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 <Input
                                   value={queue.deadLetterRoutingKey || ''}
-                                  onChange={(e) => updateQueue(index, 'deadLetterRoutingKey', e.target.value)}
+                                  onChange={(e) => updateQueue(originalIndex, 'deadLetterRoutingKey', e.target.value)}
                                   placeholder="routing-key"
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label>Message TTL (ms)</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Message TTL (ms)</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Time to live for messages in milliseconds</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 <Input
                                   type="number"
                                   value={queue.messageTtl || ''}
-                                  onChange={(e) => updateQueue(index, 'messageTtl', parseInt(e.target.value) || undefined)}
+                                  onChange={(e) => updateQueue(originalIndex, 'messageTtl', parseInt(e.target.value) || undefined)}
                                   placeholder="60000"
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label>Max Length</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Max Length</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Maximum number of messages in queue</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 <Input
                                   type="number"
                                   value={queue.maxLength || ''}
-                                  onChange={(e) => updateQueue(index, 'maxLength', parseInt(e.target.value) || undefined)}
+                                  onChange={(e) => updateQueue(originalIndex, 'maxLength', parseInt(e.target.value) || undefined)}
                                   placeholder="10000"
                                 />
                               </div>
                               <div className="space-y-2">
-                                <Label>Max Priority</Label>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Max Priority</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Maximum priority level (0-255)</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 <Input
                                   type="number"
                                   min="0"
                                   max="255"
                                   value={queue.maxPriority || ''}
-                                  onChange={(e) => updateQueue(index, 'maxPriority', parseInt(e.target.value) || undefined)}
+                                  onChange={(e) => updateQueue(originalIndex, 'maxPriority', parseInt(e.target.value) || undefined)}
                                   placeholder="10"
                                 />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>Consumers</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={queue.consumers || 0}
+                                  onChange={(e) => updateQueue(originalIndex, 'consumers', parseInt(e.target.value) || 0)}
+                                  placeholder="0"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Label>Queue Type (x-queue-type)</Label>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>classic: standard queue, quorum: replicated queue, stream: message stream</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                                <Select
+                                  value={queue.queueType || 'classic'}
+                                  onValueChange={(value: 'classic' | 'quorum' | 'stream') => updateQueue(originalIndex, 'queueType', value)}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="classic">Classic</SelectItem>
+                                    <SelectItem value="quorum">Quorum</SelectItem>
+                                    <SelectItem value="stream">Stream</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="space-y-2">
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <div className="flex items-center gap-2">
+                                        <Switch
+                                          checked={queue.singleActiveConsumer || false}
+                                          onCheckedChange={(checked) => updateQueue(originalIndex, 'singleActiveConsumer', checked)}
+                                        />
+                                        <Label>Single Active Consumer (x-single-active-consumer)</Label>
+                                      </div>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Only one consumer receives messages at a time (useful for load balancing)</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                               </div>
                             </div>
                           </div>
                         )}
 
                         {/* Queue Stats */}
-                        <div className="pt-3 border-t border-border">
+                        <div className="pt-3 border-t border-border space-y-3">
                           <div className="grid grid-cols-4 gap-4 text-sm">
                             <div>
                               <span className="text-muted-foreground">Messages:</span>
@@ -525,10 +894,28 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                               <span className="ml-2 font-semibold">{queue.consumers || 0}</span>
                             </div>
                           </div>
+                          {/* Queue fill progress bar */}
+                          {queue.maxLength && (
+                            <div className="space-y-1">
+                              <div className="flex justify-between text-xs text-muted-foreground">
+                                <span>Queue Fill Level</span>
+                                <span>{Math.round(((queue.messages || 0) / queue.maxLength) * 100)}%</span>
+                              </div>
+                              <Progress 
+                                value={queue.maxLength ? ((queue.messages || 0) / queue.maxLength) * 100 : 0}
+                                className={`h-2 ${
+                                  queue.messages && queue.messages >= queue.maxLength ? 'bg-destructive' :
+                                  queue.messages && queue.messages >= queue.maxLength * 0.8 ? 'bg-amber-500' :
+                                  'bg-primary'
+                                }`}
+                              />
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -598,9 +985,21 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
+                {exchanges.length > 0 && (
+                  <div className="mb-4">
+                    <Input
+                      placeholder="Search exchanges..."
+                      value={exchangeSearchQuery}
+                      onChange={(e) => setExchangeSearchQuery(e.target.value)}
+                      className="max-w-sm"
+                    />
+                  </div>
+                )}
                 <div className="space-y-4">
-                  {exchanges.map((exchange, index) => (
-                    <Card key={index} className="border-border">
+                  {filteredExchanges.map((exchange, index) => {
+                    const originalIndex = exchanges.findIndex(e => e.name === exchange.name);
+                    return (
+                    <Card key={originalIndex} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
@@ -610,7 +1009,21 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                             <div>
                               <CardTitle className="text-lg">{exchange.name}</CardTitle>
                               <CardDescription className="text-xs mt-1">
-                                <Badge variant="outline">{exchange.type}</Badge>
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Badge variant="outline">{exchange.type}</Badge>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>
+                                        {exchange.type === 'direct' && 'Exact routing key match'}
+                                        {exchange.type === 'topic' && 'Pattern-based routing with wildcards (*, #)'}
+                                        {exchange.type === 'fanout' && 'Broadcast to all bound queues'}
+                                        {exchange.type === 'headers' && 'Match based on message headers'}
+                                      </p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
                                 {exchange.durable && <Badge variant="outline" className="ml-1">Durable</Badge>}
                                 {exchange.internal && <Badge variant="outline" className="ml-1">Internal</Badge>}
                               </CardDescription>
@@ -619,7 +1032,7 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                           <Button
                             size="icon"
                             variant="ghost"
-                            onClick={() => removeExchange(index)}
+                            onClick={() => removeExchange(originalIndex)}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -631,14 +1044,14 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                             <Label>Exchange Name</Label>
                             <Input
                               value={exchange.name}
-                              onChange={(e) => updateExchange(index, 'name', e.target.value)}
+                              onChange={(e) => updateExchange(originalIndex, 'name', e.target.value)}
                             />
                           </div>
                           <div className="space-y-2">
                             <Label>Type</Label>
                             <Select
                               value={exchange.type}
-                              onValueChange={(value: 'direct' | 'topic' | 'fanout' | 'headers') => updateExchange(index, 'type', value)}
+                              onValueChange={(value: 'direct' | 'topic' | 'fanout' | 'headers') => updateExchange(originalIndex, 'type', value)}
                             >
                               <SelectTrigger>
                                 <SelectValue />
@@ -656,28 +1069,55 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                           <div className="flex items-center gap-2">
                             <Switch
                               checked={exchange.durable}
-                              onCheckedChange={(checked) => updateExchange(index, 'durable', checked)}
+                              onCheckedChange={(checked) => updateExchange(originalIndex, 'durable', checked)}
                             />
                             <Label className="text-xs">Durable</Label>
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch
                               checked={exchange.autoDelete}
-                              onCheckedChange={(checked) => updateExchange(index, 'autoDelete', checked)}
+                              onCheckedChange={(checked) => updateExchange(originalIndex, 'autoDelete', checked)}
                             />
                             <Label className="text-xs">Auto-Delete</Label>
                           </div>
                           <div className="flex items-center gap-2">
                             <Switch
                               checked={exchange.internal}
-                              onCheckedChange={(checked) => updateExchange(index, 'internal', checked)}
+                              onCheckedChange={(checked) => updateExchange(originalIndex, 'internal', checked)}
                             />
                             <Label className="text-xs">Internal</Label>
                           </div>
                         </div>
+                        <div className="space-y-2 pt-2 border-t border-border">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Label>Alternate Exchange</Label>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Exchange to route messages when no bindings match (messages are dropped if not set)</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          <Select
+                            value={exchange.alternateExchange || 'none'}
+                            onValueChange={(value) => updateExchange(originalIndex, 'alternateExchange', value === 'none' ? undefined : value)}
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="None (messages dropped)" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">None (messages dropped)</SelectItem>
+                              {exchanges.filter(e => e.name !== exchange.name).map((ex) => (
+                                <SelectItem key={ex.name} value={ex.name}>{ex.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </CardContent>
                     </Card>
-                  ))}
+                    );
+                    })}
                 </div>
               </CardContent>
             </Card>
@@ -727,18 +1167,73 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label>Routing Key</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Label>Routing Key</Label>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>
+                            {exchanges.find(e => e.name === newBinding.source)?.type === 'topic' 
+                              ? 'Use * for single word, # for multiple words. Example: *.error or logs.#'
+                              : exchanges.find(e => e.name === newBinding.source)?.type === 'direct'
+                              ? 'Exact match required for direct exchange'
+                              : 'Routing key for message routing'}
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                     <Input 
-                      placeholder="routing.key" 
+                      placeholder={exchanges.find(e => e.name === newBinding.source)?.type === 'topic' ? "*.error or logs.#" : "routing.key"} 
                       value={newBinding.routingKey}
                       onChange={(e) => setNewBinding({ ...newBinding, routingKey: e.target.value })}
+                      className={exchanges.find(e => e.name === newBinding.source)?.type === 'topic' && newBinding.routingKey 
+                        ? (validateTopicRoutingKey(newBinding.routingKey).valid ? '' : 'border-amber-500')
+                        : ''}
                     />
+                    {exchanges.find(e => e.name === newBinding.source)?.type === 'topic' && newBinding.routingKey && (
+                      (() => {
+                        const validation = validateTopicRoutingKey(newBinding.routingKey);
+                        return validation.warning ? (
+                          <div className="flex items-center gap-1 text-xs text-amber-600">
+                            <AlertCircle className="h-3 w-3" />
+                            <span>{validation.warning}</span>
+                          </div>
+                        ) : null;
+                      })()
+                    )}
                   </div>
+                  {exchanges.find(e => e.name === newBinding.source)?.type === 'headers' && (
+                    <div className="space-y-2">
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Label>X-Match</Label>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <p>all: all headers must match, any: at least one header must match</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                      <Select 
+                        value={newBinding.xMatch || 'all'}
+                        onValueChange={(value) => setNewBinding({ ...newBinding, xMatch: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All (all headers must match)</SelectItem>
+                          <SelectItem value="any">Any (at least one header must match)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                   <div className="flex gap-2">
                     <Button onClick={addBinding}>Create Binding</Button>
                     <Button variant="outline" onClick={() => {
                       setShowCreateBinding(false);
-                      setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '' });
+                      setNewBinding({ source: exchanges[0]?.name || '', destination: queues[0]?.name || '', routingKey: '', xMatch: 'all' });
                     }}>Cancel</Button>
                   </div>
                 </CardContent>
@@ -759,22 +1254,76 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                {bindings.length === 0 ? (
+                {bindings.length > 0 && (
+                  <div className="mb-4">
+                    <Select value={bindingFilterExchange || 'all'} onValueChange={setBindingFilterExchange}>
+                      <SelectTrigger className="max-w-sm">
+                        <SelectValue placeholder="Filter by exchange..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Exchanges</SelectItem>
+                        {exchanges.map((ex) => (
+                          <SelectItem key={ex.name} value={ex.name}>{ex.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {filteredBindings.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Key className="h-12 w-12 mx-auto mb-2 opacity-50" />
                     <p>No bindings configured</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {bindings.map((binding) => (
-                      <Card key={binding.id} className="p-3">
+                    {filteredBindings.map((binding) => {
+                      const exchange = exchanges.find(e => e.name === binding.source);
+                      const queue = queues.find(q => q.name === binding.destination);
+                      const isInvalid = !exchange || !queue;
+                      const routingKeyWarning = exchange?.type === 'topic' && binding.routingKey 
+                        ? validateTopicRoutingKey(binding.routingKey).warning 
+                        : undefined;
+                      
+                      return (
+                      <Card key={binding.id} className={`p-3 ${isInvalid ? 'border-destructive' : ''}`}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <ArrowRightLeft className="h-4 w-4 text-muted-foreground" />
-                            <div>
-                              <div className="font-semibold">{binding.source}</div>
-                              <div className="text-xs text-muted-foreground">
-                                → {binding.destination} • Key: {binding.routingKey || '(none)'}
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold">{binding.source}</span>
+                                {!exchange && (
+                                  <Badge variant="destructive" className="text-xs">Exchange not found</Badge>
+                                )}
+                              </div>
+                              <div className="text-xs text-muted-foreground mt-1">
+                                → <span className={!queue ? 'text-destructive font-semibold' : ''}>{binding.destination}</span>
+                                {!queue && (
+                                  <Badge variant="destructive" className="ml-1 text-xs">Queue not found</Badge>
+                                )}
+                                {queue && (
+                                  <>
+                                    {' • Key: '}
+                                    <span className={routingKeyWarning ? 'text-amber-600' : ''}>
+                                      {binding.routingKey || '(none)'}
+                                    </span>
+                                    {routingKeyWarning && (
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <AlertCircle className="h-3 w-3 inline ml-1 text-amber-600" />
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            <p>{routingKeyWarning}</p>
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    )}
+                                  </>
+                                )}
+                                {binding.arguments?.['x-match'] && (
+                                  <span> • X-Match: {binding.arguments['x-match']}</span>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -804,7 +1353,8 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                           </div>
                         </div>
                       </Card>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -879,36 +1429,52 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                 </div>
               </CardHeader>
               <CardContent>
-                {policies.length === 0 ? (
+                {policies.length > 0 && (
+                  <div className="mb-4">
+                    <Select value={policyFilterApplyTo || 'all'} onValueChange={setPolicyFilterApplyTo}>
+                      <SelectTrigger className="max-w-sm">
+                        <SelectValue placeholder="Filter by apply to..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Policies</SelectItem>
+                        <SelectItem value="queues">Queues Only</SelectItem>
+                        <SelectItem value="exchanges">Exchanges Only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                {filteredPolicies.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Shield className="h-12 w-12 mx-auto mb-2 opacity-50" />
-                    <p>No policies configured</p>
+                    <p>{policies.length === 0 ? 'No policies configured' : 'No policies match the filter'}</p>
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    {policies.map((policy, index) => (
-                      <Card key={index} className="p-3">
-                        {editingPolicyIndex === index ? (
+                    {filteredPolicies.map((policy, index) => {
+                      const originalIndex = policies.findIndex(p => p.name === policy.name);
+                      return (
+                      <Card key={originalIndex} className="p-3">
+                        {editingPolicyIndex === originalIndex ? (
                           <div className="space-y-4">
                             <div className="space-y-2">
                               <Label>Policy Name</Label>
                               <Input
                                 value={policy.name}
-                                onChange={(e) => updatePolicy(index, 'name', e.target.value)}
+                                onChange={(e) => updatePolicy(originalIndex, 'name', e.target.value)}
                               />
                             </div>
                             <div className="space-y-2">
                               <Label>Pattern</Label>
                               <Input
                                 value={policy.pattern}
-                                onChange={(e) => updatePolicy(index, 'pattern', e.target.value)}
+                                onChange={(e) => updatePolicy(originalIndex, 'pattern', e.target.value)}
                               />
                             </div>
                             <div className="space-y-2">
                               <Label>Apply To</Label>
                               <Select
                                 value={policy.applyTo}
-                                onValueChange={(value: 'queues' | 'exchanges' | 'all') => updatePolicy(index, 'applyTo', value)}
+                                onValueChange={(value: 'queues' | 'exchanges' | 'all') => updatePolicy(originalIndex, 'applyTo', value)}
                               >
                                 <SelectTrigger>
                                   <SelectValue />
@@ -925,7 +1491,7 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                               <Input
                                 type="number"
                                 value={policy.priority}
-                                onChange={(e) => updatePolicy(index, 'priority', parseInt(e.target.value) || 0)}
+                                onChange={(e) => updatePolicy(originalIndex, 'priority', parseInt(e.target.value) || 0)}
                               />
                             </div>
                             <div className="flex gap-2">
@@ -942,17 +1508,18 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                               </div>
                             </div>
                             <div className="flex gap-2">
-                              <Button size="icon" variant="ghost" onClick={() => setEditingPolicyIndex(index)}>
+                              <Button size="icon" variant="ghost" onClick={() => setEditingPolicyIndex(originalIndex)}>
                                 <Settings className="h-4 w-4" />
                               </Button>
-                              <Button size="icon" variant="ghost" onClick={() => removePolicy(index)}>
+                              <Button size="icon" variant="ghost" onClick={() => removePolicy(originalIndex)}>
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </div>
                           </div>
                         )}
                       </Card>
-                    ))}
+                    );
+                    })}
                   </div>
                 )}
               </CardContent>
@@ -1066,6 +1633,50 @@ export function RabbitMQConfigAdvanced({ componentId }: RabbitMQConfigProps) {
                     onChange={(e) => updateConfig({ vhost: e.target.value })}
                     placeholder="/"
               />
+            </div>
+            <Separator />
+            <div className="space-y-4">
+              <h4 className="font-semibold text-sm">Performance Settings</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label>Consumption Rate (msgs/sec per consumer)</Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Number of messages consumed per second by each consumer</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={consumptionRate}
+                    onChange={(e) => updateConfig({ consumptionRate: parseInt(e.target.value) || 10 })}
+                    placeholder="10"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Label>Processing Time (ms per message)</Label>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Time to process each message before acknowledgment</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={processingTime}
+                    onChange={(e) => updateConfig({ processingTime: parseInt(e.target.value) || 100 })}
+                    placeholder="100"
+                  />
+                </div>
+              </div>
             </div>
             <div className="pt-4 border-t">
               <p className="text-sm text-muted-foreground">

@@ -2195,7 +2195,293 @@ export class DataFlowEngine {
       };
     }
     
-    // Default handler for other message brokers (Kafka, etc.)
+    if (type === 'kafka') {
+      return {
+        generateData: (node, config) => {
+          // Get Kafka routing engine from emulation engine
+          const routingEngine = emulationEngine.getKafkaRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            return null;
+          }
+          
+          const kafkaConfig = (node.data.config as any) || {};
+          const consumerGroups = kafkaConfig.consumerGroups || [];
+          const acls = kafkaConfig.acls || [];
+          
+          // Get outgoing connections from this Kafka node
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          
+          if (outgoingConnections.length === 0) {
+            return null; // No outgoing connections, nothing to consume
+          }
+          
+          const messages: DataMessage[] = [];
+          const now = Date.now();
+          
+          // Track last consumption time per connection to throttle consumption
+          const lastConsumeKey = `_lastKafkaConsume_${node.id}`;
+          const lastConsume = (node as any)[lastConsumeKey] || 0;
+          const consumeInterval = 500; // Consume every 500ms
+          
+          if (now - lastConsume < consumeInterval) {
+            return null; // Throttle consumption
+          }
+          
+          (node as any)[lastConsumeKey] = now;
+          
+          // Group connections by consumer group and topic to count members
+          const connectionGroups = new Map<string, { topic: string; connections: CanvasConnection[] }>();
+          
+          // Process each outgoing connection
+          for (const connection of outgoingConnections) {
+            // Extract consumer group and topic from connection metadata or config
+            const connectionConfig = (connection.data as any) || {};
+            const messagingConfig = connectionConfig.messaging || config.messaging || {};
+            
+            let groupId = messagingConfig.consumerGroup || connectionConfig.consumerGroup;
+            let topicName = messagingConfig.topic || connectionConfig.topic;
+            
+            // If not specified, try to find matching consumer group from config
+            if (!groupId || !topicName) {
+              // Try to match by target node type or use first consumer group
+              const targetNode = this.nodes.find(n => n.id === connection.target);
+              if (targetNode && consumerGroups.length > 0) {
+                // Use first consumer group that matches or first available
+                const matchingGroup = consumerGroups.find((g: any) => 
+                  g.id && g.topic
+                ) || consumerGroups[0];
+                
+                if (matchingGroup) {
+                  groupId = groupId || matchingGroup.id;
+                  topicName = topicName || matchingGroup.topic;
+                }
+              }
+            }
+            
+            // If still not specified, auto-generate consumer group from connection
+            if (!groupId || !topicName) {
+              // Auto-generate: use connection ID or target node ID as group ID
+              const targetNode = this.nodes.find(n => n.id === connection.target);
+              groupId = groupId || `auto-group-${connection.id.slice(0, 8)}`;
+              
+              // Try to get topic from first available topic in config
+              topicName = topicName || (kafkaConfig.topics && kafkaConfig.topics[0]?.name);
+              
+              if (!topicName) {
+                continue; // Skip if no topic available
+              }
+            }
+            
+            // Group connections by consumer group
+            const groupKey = `${groupId}:${topicName}`;
+            if (!connectionGroups.has(groupKey)) {
+              connectionGroups.set(groupKey, { topic: topicName, connections: [] });
+            }
+            connectionGroups.get(groupKey)!.connections.push(connection);
+          }
+          
+          // Create or update consumer groups based on connections
+          for (const [groupKey, groupInfo] of connectionGroups.entries()) {
+            const [groupId, topicName] = groupKey.split(':');
+            const memberCount = groupInfo.connections.length;
+            
+            // Create or update consumer group automatically
+            routingEngine.createOrUpdateConsumerGroup(
+              groupId,
+              topicName,
+              memberCount,
+              'latest', // Default offset strategy
+              true // Default auto-commit
+            );
+          }
+          
+          // Process each outgoing connection for consumption
+          for (const connection of outgoingConnections) {
+            const connectionConfig = (connection.data as any) || {};
+            const messagingConfig = connectionConfig.messaging || config.messaging || {};
+            
+            let groupId = messagingConfig.consumerGroup || connectionConfig.consumerGroup;
+            let topicName = messagingConfig.topic || connectionConfig.topic;
+            
+            // Use same logic as above to determine group and topic
+            if (!groupId || !topicName) {
+              const targetNode = this.nodes.find(n => n.id === connection.target);
+              if (targetNode && consumerGroups.length > 0) {
+                const matchingGroup = consumerGroups.find((g: any) => 
+                  g.id && g.topic
+                ) || consumerGroups[0];
+                
+                if (matchingGroup) {
+                  groupId = groupId || matchingGroup.id;
+                  topicName = topicName || matchingGroup.topic;
+                }
+              }
+            }
+            
+            if (!groupId || !topicName) {
+              groupId = groupId || `auto-group-${connection.id.slice(0, 8)}`;
+              topicName = topicName || (kafkaConfig.topics && kafkaConfig.topics[0]?.name);
+              
+              if (!topicName) {
+                continue;
+              }
+            }
+            
+            // Check ACL permissions for reading
+            const targetNode = this.nodes.find(n => n.id === connection.target);
+            if (targetNode) {
+              const consumerConfig = (targetNode.data.config || {}) as any;
+              const consumerPrincipal = consumerConfig.messaging?.consumerId || 
+                                      consumerConfig.clientId || 
+                                      `User:${targetNode.id.slice(0, 8)}`;
+              
+              const hasPermission = routingEngine.checkACLPermission(
+                acls,
+                consumerPrincipal,
+                'Topic',
+                topicName,
+                'Read'
+              );
+              
+              if (!hasPermission) {
+                continue; // Skip if no permission
+              }
+            }
+            
+            // Determine batch size from config
+            const batchSize = messagingConfig.batchSize || 
+                            messagingConfig.maxPollRecords || 
+                            messagingConfig.fetchSize || 
+                            500;
+            
+            // Consume messages from topic
+            const kafkaMessages = routingEngine.consumeFromTopic(
+              groupId,
+              topicName,
+              batchSize
+            );
+            
+            if (kafkaMessages.length === 0) {
+              continue; // No messages available
+            }
+            
+            // Convert KafkaMessage to DataMessage
+            for (const kafkaMsg of kafkaMessages) {
+              const dataMessage: DataMessage = {
+                id: `kafka-msg-${++this.messageIdCounter}`,
+                timestamp: kafkaMsg.timestamp,
+                source: node.id,
+                target: connection.target,
+                connectionId: connection.id,
+                format: 'json', // Default, can be determined from payload
+                payload: kafkaMsg.value,
+                size: kafkaMsg.size,
+                metadata: {
+                  topic: kafkaMsg.topic,
+                  partition: kafkaMsg.partition,
+                  offset: kafkaMsg.offset,
+                  key: kafkaMsg.key,
+                  consumerGroup: groupId,
+                  headers: kafkaMsg.headers,
+                },
+                status: 'pending',
+              };
+              
+              messages.push(dataMessage);
+            }
+            
+            // If auto-commit is disabled, we need to commit offsets manually
+            // This is handled in consumeFromTopic if autoCommit is true
+            // For manual commit, we would need to track consumed messages and commit later
+            // For now, auto-commit handles this
+          }
+          
+          return messages.length > 0 ? messages : null;
+        },
+        
+        processData: (node, message, config) => {
+          // Get Kafka routing engine from emulation engine
+          const routingEngine = emulationEngine.getKafkaRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            // No routing engine, just pass through
+            message.status = 'delivered';
+            return message;
+          }
+          
+          // Extract topic from message metadata or config
+          const messagingConfig = (config as any)?.messaging || message.metadata?.messaging || {};
+          const topicName = messagingConfig.topic || message.metadata?.topic;
+          const key = messagingConfig.key || message.metadata?.key || message.metadata?.partitionKey;
+          const headers = message.metadata?.headers || message.metadata?.attributes;
+          
+          // If no topic specified, try to use first topic from config
+          const kafkaConfig = (node.data.config as any) || {};
+          const finalTopicName = topicName || (kafkaConfig.topics && kafkaConfig.topics[0]?.name) || null;
+          
+          if (!finalTopicName) {
+            message.status = 'failed';
+            message.error = 'No topic specified for Kafka message';
+            return message;
+          }
+          
+          // Check ACL permissions
+          const acls = kafkaConfig.acls || [];
+          const sourceNode = this.nodes.find(n => n.id === message.source);
+          if (sourceNode) {
+            const producerConfig = (sourceNode.data.config || {}) as any;
+            const producerPrincipal = producerConfig.messaging?.producerId || 
+                                    producerConfig.clientId || 
+                                    `User:${sourceNode.id.slice(0, 8)}`;
+            
+            const hasPermission = routingEngine.checkACLPermission(
+              acls,
+              producerPrincipal,
+              'Topic',
+              finalTopicName,
+              'Write'
+            );
+            
+            if (!hasPermission) {
+              message.status = 'failed';
+              message.error = `ACL denied: No Write permission for topic '${finalTopicName}'`;
+              return message;
+            }
+          }
+          
+          // Publish to topic
+          const offset = routingEngine.publishToTopic(
+            finalTopicName,
+            message.payload,
+            message.size,
+            key,
+            headers
+          );
+          
+          if (offset !== null) {
+            message.status = 'delivered';
+            // Store routing info in metadata
+            message.metadata = {
+              ...message.metadata,
+              topic: finalTopicName,
+              offset,
+              partitionKey: key || undefined,
+            };
+          } else {
+            // Topic not found
+            message.status = 'failed';
+            message.error = `Topic '${finalTopicName}' not found`;
+          }
+          
+          return message;
+        },
+        
+        getSupportedFormats: () => ['json', 'binary', 'text'],
+      };
+    }
+    
+    // Default handler for other message brokers
     return {
       processData: (node, message, config) => {
         // Message broker just passes through messages

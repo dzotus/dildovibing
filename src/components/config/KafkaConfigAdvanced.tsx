@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
 import { getTypedConfig } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
@@ -8,13 +9,16 @@ import { Separator } from '@/components/ui/separator';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useState } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Plus, Trash2, Play, Pause, Database, Users, Activity, Settings, Gauge, RefreshCcw, Key, Shield, FileText, AlertCircle } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { HelpCircle } from 'lucide-react';
 
 interface KafkaConfigProps {
   componentId: string;
@@ -81,6 +85,7 @@ interface KafkaConfig {
 
 export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
   const { nodes, updateNode } = useCanvasStore();
+  const { componentMetrics, isRunning } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -94,11 +99,120 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
   const schemaRegistry = config.schemaRegistry || { url: 'http://localhost:8081', subjects: [] };
   const acls = config.acls || [];
   
+  // Get Kafka routing engine for real-time metrics
+  const routingEngine = emulationEngine.getKafkaRoutingEngine(componentId);
+  const metrics = componentMetrics.get(componentId);
+  const customMetrics = metrics?.customMetrics || {};
+  
+  // State for real-time partition metrics
+  const [partitionMetrics, setPartitionMetrics] = useState<Record<string, Array<{
+    partitionId: number;
+    messages: number;
+    size: number;
+    offset: number;
+    highWatermark: number;
+    leader: number;
+    replicas: number[];
+    isr: number[];
+  }>>>({});
+  
   const [editingTopicIndex, setEditingTopicIndex] = useState<number | null>(null);
   const [showCreateTopic, setShowCreateTopic] = useState(false);
   const [showRegisterSchema, setShowRegisterSchema] = useState(false);
   const [showAddACL, setShowAddACL] = useState(false);
   const [editingConsumerGroupIndex, setEditingConsumerGroupIndex] = useState<number | null>(null);
+  
+  // Use ref to store node reference to avoid infinite loops
+  const nodeRef = useRef(node);
+  nodeRef.current = node;
+  
+  // Update metrics from routing engine in real-time
+  useEffect(() => {
+    if (!routingEngine || !isRunning) {
+      setPartitionMetrics({});
+      return;
+    }
+    
+    const updateMetrics = () => {
+      if (!routingEngine) return;
+      
+      // Get current topics from node ref (read fresh each time)
+      const currentConfig = (nodeRef.current.data.config as any) || {};
+      const currentTopics = currentConfig.topics || [];
+      
+      const newPartitionMetrics: Record<string, Array<{
+        partitionId: number;
+        messages: number;
+        size: number;
+        offset: number;
+        highWatermark: number;
+        leader: number;
+        replicas: number[];
+        isr: number[];
+      }>> = {};
+      
+      // Get partition metrics for each topic
+      currentTopics.forEach((topic: any) => {
+        if (topic?.name) {
+          const metrics = routingEngine.getAllPartitionMetrics(topic.name);
+          if (metrics.length > 0) {
+            newPartitionMetrics[topic.name] = metrics;
+          }
+        }
+      });
+      
+      setPartitionMetrics(prev => {
+        // Only update if metrics actually changed
+        const prevKeys = Object.keys(prev).sort().join(',');
+        const newKeys = Object.keys(newPartitionMetrics).sort().join(',');
+        if (prevKeys === newKeys) {
+          // Check if values changed
+          let changed = false;
+          for (const key in newPartitionMetrics) {
+            if (JSON.stringify(prev[key]) !== JSON.stringify(newPartitionMetrics[key])) {
+              changed = true;
+              break;
+            }
+          }
+          if (!changed) return prev;
+        }
+        return newPartitionMetrics;
+      });
+    };
+    
+    updateMetrics();
+    const interval = setInterval(updateMetrics, 1000); // Update every second
+    
+    return () => clearInterval(interval);
+  }, [routingEngine, isRunning, componentId]);
+  
+  // Sync routing engine when config changes (topics, consumer groups, brokers)
+  useEffect(() => {
+    if (node && routingEngine) {
+      // Convert UI format to routing engine format
+      const topics = (config.topics || []).map((t: any) => ({
+        name: t.name,
+        partitions: t.partitions || 1,
+        replication: t.replication || 1,
+        config: t.config || {},
+        partitionInfo: t.partitionInfo || [],
+      }));
+      
+      const consumerGroups = (config.consumerGroups || []).map((group: any) => ({
+        id: group.id,
+        topic: group.topic,
+        members: group.members || 1,
+        offsetStrategy: group.offsetStrategy || 'latest',
+        autoCommit: group.autoCommit !== false,
+      }));
+      
+      routingEngine.initialize({
+        brokers: config.brokers || ['localhost:9092'],
+        topics: topics,
+        consumerGroups: consumerGroups,
+      });
+    }
+  }, [config.topics, config.consumerGroups, config.brokers, componentId, node, routingEngine]);
   
   // Schema registration form state
   const [schemaForm, setSchemaForm] = useState({
@@ -135,6 +249,49 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
   
   // Валидация обязательных полей
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [topicErrors, setTopicErrors] = useState<Record<number, Record<string, string>>>({});
+  
+  // Валидация имени топика (Kafka topic name rules)
+  const validateTopicName = (name: string): string | null => {
+    if (!name || name.trim().length === 0) {
+      return 'Topic name is required';
+    }
+    if (name.length > 249) {
+      return 'Topic name must be 249 characters or less';
+    }
+    // Kafka topic names can contain: letters, numbers, dots, underscores, hyphens
+    // Cannot start with a dot or underscore
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) {
+      return 'Topic name can only contain letters, numbers, dots, underscores, and hyphens. Cannot start with dot or underscore.';
+    }
+    // Reserved names
+    if (name === '__consumer_offsets' || name.startsWith('__')) {
+      return 'Topic name cannot start with double underscore (reserved for internal topics)';
+    }
+    return null;
+  };
+  
+  // Валидация replication factor
+  const validateReplicationFactor = (replication: number, topicIndex: number): string | null => {
+    if (replication < 1) {
+      return 'Replication factor must be at least 1';
+    }
+    if (replication > brokers.length) {
+      return `Replication factor cannot exceed number of brokers (${brokers.length})`;
+    }
+    return null;
+  };
+  
+  // Валидация partitions
+  const validatePartitions = (partitions: number): string | null => {
+    if (partitions < 1) {
+      return 'Number of partitions must be at least 1';
+    }
+    if (partitions > 10000) {
+      return 'Number of partitions cannot exceed 10000';
+    }
+    return null;
+  };
   
   const validateBrokers = () => {
     if (!brokers || brokers.length === 0) {
@@ -211,6 +368,40 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
   const updateTopic = (index: number, field: string, value: string | number) => {
     const newTopics = [...topics];
     newTopics[index] = { ...newTopics[index], [field]: value };
+    
+    // Validate field
+    const errors = { ...topicErrors[index] || {} };
+    if (field === 'name') {
+      const error = validateTopicName(String(value));
+      if (error) {
+        errors.name = error;
+      } else {
+        delete errors.name;
+      }
+    } else if (field === 'replication') {
+      const error = validateReplicationFactor(Number(value), index);
+      if (error) {
+        errors.replication = error;
+      } else {
+        delete errors.replication;
+      }
+    } else if (field === 'partitions') {
+      const error = validatePartitions(Number(value));
+      if (error) {
+        errors.partitions = error;
+      } else {
+        delete errors.partitions;
+      }
+    }
+    
+    if (Object.keys(errors).length > 0) {
+      setTopicErrors({ ...topicErrors, [index]: errors });
+    } else {
+      const newTopicErrors = { ...topicErrors };
+      delete newTopicErrors[index];
+      setTopicErrors(newTopicErrors);
+    }
+    
     updateConfig({ topics: newTopics });
   };
 
@@ -514,32 +705,89 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                       <CardContent className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label>Topic Name</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Topic Name</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Kafka topic name. Can contain letters, numbers, dots, underscores, and hyphens. Cannot start with dot or underscore. Max 249 characters.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               value={topic.name}
                               onChange={(e) => updateTopic(index, 'name', e.target.value)}
                               placeholder="topic-name"
+                              className={topicErrors[index]?.name ? 'border-destructive' : ''}
                             />
+                            {topicErrors[index]?.name && (
+                              <p className="text-xs text-destructive flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {topicErrors[index].name}
+                              </p>
+                            )}
                           </div>
                           <div className="space-y-2">
-                            <Label>Partitions</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Partitions</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Number of partitions for this topic. More partitions allow higher parallelism but increase overhead. Recommended: 1-10000.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               type="number"
                               min="1"
                               value={topic.partitions}
                               onChange={(e) => updateTopic(index, 'partitions', parseInt(e.target.value) || 1)}
+                              className={topicErrors[index]?.partitions ? 'border-destructive' : ''}
                             />
+                            {topicErrors[index]?.partitions && (
+                              <p className="text-xs text-destructive flex items-center gap-1">
+                                <AlertCircle className="h-3 w-3" />
+                                {topicErrors[index].partitions}
+                              </p>
+                            )}
                           </div>
                         </div>
                         <div className="space-y-2">
-                          <Label>Replication Factor</Label>
+                          <div className="flex items-center gap-2">
+                            <Label>Replication Factor</Label>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p>Number of replicas for each partition. Must be between 1 and the number of brokers ({brokers.length}). Higher replication improves durability but uses more storage.</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
                           <Input
                             type="number"
                             min="1"
                             max={brokers.length}
                             value={topic.replication}
                             onChange={(e) => updateTopic(index, 'replication', parseInt(e.target.value) || 1)}
+                            className={topicErrors[index]?.replication ? 'border-destructive' : ''}
                           />
+                          {topicErrors[index]?.replication && (
+                            <p className="text-xs text-destructive flex items-center gap-1">
+                              <AlertCircle className="h-3 w-3" />
+                              {topicErrors[index].replication}
+                            </p>
+                          )}
                         </div>
 
                         {/* Advanced Topic Configuration */}
@@ -620,37 +868,118 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                           </div>
                         )}
 
-                        {/* Partition Info */}
-                        {topic.partitionInfo && topic.partitionInfo.length > 0 && (
-                          <div className="pt-4 border-t border-border">
-                            <h4 className="font-semibold text-sm mb-3">Partition Details</h4>
-                            <div className="space-y-2">
-                              {topic.partitionInfo.map((part, partIndex) => (
-                                <div key={partIndex} className="p-2 border rounded text-sm">
-                                  <div className="flex items-center justify-between">
-                                    <span className="font-mono">Partition {part.id}</span>
-                                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                                      <span>Leader: {part.leader}</span>
-                                      <span>Replicas: [{part.replicas.join(', ')}]</span>
-                                      <span>ISR: [{part.isr.join(', ')}]</span>
+                        {/* Partition Info with Real Metrics */}
+                        <div className="pt-4 border-t border-border">
+                          <h4 className="font-semibold text-sm mb-3">Partition Details</h4>
+                          <div className="space-y-2">
+                            {(() => {
+                              // Get real partition metrics from routing engine
+                              const realPartitionMetrics = partitionMetrics[topic.name] || [];
+                              const partitionInfo = topic.partitionInfo || [];
+                              
+                              // Use real metrics if available, otherwise fall back to partitionInfo
+                              if (realPartitionMetrics.length > 0) {
+                                return realPartitionMetrics.map((partMetrics) => {
+                                  const isUnderReplicated = partMetrics.isr.length < partMetrics.replicas.length;
+                                  const lag = partMetrics.highWatermark - partMetrics.offset;
+                                  
+                                  return (
+                                    <div key={partMetrics.partitionId} className="p-3 border rounded-lg bg-card">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-mono font-semibold">Partition {partMetrics.partitionId}</span>
+                                          {isUnderReplicated && (
+                                            <Badge variant="destructive" className="text-xs">Under-replicated</Badge>
+                                          )}
+                                          {!isUnderReplicated && partMetrics.isr.length === partMetrics.replicas.length && (
+                                            <Badge variant="default" className="text-xs bg-green-500">Healthy</Badge>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                                          <span>Leader: {partMetrics.leader}</span>
+                                          <span>Replicas: [{partMetrics.replicas.join(', ')}]</span>
+                                          <span>ISR: [{partMetrics.isr.join(', ')}]</span>
+                                        </div>
+                                      </div>
+                                      <div className="grid grid-cols-4 gap-4 text-xs mt-2 pt-2 border-t border-border">
+                                        <div>
+                                          <span className="text-muted-foreground">Messages:</span>
+                                          <span className="ml-1 font-semibold">{partMetrics.messages.toLocaleString()}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-muted-foreground">Size:</span>
+                                          <span className="ml-1 font-semibold">{(partMetrics.size / 1024 / 1024).toFixed(2)} MB</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-muted-foreground">Offset:</span>
+                                          <span className="ml-1 font-semibold">{partMetrics.offset}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-muted-foreground">HW:</span>
+                                          <span className="ml-1 font-semibold">{partMetrics.highWatermark}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                });
+                              } else if (partitionInfo.length > 0) {
+                                // Fallback to partitionInfo from config
+                                return partitionInfo.map((part, partIndex) => (
+                                  <div key={partIndex} className="p-2 border rounded text-sm">
+                                    <div className="flex items-center justify-between">
+                                      <span className="font-mono">Partition {part.id}</span>
+                                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                                        <span>Leader: {part.leader}</span>
+                                        <span>Replicas: [{part.replicas.join(', ')}]</span>
+                                        <span>ISR: [{part.isr.join(', ')}]</span>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              ))}
-                            </div>
+                                ));
+                              } else {
+                                // No partition info available
+                                return (
+                                  <div className="text-sm text-muted-foreground p-2">
+                                    No partition information available
+                                  </div>
+                                );
+                              }
+                            })()}
                           </div>
-                        )}
+                        </div>
 
-                        {/* Topic Stats */}
+                        {/* Topic Stats with Real Metrics */}
                         <div className="pt-3 border-t border-border">
                           <div className="grid grid-cols-2 gap-4 text-sm">
                             <div>
                               <span className="text-muted-foreground">Messages:</span>
-                              <span className="ml-2 font-semibold">{(topic.messages || 0).toLocaleString()}</span>
+                              <span className="ml-2 font-semibold">
+                                {(() => {
+                                  // Get real metrics from routing engine
+                                  if (routingEngine) {
+                                    const topicMetrics = routingEngine.getTopicMetrics(topic.name);
+                                    if (topicMetrics) {
+                                      return topicMetrics.messages.toLocaleString();
+                                    }
+                                  }
+                                  return (topic.messages || 0).toLocaleString();
+                                })()}
+                              </span>
                             </div>
                             <div>
                               <span className="text-muted-foreground">Size:</span>
-                              <span className="ml-2 font-semibold">{((topic.size || 0) / 1024 / 1024).toFixed(2)} MB</span>
+                              <span className="ml-2 font-semibold">
+                                {(() => {
+                                  // Get real metrics from routing engine
+                                  if (routingEngine) {
+                                    const topicMetrics = routingEngine.getTopicMetrics(topic.name);
+                                    if (topicMetrics) {
+                                      return ((topicMetrics.size / 1024 / 1024).toFixed(2)) + ' MB';
+                                    }
+                                  }
+                                  return (((topic.size || 0) / 1024 / 1024).toFixed(2)) + ' MB';
+                                })()}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -702,9 +1031,28 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                           </div>
                             </div>
                             <div className="flex items-center gap-2">
-                          <Badge variant={group.lag && group.lag > 1000 ? 'destructive' : 'secondary'}>
-                                Lag: {Math.round(group.lag || 0)}
+                          <Badge variant={(() => {
+                                // Get real lag from routing engine
+                                const realLag = routingEngine ? routingEngine.getConsumerGroupLag(group.id, group.topic) : (group.lag || 0);
+                                return realLag > 1000 ? 'destructive' : 'secondary';
+                              })()}>
+                                Lag: {(() => {
+                                  // Get real lag from routing engine
+                                  if (routingEngine) {
+                                    const realLag = routingEngine.getConsumerGroupLag(group.id, group.topic);
+                                    return Math.round(realLag);
+                                  }
+                                  return Math.round(group.lag || 0);
+                                })()}
                           </Badge>
+                          {routingEngine && (() => {
+                            const consumptionRate = routingEngine.getConsumptionRate(group.id, group.topic);
+                            return consumptionRate > 0 ? (
+                              <Badge variant="outline">
+                                {Math.round(consumptionRate)} msg/s
+                              </Badge>
+                            ) : null;
+                          })()}
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -807,10 +1155,62 @@ export function KafkaConfigAdvanced({ componentId }: KafkaConfigProps) {
                                   <span className="text-muted-foreground">Auto Commit:</span>
                                   <span className="ml-2 font-semibold">{group.autoCommit !== false ? 'Yes' : 'No'}</span>
                                 </div>
+                                {routingEngine && (() => {
+                                  const consumptionRate = routingEngine.getConsumptionRate(group.id, group.topic);
+                                  return consumptionRate > 0 ? (
+                                    <div>
+                                      <span className="text-muted-foreground">Consumption Rate:</span>
+                                      <span className="ml-2 font-semibold">{Math.round(consumptionRate)} msg/s</span>
+                                    </div>
+                                  ) : null;
+                                })()}
                           </div>
-                          {group.lag !== undefined && (
-                            <Progress value={Math.min((group.lag / 10000) * 100, 100)} className="h-2" />
-                          )}
+                          {(() => {
+                            // Get real lag from routing engine
+                            const realLag = routingEngine ? routingEngine.getConsumerGroupLag(group.id, group.topic) : (group.lag || 0);
+                            return (
+                              <Progress 
+                                value={Math.min((realLag / 10000) * 100, 100)} 
+                                className="h-2" 
+                              />
+                            );
+                          })()}
+                          
+                          {/* Partition Assignment */}
+                          {routingEngine && (() => {
+                            const groupState = routingEngine.getConsumerGroupState(group.id);
+                            const partitionAssignment = groupState?.partitionAssignment;
+                            
+                            if (partitionAssignment && partitionAssignment.size > 0) {
+                              const assignments: Array<{ memberId: number; partitions: number[] }> = [];
+                              partitionAssignment.forEach((partitions, memberId) => {
+                                assignments.push({ memberId, partitions });
+                              });
+                              
+                              return (
+                                <div className="pt-2 border-t border-border mt-2">
+                                  <div className="text-xs font-semibold text-muted-foreground mb-2">Partition Assignment:</div>
+                                  <div className="space-y-1">
+                                    {assignments.map((assignment) => (
+                                      <div key={assignment.memberId} className="text-xs">
+                                        <span className="font-mono">Member {assignment.memberId}:</span>
+                                        <span className="ml-2 text-muted-foreground">
+                                          [{assignment.partitions.sort((a, b) => a - b).join(', ')}]
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {groupState?.isRebalancing && (
+                                    <Badge variant="outline" className="mt-2 text-xs">
+                                      <RefreshCcw className="h-3 w-3 mr-1 animate-spin" />
+                                      Rebalancing...
+                                    </Badge>
+                                  )}
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
                         </div>
                           )}
                         </CardContent>
