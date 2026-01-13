@@ -62,6 +62,7 @@ import { CloudAPIGatewayEmulationEngine } from './api-gateway/CloudAPIGatewayEmu
 import type { BaseAPIGatewayConfig } from './api-gateway/types';
 import { CRMEmulationEngine } from './CRMEmulationEngine';
 import { ERPEmulationEngine } from './ERPEmulationEngine';
+import { PaymentGatewayEmulationEngine } from './PaymentGatewayEmulationEngine';
 
 /**
  * Component runtime state with real-time metrics
@@ -328,6 +329,9 @@ export class EmulationEngine {
   
   // ERP emulation engines per node
   private erpEngines: Map<string, ERPEmulationEngine> = new Map();
+  
+  // Payment Gateway emulation engines per node
+  private paymentGatewayEngines: Map<string, PaymentGatewayEmulationEngine> = new Map();
 
   // (MLflow emulation engines removed)
 
@@ -982,6 +986,17 @@ export class EmulationEngine {
         }
       }
       
+      // Initialize Payment Gateway emulation engine for Payment Gateway nodes
+      if (node.type === 'payment-gateway') {
+        if (!this.paymentGatewayEngines.has(node.id)) {
+          this.initializePaymentGatewayEngine(node);
+        } else {
+          // Update config if engine already exists
+          const engine = this.paymentGatewayEngines.get(node.id)!;
+          engine.initializeConfig(node);
+        }
+      }
+      
       // Initialize TensorFlow Serving emulation engine for TensorFlow Serving nodes
       if (node.type === 'tensorflow-serving') {
         if (!this.tensorFlowServingEngines.has(node.id)) {
@@ -1097,6 +1112,8 @@ export class EmulationEngine {
         this.pytorchServeEngines.delete(nodeId);
         this.featureStoreEngines.delete(nodeId);
         this.crmEngines.delete(nodeId);
+        this.erpEngines.delete(nodeId);
+        this.paymentGatewayEngines.delete(nodeId);
         // (MLflow engines map removed)
         this.harborEngines.delete(nodeId);
         this.prometheusEngines.delete(nodeId);
@@ -1682,6 +1699,31 @@ export class EmulationEngine {
       }
     }
     
+    // Perform Payment Gateway updates (transactions, payments, webhooks, metrics)
+    for (const [nodeId, pgEngine] of this.paymentGatewayEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        const hasIncomingConnections = this.connections.some(conn => conn.target === nodeId);
+        const connectionCount = this.connections.filter(conn => conn.target === nodeId).length;
+        pgEngine.performUpdate(now, hasIncomingConnections, connectionCount);
+        
+        // Metrics are already updated in simulatePaymentGateway method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'payment-gateway', operation: 'performUpdate' },
+        });
+      }
+    }
+    
     // (MLflow updates removed)
     
     // Process OpenTelemetry Collector batch flush
@@ -1882,6 +1924,9 @@ export class EmulationEngine {
           break;
       case 'erp':
           this.simulateERP(node, config, metrics, hasIncomingConnections);
+          break;
+      case 'payment-gateway':
+          this.simulatePaymentGateway(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -6715,6 +6760,82 @@ export class EmulationEngine {
   }
 
   /**
+   * Payment Gateway emulation
+   */
+  private simulatePaymentGateway(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    const engine = this.paymentGatewayEngines.get(node.id);
+    
+    if (!engine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      return;
+    }
+    
+    // Metrics are updated in simulate() method after performUpdate()
+    // This method is called before performUpdate, so we use current metrics
+    const pgMetrics = engine.getMetrics();
+    
+    // Throughput: API requests per second
+    metrics.throughput = pgMetrics.requestsPerSecond;
+    
+    // Latency: average response time
+    metrics.latency = pgMetrics.averageResponseTime;
+    
+    // Error rate: API error rate
+    metrics.errorRate = pgMetrics.errorRate;
+    
+    // Utilization: average of API and processing utilization
+    metrics.utilization = (pgMetrics.apiUtilization + pgMetrics.processingUtilization) / 2;
+    
+    // Получаем специфичные метрики по методам оплаты и валютам
+    const metricsByPaymentMethod = engine.getMetricsByPaymentMethod();
+    const metricsByCurrency = engine.getMetricsByCurrency();
+    
+    // Формируем customMetrics с метриками по методам оплаты и валютам
+    const customMetrics: Record<string, number> = {
+      transactionsTotal: pgMetrics.transactionsTotal,
+      transactionsSucceeded: pgMetrics.transactionsSucceeded,
+      transactionsPending: pgMetrics.transactionsPending,
+      transactionsFailed: pgMetrics.transactionsFailed,
+      transactionsRefunded: pgMetrics.transactionsRefunded,
+      totalAmount: pgMetrics.totalAmount,
+      totalAmountSucceeded: pgMetrics.totalAmountSucceeded,
+      totalAmountRefunded: pgMetrics.totalAmountRefunded,
+      averageAmount: pgMetrics.averageAmount,
+      successRate: pgMetrics.successRate,
+      failureRate: pgMetrics.failureRate,
+      refundRate: pgMetrics.refundRate,
+      fraudDetected: pgMetrics.fraudDetected,
+      webhooksTotal: pgMetrics.webhooksTotal,
+      webhooksEnabled: pgMetrics.webhooksEnabled,
+      webhooksTriggered: pgMetrics.webhooksTriggered,
+      webhooksFailed: pgMetrics.webhooksFailed,
+      apiUtilization: pgMetrics.apiUtilization,
+      processingUtilization: pgMetrics.processingUtilization,
+    };
+    
+    // Добавляем метрики по методам оплаты
+    for (const [method, methodMetrics] of metricsByPaymentMethod.entries()) {
+      customMetrics[`paymentMethod_${method}_count`] = methodMetrics.count;
+      customMetrics[`paymentMethod_${method}_successRate`] = methodMetrics.successRate;
+      customMetrics[`paymentMethod_${method}_avgAmount`] = methodMetrics.avgAmount;
+      customMetrics[`paymentMethod_${method}_totalAmount`] = methodMetrics.totalAmount;
+    }
+    
+    // Добавляем метрики по валютам
+    for (const [currency, currencyMetrics] of metricsByCurrency.entries()) {
+      customMetrics[`currency_${currency}_count`] = currencyMetrics.count;
+      customMetrics[`currency_${currency}_totalAmount`] = currencyMetrics.totalAmount;
+      customMetrics[`currency_${currency}_avgAmount`] = currencyMetrics.avgAmount;
+    }
+    
+    metrics.customMetrics = customMetrics;
+  }
+
+  /**
    * TensorFlow Serving emulation
    */
   private simulateTensorFlowServing(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -8575,6 +8696,15 @@ export class EmulationEngine {
     this.erpEngines.set(node.id, engine);
   }
 
+  /**
+   * Initialize Payment Gateway Emulation Engine for Payment Gateway node
+   */
+  private initializePaymentGatewayEngine(node: CanvasNode): void {
+    const engine = new PaymentGatewayEmulationEngine();
+    engine.initializeConfig(node);
+    this.paymentGatewayEngines.set(node.id, engine);
+  }
+
   // (MLflow Emulation Engine initialization removed)
 
   /**
@@ -8902,6 +9032,48 @@ export class EmulationEngine {
   public getComponentMetrics(nodeId: string): ComponentMetrics | undefined {
     return this.metrics.get(nodeId);
   }
+
+  /**
+   * Update custom metrics for a component (called from DataFlowEngine)
+   */
+  public updateComponentCustomMetrics(
+    nodeId: string,
+    updates: {
+      throughput?: number;
+      latency?: number;
+      utilization?: number;
+      customMetrics?: Record<string, number>;
+    }
+  ): void {
+    const metrics = this.metrics.get(nodeId);
+    if (!metrics) return;
+
+    if (updates.throughput !== undefined) {
+      metrics.throughput += updates.throughput;
+    }
+    if (updates.latency !== undefined) {
+      // Update average latency (weighted average)
+      const currentLatency = metrics.latency || 0;
+      const newLatency = updates.latency;
+      // Simple moving average: new = (old * 0.9 + new * 0.1)
+      metrics.latency = currentLatency * 0.9 + newLatency * 0.1;
+    }
+    if (updates.utilization !== undefined) {
+      // Update utilization (weighted average)
+      const currentUtilization = metrics.utilization || 0;
+      const newUtilization = updates.utilization;
+      metrics.utilization = Math.min(1, currentUtilization * 0.9 + newUtilization * 0.1);
+    }
+    if (updates.customMetrics) {
+      metrics.customMetrics = {
+        ...metrics.customMetrics,
+        ...updates.customMetrics,
+      };
+    }
+
+    metrics.timestamp = Date.now();
+    this.metrics.set(nodeId, metrics);
+  }
   
   /**
    * Get RabbitMQ routing engine for a node
@@ -9161,6 +9333,13 @@ export class EmulationEngine {
    */
   public getERPEmulationEngine(nodeId: string): ERPEmulationEngine | undefined {
     return this.erpEngines.get(nodeId);
+  }
+
+  /**
+   * Get Payment Gateway emulation engine for a node
+   */
+  public getPaymentGatewayEmulationEngine(nodeId: string): PaymentGatewayEmulationEngine | undefined {
+    return this.paymentGatewayEngines.get(nodeId);
   }
 
   // (MLflow emulation engine accessor removed)

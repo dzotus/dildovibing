@@ -661,11 +661,94 @@ export class DataFlowEngine {
             messages.push(this.createERPDataMessage(node));
             break;
           case 'payment':
-            messages.push(this.createPaymentDataMessage(node));
+            const paymentMessage = this.createPaymentDataMessage(node);
+            if (paymentMessage) {
+              messages.push(paymentMessage);
+            }
             break;
         }
         
         return messages;
+      },
+      
+      processData: (node, message, config) => {
+        // Обработка входящих данных для payment-gateway
+        if (type === 'payment') {
+          const pgEngine = emulationEngine.getPaymentGatewayEmulationEngine(node.id);
+          if (pgEngine) {
+            // Определяем тип источника из metadata или из source node
+            const sourceNode = this.nodes.find(n => n.id === message.source);
+            const sourceType = message.metadata?.sourceType as string || 
+                              sourceNode?.type || 
+                              'unknown';
+            
+            // Обновляем metadata с типом источника
+            message.metadata = {
+              ...message.metadata,
+              sourceType,
+            };
+            
+            // Обрабатываем входящие данные через PaymentGatewayEmulationEngine
+            const result = pgEngine.processIncomingData({
+              payload: message.payload,
+              source: message.source,
+              metadata: message.metadata,
+            });
+            
+            if (result.processed) {
+              message.status = 'delivered';
+              message.latency = 10; // Быстрая обработка входящих данных
+            } else {
+              message.status = 'failed';
+              message.error = result.error || 'Failed to process incoming data';
+            }
+          } else {
+            // Engine не инициализирован, просто доставляем сообщение
+            message.status = 'delivered';
+            message.latency = 10;
+          }
+        }
+        
+        return message;
+      },
+      
+      transformData: (node, message, targetType, config) => {
+        // Для payment gateway форматируем данные под целевой компонент
+        if (type === 'payment') {
+          const pgEngine = emulationEngine.getPaymentGatewayEmulationEngine(node.id);
+          if (pgEngine && message.payload) {
+            const payload = message.payload as any;
+            
+            // Если payload содержит transaction data, форматируем его
+            if (payload.data && payload.data.id) {
+              const transaction = {
+                id: payload.data.id,
+                amount: payload.data.amount,
+                currency: payload.data.currency,
+                status: payload.data.status,
+                paymentMethod: payload.data.paymentMethod,
+                customerId: payload.data.customerId,
+                timestamp: payload.data.timestamp ? new Date(payload.data.timestamp).getTime() : Date.now(),
+                description: payload.data.description,
+                fee: payload.data.fee,
+                refundedAmount: payload.data.refundedAmount,
+                metadata: payload.data.metadata,
+              };
+              
+              const formattedPayload = pgEngine.formatTransactionForTarget(transaction as any, targetType);
+              
+              // Обновляем payload
+              message.payload = formattedPayload;
+              message.status = 'transformed';
+              
+              // Обновляем размер
+              const payloadStr = JSON.stringify(formattedPayload);
+              message.size = new Blob([payloadStr]).size;
+            }
+          }
+        }
+        
+        return message;
       },
       
       getSupportedFormats: () => ['json', 'xml'],
@@ -5410,31 +5493,73 @@ export class DataFlowEngine {
   }
 
   private createPaymentDataMessage(node: CanvasNode): DataMessage {
-    const config = node.data.config || {};
-    const transactions = config.transactions || [];
+    // Получаем engine из эмуляции для реальных данных
+    const pgEngine = emulationEngine.getPaymentGatewayEmulationEngine(node.id);
     
     let payload: Record<string, unknown>;
-    if (transactions.length > 0) {
-      const txn = transactions[Math.floor(Math.random() * transactions.length)];
-      payload = {
-        operation: 'process',
-        type: 'transaction',
-        data: {
-          id: txn.id,
-          amount: txn.amount,
-          currency: txn.currency,
-          status: txn.status,
-        },
-      };
+    
+    if (pgEngine) {
+      // Используем реальные данные из эмуляции
+      // Сначала получаем новые транзакции
+      const newTransactions = pgEngine.getNewTransactionsForDataFlow();
+      
+      // Если нет новых, получаем транзакции с изменившимся статусом
+      const statusChangedTransactions = pgEngine.getStatusChangedTransactions();
+      
+      // Объединяем и берем первую доступную
+      const availableTransactions = [...newTransactions, ...statusChangedTransactions];
+      
+      if (availableTransactions.length > 0) {
+        const txn = availableTransactions[0];
+        payload = {
+          operation: 'process',
+          type: 'transaction',
+          data: {
+            id: txn.id,
+            amount: txn.amount,
+            currency: txn.currency,
+            status: txn.status,
+            paymentMethod: txn.paymentMethod,
+            customerId: txn.customerId,
+            timestamp: txn.timestamp,
+            description: txn.description,
+            fee: txn.fee,
+            refundedAmount: txn.refundedAmount,
+            metadata: txn.metadata,
+          },
+        };
+      } else {
+        // Если нет новых транзакций, возвращаем null (не создаем сообщение)
+        // Это позволит избежать дублирования данных
+        return null as any; // Возвращаем null, вызывающий код должен обработать
+      }
     } else {
-      payload = {
-        operation: 'process',
-        type: 'transaction',
-        data: {
-          amount: Math.random() * 1000,
-          currency: 'USD',
-        },
-      };
+      // Fallback на старую логику, если engine не инициализирован
+      const config = node.data.config || {};
+      const transactions = config.transactions || [];
+      
+      if (transactions.length > 0) {
+        const txn = transactions[Math.floor(Math.random() * transactions.length)];
+        payload = {
+          operation: 'process',
+          type: 'transaction',
+          data: {
+            id: txn.id,
+            amount: txn.amount,
+            currency: txn.currency,
+            status: txn.status,
+          },
+        };
+      } else {
+        payload = {
+          operation: 'process',
+          type: 'transaction',
+          data: {
+            amount: Math.random() * 1000,
+            currency: 'USD',
+          },
+        };
+      }
     }
     
     const payloadStr = JSON.stringify(payload);

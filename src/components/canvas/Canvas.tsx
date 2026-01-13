@@ -810,7 +810,7 @@ export function Canvas() {
           position: 'relative',
         }}
       >
-        {/* Canvas chunks - render each chunk separately with grid and dividers */}
+        {/* Canvas chunks - render background only */}
         {canvasChunks.map((chunk) => {
           const chunkX = chunk.x * CHUNK_SIZE;
           const chunkY = chunk.y * CHUNK_SIZE;
@@ -823,27 +823,6 @@ export function Canvas() {
             c => c.x === chunk.x && c.y === chunk.y + 1
           );
           
-          // Компенсируем pan для закрепления сетки в мировых координатах
-          // backgroundPosition работает в локальных координатах элемента ДО transform
-          // Когда transform применяет translate(pan.x, pan.y) scale(zoom), элемент двигается
-          // Чтобы сетка оставалась закрепленной, нужно компенсировать pan в backgroundPosition
-          // pan.x в экранных координатах, backgroundPosition в локальных координатах элемента
-          // После scale(zoom) локальные координаты масштабируются, поэтому компенсация: -pan.x/zoom
-          // Но backgroundPosition работает ДО transform, поэтому компенсация должна быть в локальных координатах
-          // Правильная формула: компенсируем pan.x/zoom для X и pan.y/zoom для Y
-          const worldPanX = pan.x / zoom;
-          const worldPanY = pan.y / zoom;
-          
-          // Компенсируем движение transform отрицательным смещением
-          // Используем gridSize (не scaledGridSize) для модульной арифметики, 
-          // потому что backgroundPosition работает в локальных координатах ДО scale(zoom)
-          const gridOffsetX = ((-worldPanX % gridSize) + gridSize) % gridSize;
-          const gridOffsetY = ((-worldPanY % gridSize) + gridSize) % gridSize;
-          
-          // chunkOffset в мировых координатах, преобразуем в локальные для backgroundPosition
-          const chunkOffsetX = (chunkX % gridSize);
-          const chunkOffsetY = (chunkY % gridSize);
-          
           return (
             <div
               key={`chunk-${chunk.x}-${chunk.y}`}
@@ -854,12 +833,6 @@ export function Canvas() {
                 width: `${CHUNK_SIZE}px`,
                 height: `${CHUNK_SIZE}px`,
                 backgroundColor: 'hsl(var(--canvas-bg))',
-                backgroundImage: `
-                  linear-gradient(hsl(var(--canvas-grid)) 1px, transparent 1px),
-                  linear-gradient(90deg, hsl(var(--canvas-grid)) 1px, transparent 1px)
-                `,
-                backgroundSize: `${gridSize}px ${gridSize}px`,
-                backgroundPosition: `${gridOffsetX + chunkOffsetX}px ${gridOffsetY + chunkOffsetY}px`,
                 border: showCanvasBoundaries 
                   ? '2px dashed hsl(var(--border) / 0.6)' 
                   : 'none',
@@ -894,6 +867,53 @@ export function Canvas() {
             </div>
           );
         })}
+        
+        {/* Grid layer - SVG with world-space coordinates, only within chunks */}
+        <svg
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            pointerEvents: 'none',
+            overflow: 'visible',
+          }}
+        >
+          <defs>
+            <pattern
+              id="grid-pattern"
+              width={gridSize}
+              height={gridSize}
+              patternUnits="userSpaceOnUse"
+            >
+              <path
+                d={`M ${gridSize} 0 L 0 0 0 ${gridSize}`}
+                fill="none"
+                stroke="hsl(var(--canvas-grid))"
+                strokeWidth="1"
+              />
+            </pattern>
+          </defs>
+          {/* Draw grid only within existing chunks */}
+          {canvasChunks.map((chunk) => {
+            const chunkX = chunk.x * CHUNK_SIZE;
+            const chunkY = chunk.y * CHUNK_SIZE;
+            
+            // Draw grid rectangle for this chunk only
+            // Grid is drawn in world coordinates, so it stays fixed when panning/zooming
+            return (
+              <rect
+                key={`grid-chunk-${chunk.x}-${chunk.y}`}
+                x={chunkX}
+                y={chunkY}
+                width={CHUNK_SIZE}
+                height={CHUNK_SIZE}
+                fill="url(#grid-pattern)"
+              />
+            );
+          })}
+        </svg>
         
         {/* Lasso selection rectangle */}
         {selectionRect && (
