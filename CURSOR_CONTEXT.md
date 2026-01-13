@@ -62,7 +62,7 @@
 - **security/** - Keycloak, WAF, Firewall, Vault, IDS/IPS, VPN
 - **devops/** - Jenkins, GitLab CI, ArgoCD, Terraform, Ansible, Harbor
 - **ml/** - TensorFlow Serving, PyTorch Serve, Feature Store
-- **business/** - CRM, ERP, Payment Gateway, BPMN, RPA
+- **business/** - CRM, ERP, Payment Gateway, RPA
 - **edge/** - Edge Gateway, IoT Gateway, CDN
 
 #### ProfileConfigRenderer.tsx

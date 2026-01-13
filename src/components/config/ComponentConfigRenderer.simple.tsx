@@ -102,8 +102,6 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
     case 'crm':
     case 'erp':
     case 'payment-gateway':
-    case 'bpmn-engine':
-    case 'rpa-bot':
       return <BusinessConfig componentId={componentId} componentType={componentType} />;
     default:
       return (

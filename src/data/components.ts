@@ -83,8 +83,6 @@ export const COMPONENT_LIBRARY: ComponentType[] = [
   { id: 'crm', type: 'crm', label: 'CRM System', icon: '🤝', color: '#F39C12', category: 'business' },
   { id: 'erp', type: 'erp', label: 'ERP / SAP', icon: '🏢', color: '#1B75BC', category: 'business' },
   { id: 'payment-gateway', type: 'payment-gateway', label: 'Payment Gateway', icon: '💳', color: '#4CAF50', category: 'business' },
-  { id: 'bpmn-engine', type: 'bpmn-engine', label: 'BPMN Engine', icon: '🌀', color: '#34495E', category: 'business' },
-  { id: 'rpa-bot', type: 'rpa-bot', label: 'RPA Bot', icon: '🤖', color: '#9B59B6', category: 'business' },
 ];
 
 export const COMPONENT_CATEGORIES: { id: ComponentCategory; label: string; icon: string }[] = [

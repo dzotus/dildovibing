@@ -12,7 +12,7 @@ export function createEnvoyRule(discovery: ServiceDiscovery): ConnectionRule {
     targetTypes: [
       'rest', 'grpc', 'graphql', 'websocket', 'soap', 'webhook',
       'postgres', 'mongodb', 'redis', 'cassandra', 'clickhouse',
-      'crm', 'erp', 'payment-gateway', 'bpmn-engine',
+      'crm', 'erp', 'payment-gateway',
     ],
     priority: 10,
     

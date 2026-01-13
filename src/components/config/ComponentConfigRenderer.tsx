@@ -63,8 +63,6 @@ const PyTorchServeConfigAdvanced = lazy(() => import('./ml/PyTorchServeConfigAdv
 const FeatureStoreConfigAdvanced = lazy(() => import('./ml/FeatureStoreConfigAdvanced').then(m => ({ default: m.FeatureStoreConfigAdvanced })));
 const CRMConfigAdvanced = lazy(() => import('./business/CRMConfigAdvanced').then(m => ({ default: m.CRMConfigAdvanced })));
 const ERPConfigAdvanced = lazy(() => import('./business/ERPConfigAdvanced').then(m => ({ default: m.ERPConfigAdvanced })));
-const RPABotConfigAdvanced = lazy(() => import('./business/RPABotConfigAdvanced').then(m => ({ default: m.RPABotConfigAdvanced })));
-const BPMNEngineConfigAdvanced = lazy(() => import('./business/BPMNEngineConfigAdvanced').then(m => ({ default: m.BPMNEngineConfigAdvanced })));
 const PaymentGatewayConfigAdvanced = lazy(() => import('./business/PaymentGatewayConfigAdvanced').then(m => ({ default: m.PaymentGatewayConfigAdvanced })));
 
 // Fallback компонент для загрузки
@@ -202,10 +200,6 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
       return <CRMConfigAdvanced componentId={componentId} />;
     case 'erp':
       return <ERPConfigAdvanced componentId={componentId} />;
-    case 'rpa-bot':
-      return <RPABotConfigAdvanced componentId={componentId} />;
-    case 'bpmn-engine':
-      return <BPMNEngineConfigAdvanced componentId={componentId} />;
     case 'payment-gateway':
       return <PaymentGatewayConfigAdvanced componentId={componentId} />;
     default:
