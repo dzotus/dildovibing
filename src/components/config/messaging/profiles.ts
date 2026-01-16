@@ -160,7 +160,7 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
     description: 'Queues/topics with sessions, dead-lettering and max delivery control.',
     docsUrl: 'https://azure.microsoft.com/services/service-bus/',
     defaults: {
-      namespace: 'archiphoenix.servicebus.windows.net',
+      namespace: '',
       entityType: 'queue',
       entityName: 'events',
       subscriptionName: 'default',

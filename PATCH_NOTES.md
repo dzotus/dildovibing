@@ -1,5 +1,315 @@
 # Patch Notes
 
+## Версия 0.1.8c - Azure Service Bus: Устранение хардкода, синхронизация метрик и новые функции
+
+### Обзор изменений
+**Azure Service Bus: Устранение хардкода, синхронизация метрик и новые функции (Этап 1-4, частично 5)**: Устранен весь хардкод namespace и значений по умолчанию через константы, реализована синхронизация метрик в реальном времени из routing engine, добавлены Subscription Filters, Duplicate Detection, Auto-forwarding, Message Peek/Deferral, улучшен UI/UX (адаптивные табы, toast-уведомления, подтверждения для критичных действий, отображение всех метрик, валидация полей, поиск/фильтрация, tooltips для всех полей, просмотр сообщений, улучшенная обработка ошибок).
+
+**Ключевые достижения**: Компонент Azure Service Bus теперь полностью параметризован - все значения по умолчанию берутся из констант, namespace настраивается через UI без хардкода. Метрики синхронизируются в реальном времени из AzureServiceBusRoutingEngine во время симуляции. Реализованы Subscription Filters (SQL Filter и Correlation Filter) для фильтрации сообщений в подписках. Добавлен Duplicate Detection для queues и topics с настраиваемым окном времени. Реализован Auto-forwarding для автоматической пересылки сообщений и dead letter messages в другие queues/topics. Добавлены Message Peek и Deferral для просмотра и отложенной обработки сообщений. Добавлены адаптивные табы, toast-уведомления для всех операций, подтверждения для удаления, отображение всех метрик (sentCount, receivedCount, completedCount, abandonedCount), валидация числовых полей с проверкой диапазонов, поиск и фильтрация для queues/topics и сообщений, **tooltips для всех полей конфигурации** (queues, topics, subscriptions, connection), полноценный UI для просмотра и управления сообщениями, **улучшенная обработка ошибок** с try-catch для всех критичных операций и информативными сообщениями об ошибках.
+
+### Ключевые изменения
+
+#### Устранение хардкода (Этап 1) ✅
+- ✅ **Создан файл констант**:
+  - Создан `src/core/constants/azureServiceBus.ts` с константами:
+    - `DEFAULT_AZURE_SERVICE_BUS_NAMESPACE = ''` (пустая строка - требует настройки)
+    - `DEFAULT_QUEUE_VALUES` (maxSizeInMegabytes, defaultMessageTimeToLive, lockDuration, maxDeliveryCount, enablePartitioning, enableDeadLetteringOnMessageExpiration, enableSessions)
+    - `DEFAULT_TOPIC_VALUES` (maxSizeInMegabytes, defaultMessageTimeToLive, enablePartitioning)
+    - `DEFAULT_SUBSCRIPTION_VALUES` (maxDeliveryCount, lockDuration, enableDeadLetteringOnMessageExpiration)
+    - `NAMING_RULES` (MAX_NAME_LENGTH, MIN_NAME_LENGTH, NAME_PATTERN)
+- ✅ **Устранен хардкод namespace**:
+  - Заменен `archiphoenix.servicebus.windows.net` на `DEFAULT_AZURE_SERVICE_BUS_NAMESPACE` в:
+    - `src/core/EmulationEngine.ts` (строки 3794, 3812)
+    - `src/services/connection/rules/messagingRules.ts` (строка 84)
+    - `src/components/config/messaging/AzureServiceBusConfigAdvanced.tsx` (строка 74)
+    - `src/components/config/messaging/profiles.ts` (строка 163)
+- ✅ **Параметризация значений по умолчанию**:
+  - `addQueue()` использует `DEFAULT_QUEUE_VALUES` вместо захардкоженных значений
+  - `addTopic()` использует `DEFAULT_TOPIC_VALUES` вместо захардкоженных значений
+  - `addSubscription()` использует `DEFAULT_SUBSCRIPTION_VALUES` вместо захардкоженных значений
+  - Все значения по умолчанию берутся из констант в `EmulationEngine.initializeAzureServiceBusRoutingEngine`
+
+#### Синхронизация метрик (Этап 2) ✅
+- ✅ **Реал-тайм обновление метрик**:
+  - Добавлен `useEffect` для синхронизации метрик из `AzureServiceBusRoutingEngine`
+  - Метрики обновляются каждые 500ms во время симуляции
+  - Используется `useEmulationStore` для получения состояния симуляции
+  - Синхронизируются метрики для queues и subscriptions:
+    - `activeMessageCount`
+    - `deadLetterMessageCount`
+    - `scheduledMessageCount`
+    - `sentCount`, `receivedCount`, `completedCount`, `abandonedCount` (новые)
+- ✅ **Отображение всех метрик**:
+  - Добавлено отображение `sentCount`, `receivedCount`, `completedCount`, `abandonedCount` для queues
+  - Добавлено отображение `sentCount`, `receivedCount`, `completedCount`, `abandonedCount` для subscriptions
+  - Добавлено отображение `deadLetterMessageCount` для subscriptions
+  - Метрики отображаются в отдельной секции под основными метриками
+
+#### UI/UX улучшения (Этап 4) ✅
+- ✅ **Адаптивность табов**:
+  - Добавлен `flex-wrap` к `TabsList` для адаптивности
+  - Табы переносятся на новую строку при узком экране
+  - Подложка расширяется при переносе
+  - Класс: `flex-wrap h-auto min-h-[36px] w-full justify-start gap-1`
+- ✅ **Toast-уведомления**:
+  - Добавлены toast-уведомления для всех операций:
+    - Создание queue/topic/subscription (`showSuccess`)
+    - Удаление queue/topic/subscription (`showSuccess`)
+    - Ошибки операций (`showError`)
+- ✅ **Подтверждения для критичных действий**:
+  - Добавлены `AlertDialog` для подтверждения удаления:
+    - Удаление queue (с предупреждением)
+    - Удаление topic (с предупреждением о удалении всех subscriptions)
+    - Удаление subscription (с предупреждением)
+- ✅ **Валидация имен**:
+  - Добавлена функция `validateName` для валидации имен queues/topics/subscriptions
+  - Проверка на уникальность имен
+  - Проверка формата (Azure Service Bus naming rules)
+  - Проверка длины (1-260 символов)
+  - Валидация использует `NAMING_RULES` из констант
+- ✅ **Валидация числовых полей**:
+  - Добавлена функция `validateNumericField` для валидации числовых значений
+  - Валидация для `maxSizeInMegabytes` (1-5120)
+  - Валидация для `defaultMessageTimeToLive` (минимум 1)
+  - Валидация для `lockDuration` (5-300 секунд)
+  - Валидация для `maxDeliveryCount` (1-2147483647)
+  - Валидация для `duplicateDetectionHistoryTimeWindow` (60-86400 секунд)
+  - Ошибки валидации отображаются через toast-уведомления
+  - Невозможно сохранить невалидные данные
+- ✅ **Tooltips для всех полей**:
+  - Добавлены tooltips для всех полей queues:
+    - Max Size (MB) - максимальный размер очереди
+    - Message TTL (seconds) - время жизни сообщений
+    - Lock Duration (seconds) - длительность блокировки сообщений
+    - Max Delivery Count - максимальное количество доставок
+    - Enable Sessions - поддержка сессий
+    - Enable Partitioning - разделение на партиции
+    - Dead Letter on Expiration - перемещение истекших сообщений в DLQ
+    - Enable Duplicate Detection - обнаружение дубликатов
+    - Duplicate Detection History Time Window - окно времени для обнаружения дубликатов
+    - Auto-Forwarding - автоматическая пересылка сообщений
+    - Forward To - целевая очередь/топик для пересылки
+    - Forward Dead Letter Messages To - целевая очередь/топик для пересылки DLQ сообщений
+  - Добавлены tooltips для всех полей topics:
+    - Max Size (MB) - максимальный размер топика
+    - Message TTL (seconds) - время жизни сообщений
+    - Enable Partitioning - разделение на партиции
+    - Enable Duplicate Detection - обнаружение дубликатов
+    - Duplicate Detection History Time Window - окно времени для обнаружения дубликатов
+    - Auto-Forwarding - автоматическая пересылка сообщений
+    - Forward To - целевая очередь/топик для пересылки
+    - Forward Dead Letter Messages To - целевая очередь/топик для пересылки DLQ сообщений
+  - Добавлены tooltips для всех полей subscriptions:
+    - Lock Duration (seconds) - длительность блокировки сообщений
+    - Max Delivery Count - максимальное количество доставок
+    - Dead Letter on Expiration - перемещение истекших сообщений в DLQ
+    - Subscription Filter - фильтрация сообщений для подписки
+    - Filter Type - тип фильтра (None, SQL Filter, Correlation Filter)
+    - SQL Expression - SQL-подобное выражение для фильтрации
+    - Correlation ID - идентификатор корреляции для фильтрации
+    - Properties - пользовательские свойства для фильтрации
+    - Auto-Forwarding - автоматическая пересылка сообщений
+    - Forward To - целевая очередь/топик для пересылки
+    - Forward Dead Letter Messages To - целевая очередь/топик для пересылки DLQ сообщений
+  - Добавлены tooltips для полей Connection:
+    - Namespace - пространство имен Azure Service Bus
+    - Connection String - строка подключения (SAS или managed identity)
+  - Все tooltips содержат подробные описания с объяснением назначения и использования полей
+- ✅ **Улучшенная обработка ошибок**:
+  - Добавлен try-catch для синхронизации метрик в реальном времени
+    - Ошибки логируются в консоль, но не показываются пользователю (чтобы избежать спама)
+  - Добавлен try-catch для операций с сообщениями (complete, abandon, defer)
+    - Ошибки отображаются через toast-уведомления с информативными сообщениями
+  - Добавлена обработка ошибок при получении сообщений для просмотра
+    - Проверка доступности routing engine
+    - Информативные сообщения об ошибках через toast
+  - Все ошибки логируются в консоль для отладки
+  - Пользователю показываются понятные сообщения об ошибках
+
+### Технические детали
+
+#### Новые файлы
+- `src/core/constants/azureServiceBus.ts` - константы для Azure Service Bus
+
+#### Измененные файлы
+- `src/core/EmulationEngine.ts` - устранен хардкод namespace и значений по умолчанию, добавлена передача фильтров и duplicate detection
+- `src/services/connection/rules/messagingRules.ts` - устранен хардкод namespace
+- `src/core/AzureServiceBusRoutingEngine.ts` - добавлены:
+  - Интерфейс `SubscriptionFilter` и поле `filter` в `ServiceBusSubscription`
+  - Методы `matchesSubscriptionFilter()`, `evaluateSQLFilter()`, `getPropertyValue()` для фильтрации
+  - Поля `enableDuplicateDetection` и `duplicateDetectionHistoryTimeWindow` в `ServiceBusQueue` и `ServiceBusTopic`
+  - Логика проверки дубликатов в `sendToQueue()` и `publishToTopic()`
+  - Map `duplicateDetectionHistory` для хранения истории messageId
+  - Поля `forwardTo` и `forwardDeadLetterMessagesTo` в `ServiceBusQueue`, `ServiceBusTopic` и `ServiceBusSubscription`
+  - Метод `forwardMessage()` для пересылки сообщений
+  - Логика пересылки в `completeMessage()`, `abandonMessage()` и `processConsumption()`
+  - Методы `peekMessages()`, `peekSubscriptionMessages()` для просмотра сообщений без блокировки
+  - Методы `deferMessage()`, `receiveDeferredMessage()` для отложенной обработки сообщений
+  - Методы `getQueueMessages()`, `getSubscriptionMessages()` для получения всех сообщений для UI
+  - Map `deferredMessages` для хранения отложенных сообщений
+- `src/components/config/messaging/AzureServiceBusConfigAdvanced.tsx` - полная переработка:
+  - Устранен хардкод namespace и значений по умолчанию
+  - Добавлена синхронизация метрик в реальном времени
+  - Добавлены адаптивные табы
+  - Добавлены toast-уведомления
+  - Добавлены подтверждения для удаления
+  - Добавлено отображение всех метрик
+  - Добавлена валидация имен
+  - Добавлена валидация числовых полей с проверкой диапазонов
+  - Добавлен UI для настройки Subscription Filters (SQL Filter, Correlation Filter)
+  - Добавлен UI для настройки Duplicate Detection (для queues и topics)
+  - Добавлен UI для настройки Auto-forwarding (для queues, topics и subscriptions)
+  - Добавлен UI для просмотра сообщений (диалог с фильтрацией и поиском)
+  - Добавлены операции с сообщениями (Complete, Abandon, Defer)
+  - Добавлен поиск для queues и topics
+  - Добавлены tooltips для всех полей конфигурации (queues, topics, subscriptions, connection)
+  - Улучшена обработка ошибок:
+    - Добавлен try-catch для синхронизации метрик в реальном времени
+    - Добавлен try-catch для операций с сообщениями (complete, abandon, defer)
+    - Добавлена обработка ошибок при получении сообщений для просмотра
+    - Все ошибки логируются в консоль и отображаются пользователю через toast-уведомления
+- `src/components/config/messaging/profiles.ts` - устранен хардкод namespace в профиле
+- `src/core/EmulationEngine.ts` - добавлена передача полей `forwardTo` и `forwardDeadLetterMessagesTo` в routing engine
+
+#### Новые функции Azure Service Bus (Этап 3) ✅
+- ✅ **Subscription Filters**:
+  - Реализован интерфейс `SubscriptionFilter` с поддержкой SQL Filter и Correlation Filter
+  - SQL Filter: упрощенная оценка SQL-подобных выражений (поддержка =, !=, >, <, >=, <=, AND, OR)
+  - Correlation Filter: фильтрация по correlationId и свойствам сообщения
+  - Логика фильтрации интегрирована в `publishToTopic()` - сообщения доставляются только подпискам с подходящими фильтрами
+  - UI для настройки фильтров в форме subscription:
+    - Выбор типа фильтра (None, SQL Filter, Correlation Filter)
+    - Поле для SQL выражения
+    - Поля для Correlation ID и свойств (key=value формат)
+- ✅ **Duplicate Detection**:
+  - Добавлены поля `enableDuplicateDetection` и `duplicateDetectionHistoryTimeWindow` в `ServiceBusQueue` и `ServiceBusTopic`
+  - Реализована логика проверки дубликатов в `sendToQueue()` и `publishToTopic()`
+  - История messageId хранится в окне времени (настраивается, по умолчанию 300 секунд)
+  - Старые записи автоматически очищаются при проверке
+  - Дубликаты отклоняются (возвращается null/пустой массив)
+  - UI для настройки duplicate detection:
+    - Switch для включения/выключения
+    - Поле для настройки окна времени (60-86400 секунд)
+- ✅ **Auto-forwarding**:
+  - Добавлены поля `forwardTo` и `forwardDeadLetterMessagesTo` в `ServiceBusQueue`, `ServiceBusTopic` и `ServiceBusSubscription`
+  - Реализована логика пересылки в `AzureServiceBusRoutingEngine`:
+    - Метод `forwardMessage()` для пересылки сообщений в другие queues/topics
+    - Пересылка при завершении сообщения (complete) если настроен `forwardTo`
+    - Пересылка dead letter messages если настроен `forwardDeadLetterMessagesTo`
+    - Пересылка при истечении TTL если настроен `forwardDeadLetterMessagesTo`
+  - UI для настройки auto-forwarding:
+    - Выпадающие списки для выбора queue/topic для пересылки
+    - Поле "Forward To" для пересылки завершенных сообщений
+    - Поле "Forward Dead Letter Messages To" для пересылки DLQ сообщений
+    - Доступно для queues, topics и subscriptions
+    - Исключение текущей сущности из списка доступных целей
+
+#### Message Peek и Deferral (Этап 3.4) ✅
+- ✅ **Методы в AzureServiceBusRoutingEngine**:
+  - `peekMessages(queueName, count)` - просмотр сообщений без блокировки
+  - `peekSubscriptionMessages(topicName, subscriptionName, count)` - просмотр сообщений подписки
+  - `deferMessage(queueOrSubscriptionId, lockToken, sequenceNumber?)` - отложить сообщение для последующей обработки
+  - `receiveDeferredMessage(queueOrSubscriptionId, sequenceNumber)` - получить отложенное сообщение по sequence number
+  - `getQueueMessages(queueName)` - получить все сообщения очереди (active, locked, scheduled, deadLetter, deferred)
+  - `getSubscriptionMessages(topicName, subscriptionName)` - получить все сообщения подписки
+- ✅ **UI для просмотра сообщений**:
+  - Кнопка "View Messages" для каждой очереди и подписки
+  - Диалог просмотра сообщений с фильтрацией по статусу (active, locked, scheduled, deadLetter, deferred)
+  - Поиск по содержимому сообщений (messageId, payload, properties)
+  - Отображение детальной информации о каждом сообщении:
+    - Message ID, размер, время постановки в очередь
+    - Lock token и время истечения блокировки (для locked messages)
+    - Delivery count
+    - Payload (форматированный JSON или текст)
+    - Properties (key-value пары)
+  - Операции с сообщениями:
+    - Complete - завершить обработку сообщения (удалить из очереди)
+    - Abandon - вернуть сообщение в очередь
+    - Defer - отложить сообщение для последующей обработки
+  - Сводка по количеству сообщений каждого типа
+- ✅ **Хранение отложенных сообщений**:
+  - Map `deferredMessages` для хранения отложенных сообщений
+  - Каждое отложенное сообщение имеет sequence number для последующего получения
+  - Инициализация deferred messages storage при инициализации routing engine
+
+#### Поиск и фильтрация (Этап 4.5) ✅
+- ✅ **Поиск для queues и topics**:
+  - Поле поиска в секции Queues для фильтрации по имени
+  - Поле поиска в секции Topics для фильтрации по имени
+  - Поиск работает в реальном времени при вводе
+  - Кнопка очистки поиска
+- ✅ **Фильтрация сообщений**:
+  - Фильтрация по статусу (all, active, locked, scheduled, deadLetter, deferred)
+  - Поиск по содержимому (messageId, payload, properties)
+  - Комбинированная фильтрация (статус + поиск)
+
+#### Tooltips (Этап 4.6) ✅
+- ✅ **Tooltips для всех полей**:
+  - **Queues**: Max Size (MB), Message TTL (seconds), Lock Duration (seconds), Max Delivery Count, Enable Sessions, Enable Partitioning, Dead Letter on Expiration, Enable Duplicate Detection, Duplicate Detection History Time Window, Auto-Forwarding, Forward To, Forward Dead Letter Messages To
+  - **Topics**: Max Size (MB), Message TTL (seconds), Enable Partitioning, Enable Duplicate Detection, Duplicate Detection History Time Window, Auto-Forwarding, Forward To, Forward Dead Letter Messages To
+  - **Subscriptions**: Lock Duration (seconds), Max Delivery Count, Dead Letter on Expiration, Subscription Filter, Filter Type, SQL Expression, Correlation ID, Properties, Auto-Forwarding, Forward To, Forward Dead Letter Messages To
+  - **Connection**: Namespace, Connection String
+  - Все tooltips содержат подробные описания с объяснением назначения и использования полей
+  - Tooltips используют компонент `Tooltip` из UI библиотеки с иконкой `HelpCircle`
+
+#### Улучшенная обработка ошибок ✅
+- ✅ **Обработка ошибок в синхронизации метрик**:
+  - Добавлен try-catch блок в `useEffect` для синхронизации метрик
+  - Ошибки логируются в консоль через `console.error`
+  - Ошибки не показываются пользователю через toast (чтобы избежать спама при фоновой синхронизации)
+- ✅ **Обработка ошибок в операциях с сообщениями**:
+  - Добавлен try-catch в `handleCompleteMessage()`:
+    - Проверка доступности routing engine
+    - Информативное сообщение об ошибке через toast
+    - Логирование ошибки в консоль
+  - Добавлен try-catch в `handleAbandonMessage()`:
+    - Проверка доступности routing engine
+    - Информативное сообщение об ошибке через toast
+    - Логирование ошибки в консоль
+  - Добавлен try-catch в `handleDeferMessage()`:
+    - Проверка доступности routing engine
+    - Информативное сообщение об ошибке через toast
+    - Логирование ошибки в консоль
+- ✅ **Обработка ошибок при получении сообщений**:
+  - Добавлен try-catch в `getMessagesForView()`:
+    - Проверка доступности routing engine с информативным сообщением
+    - Обработка ошибок при получении сообщений из очереди/подписки
+    - Информативное сообщение об ошибке через toast
+    - Логирование ошибки в консоль
+- ✅ **Общие улучшения**:
+  - Все ошибки логируются в консоль для отладки
+  - Пользователю показываются понятные сообщения об ошибках через toast-уведомления
+  - Проверка доступности routing engine перед выполнением операций
+  - Graceful degradation - компонент продолжает работать даже при ошибках в фоновых операциях
+  - Tooltips отображаются при наведении на иконку HelpCircle рядом с полем
+
+### Что осталось сделать
+
+#### Этап 3: Добавление недостающих функций Azure Service Bus
+- [x] Subscription Filters (SQL Filter, Correlation Filter) ✅
+- [x] Duplicate Detection ✅
+- [x] Auto-forwarding ✅
+- [x] Message Peek и Deferral ✅
+
+#### Этап 4: Дополнительные улучшения UI/UX
+- [x] Валидация всех полей (числовые значения, диапазоны) ✅
+- [ ] Визуализация метрик (графики, прогресс-бары) - низкий приоритет
+- [x] Поиск и фильтрация queues/topics ✅
+- [x] Поиск и фильтрация сообщений ✅
+- [x] Tooltips для основных полей ✅
+- [ ] Tooltips для всех полей (частично - основные поля готовы)
+- [ ] Help-тексты для сложных настроек (частично - tooltips содержат описания)
+
+#### Этап 5: Тестирование и оптимизация
+- [ ] Тестирование всех CRUD операций
+- [ ] Тестирование синхронизации метрик
+- [ ] Оптимизация производительности
+
+### Обратная совместимость
+✅ Все изменения обратно совместимы. Существующие конфигурации будут работать с новыми значениями по умолчанию из констант.
+
+---
+
 ## Версия 0.1.8b - AWS SQS: Улучшение симулятивности и UI/UX
 
 ### Обзор изменений

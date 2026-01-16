@@ -17,6 +17,10 @@ export interface ServiceBusQueue {
   activeMessageCount?: number;
   deadLetterMessageCount?: number;
   scheduledMessageCount?: number;
+  enableDuplicateDetection?: boolean;
+  duplicateDetectionHistoryTimeWindow?: number; // seconds
+  forwardTo?: string; // queue or topic name to forward messages to
+  forwardDeadLetterMessagesTo?: string; // queue or topic name to forward dead letter messages to
 }
 
 export interface ServiceBusTopic {
@@ -26,6 +30,17 @@ export interface ServiceBusTopic {
   defaultMessageTimeToLive: number; // seconds
   enablePartitioning: boolean;
   subscriptions?: ServiceBusSubscription[];
+  enableDuplicateDetection?: boolean;
+  duplicateDetectionHistoryTimeWindow?: number; // seconds
+  forwardTo?: string; // queue or topic name to forward messages to
+  forwardDeadLetterMessagesTo?: string; // queue or topic name to forward dead letter messages to
+}
+
+export interface SubscriptionFilter {
+  type: 'sql' | 'correlation' | 'none';
+  sqlExpression?: string; // для SQL filter
+  correlationId?: string; // для correlation filter
+  properties?: Record<string, string>; // для correlation filter
 }
 
 export interface ServiceBusSubscription {
@@ -34,6 +49,9 @@ export interface ServiceBusSubscription {
   lockDuration: number; // seconds
   enableDeadLetteringOnMessageExpiration: boolean;
   activeMessageCount?: number;
+  filter?: SubscriptionFilter; // фильтр для подписки
+  forwardTo?: string; // queue or topic name to forward messages to
+  forwardDeadLetterMessagesTo?: string; // queue or topic name to forward dead letter messages to
 }
 
 export interface ServiceBusMessage {
@@ -75,6 +93,8 @@ export class AzureServiceBusRoutingEngine {
   private deadLetterMessages: Map<string, ServiceBusMessage[]> = new Map(); // queue/subscription -> dead letter messages
   private scheduledMessages: Map<string, ServiceBusMessage[]> = new Map(); // queue/topic -> scheduled messages
   private sessionMessages: Map<string, Map<string, ServiceBusMessage[]>> = new Map(); // queue/subscription -> sessionId -> messages
+  private duplicateDetectionHistory: Map<string, Map<string, number>> = new Map(); // queue/topic -> messageId -> timestamp
+  private deferredMessages: Map<string, ServiceBusMessage[]> = new Map(); // queue/subscription -> deferred messages
   
   private queueState: Map<string, {
     activeMessageCount: number;
@@ -117,6 +137,7 @@ export class AzureServiceBusRoutingEngine {
     this.sessionMessages.clear();
     this.queueState.clear();
     this.subscriptionState.clear();
+    this.deferredMessages.clear();
 
     // Initialize queues
     if (config.queues) {
@@ -176,9 +197,17 @@ export class AzureServiceBusRoutingEngine {
             // Initialize session messages if sessions enabled (for subscriptions)
             // Note: sessions are typically used with queues, but can be used with subscriptions
             this.sessionMessages.set(subscriptionId, new Map());
+            
+            // Initialize deferred messages storage
+            this.deferredMessages.set(`${subscriptionId}/deferred`, []);
           }
         }
       }
+    }
+    
+    // Initialize deferred messages for queues
+    for (const queueName of this.queues.keys()) {
+      this.deferredMessages.set(`${queueName}/deferred`, []);
     }
   }
 
@@ -199,6 +228,33 @@ export class AzureServiceBusRoutingEngine {
     }
 
     const now = Date.now();
+    
+    // Check for duplicate detection
+    if (queue.enableDuplicateDetection) {
+      const messageIdFromProps = properties?.['MessageId'] as string || properties?.['messageId'] as string;
+      if (messageIdFromProps) {
+        const history = this.duplicateDetectionHistory.get(queueName) || new Map();
+        const windowMs = (queue.duplicateDetectionHistoryTimeWindow || 300) * 1000; // default 5 minutes
+        
+        // Clean old entries outside the window
+        const cutoffTime = now - windowMs;
+        for (const [msgId, timestamp] of history.entries()) {
+          if (timestamp < cutoffTime) {
+            history.delete(msgId);
+          }
+        }
+        
+        // Check if messageId exists in history
+        if (history.has(messageIdFromProps)) {
+          return null; // Duplicate detected, reject message
+        }
+        
+        // Add to history
+        history.set(messageIdFromProps, now);
+        this.duplicateDetectionHistory.set(queueName, history);
+      }
+    }
+    
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const serviceBusMessageId = `${queueName}-${messageId}`;
 
@@ -276,6 +332,33 @@ export class AzureServiceBusRoutingEngine {
     }
 
     const now = Date.now();
+    
+    // Check for duplicate detection
+    if (topic.enableDuplicateDetection) {
+      const messageIdFromProps = properties?.['MessageId'] as string || properties?.['messageId'] as string;
+      if (messageIdFromProps) {
+        const history = this.duplicateDetectionHistory.get(topicName) || new Map();
+        const windowMs = (topic.duplicateDetectionHistoryTimeWindow || 300) * 1000; // default 5 minutes
+        
+        // Clean old entries outside the window
+        const cutoffTime = now - windowMs;
+        for (const [msgId, timestamp] of history.entries()) {
+          if (timestamp < cutoffTime) {
+            history.delete(msgId);
+          }
+        }
+        
+        // Check if messageId exists in history
+        if (history.has(messageIdFromProps)) {
+          return []; // Duplicate detected, reject message
+        }
+        
+        // Add to history
+        history.set(messageIdFromProps, now);
+        this.duplicateDetectionHistory.set(topicName, history);
+      }
+    }
+    
     const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const serviceBusMessageId = `${topicName}-${messageId}`;
 
@@ -315,8 +398,13 @@ export class AzureServiceBusRoutingEngine {
       return [];
     }
 
-    // Deliver message to each subscription
+    // Deliver message to each subscription (with filter support)
     for (const subscription of subscriptions) {
+      // Check if message matches subscription filter
+      if (!this.matchesSubscriptionFilter(message, subscription.filter)) {
+        continue; // Skip this subscription if filter doesn't match
+      }
+      
       const subscriptionId = `${topicName}/subscriptions/${subscription.name}`;
       const subMessages = this.subscriptionMessages.get(subscriptionId) || [];
       
@@ -486,11 +574,32 @@ export class AzureServiceBusRoutingEngine {
       return false; // Message not found or lock expired
     }
 
+    const lockedMessage = locked[index];
+    const message = lockedMessage.message;
     locked.splice(index, 1);
     this.lockedMessages.set(queueOrSubscriptionId, locked);
 
-    // Update state
+    // Check for auto-forwarding before completing
     const isQueue = this.queues.has(queueOrSubscriptionId);
+    let forwardTo: string | undefined;
+    
+    if (isQueue) {
+      const queue = this.queues.get(queueOrSubscriptionId);
+      forwardTo = queue?.forwardTo;
+    } else {
+      // For subscription, get forwardTo from subscription config
+      const [topicName, , subscriptionName] = queueOrSubscriptionId.split('/');
+      const topic = this.topics.get(topicName);
+      const subscription = topic?.subscriptions?.find(s => s.name === subscriptionName);
+      forwardTo = subscription?.forwardTo;
+    }
+
+    // Forward message if forwardTo is configured
+    if (forwardTo) {
+      this.forwardMessage(message, forwardTo);
+    }
+
+    // Update state
     if (isQueue) {
       const state = this.queueState.get(queueOrSubscriptionId);
       if (state) {
@@ -537,23 +646,42 @@ export class AzureServiceBusRoutingEngine {
       : this.subscriptions.get(message.destination)?.find(s => s.name === message.subscriptionName)?.maxDeliveryCount || 10;
 
     if (message.deliveryCount >= maxDeliveryCount) {
-      // Move to dead letter queue
-      const dlq = this.deadLetterMessages.get(queueOrSubscriptionId) || [];
-      dlq.push(message);
-      this.deadLetterMessages.set(queueOrSubscriptionId, dlq);
+      // Check for forward dead letter messages before moving to DLQ
+      let forwardDeadLetterTo: string | undefined;
+      
+      if (isQueue) {
+        const queue = this.queues.get(queueOrSubscriptionId);
+        forwardDeadLetterTo = queue?.forwardDeadLetterMessagesTo;
+      } else {
+        // For subscription, get forwardDeadLetterMessagesTo from subscription config
+        const [topicName, , subscriptionName] = queueOrSubscriptionId.split('/');
+        const topic = this.topics.get(topicName);
+        const subscription = topic?.subscriptions?.find(s => s.name === subscriptionName);
+        forwardDeadLetterTo = subscription?.forwardDeadLetterMessagesTo;
+      }
+
+      // Forward dead letter message if configured
+      if (forwardDeadLetterTo) {
+        this.forwardMessage(message, forwardDeadLetterTo);
+      } else {
+        // Move to dead letter queue only if not forwarding
+        const dlq = this.deadLetterMessages.get(queueOrSubscriptionId) || [];
+        dlq.push(message);
+        this.deadLetterMessages.set(queueOrSubscriptionId, dlq);
+      }
 
       // Update state
       if (isQueue) {
         const state = this.queueState.get(queueOrSubscriptionId);
         if (state) {
-          state.deadLetterMessageCount = dlq.length;
+          state.deadLetterMessageCount = forwardDeadLetterTo ? state.deadLetterMessageCount : (this.deadLetterMessages.get(queueOrSubscriptionId) || []).length;
           state.abandonedCount = (state.abandonedCount || 0) + 1;
           state.lastUpdate = Date.now();
         }
       } else {
         const state = this.subscriptionState.get(queueOrSubscriptionId);
         if (state) {
-          state.deadLetterMessageCount = dlq.length;
+          state.deadLetterMessageCount = forwardDeadLetterTo ? state.deadLetterMessageCount : (this.deadLetterMessages.get(queueOrSubscriptionId) || []).length;
           state.abandonedCount = (state.abandonedCount || 0) + 1;
           state.lastUpdate = Date.now();
         }
@@ -606,6 +734,36 @@ export class AzureServiceBusRoutingEngine {
   }
 
   /**
+   * Forward message to another queue or topic
+   */
+  private forwardMessage(message: ServiceBusMessage, forwardTo: string): void {
+    // Check if forwardTo is a queue or topic
+    const isQueue = this.queues.has(forwardTo);
+    const isTopic = this.topics.has(forwardTo);
+
+    if (isQueue) {
+      // Forward to queue
+      const newMessageId = this.sendToQueue(
+        forwardTo,
+        message.payload,
+        message.size,
+        message.properties,
+        message.sessionId
+      );
+      // Note: newMessageId is returned but not used - message is forwarded
+    } else if (isTopic) {
+      // Forward to topic
+      this.publishToTopic(
+        forwardTo,
+        message.payload,
+        message.size,
+        message.properties
+      );
+    }
+    // If forwardTo doesn't exist, message is silently dropped (as per Azure Service Bus behavior)
+  }
+
+  /**
    * Process consumption (move scheduled messages, expire locks, expire TTL)
    */
   public processConsumption(deltaTime: number) {
@@ -655,9 +813,14 @@ export class AzureServiceBusRoutingEngine {
           messages.splice(i, 1);
           
           if (queue.enableDeadLetteringOnMessageExpiration) {
-            const dlq = this.deadLetterMessages.get(queueName) || [];
-            dlq.push(msg);
-            this.deadLetterMessages.set(queueName, dlq);
+            // Check for forward dead letter messages
+            if (queue.forwardDeadLetterMessagesTo) {
+              this.forwardMessage(msg, queue.forwardDeadLetterMessagesTo);
+            } else {
+              const dlq = this.deadLetterMessages.get(queueName) || [];
+              dlq.push(msg);
+              this.deadLetterMessages.set(queueName, dlq);
+            }
           }
         }
       }
@@ -711,9 +874,14 @@ export class AzureServiceBusRoutingEngine {
             messages.splice(i, 1);
             
             if (subscription.enableDeadLetteringOnMessageExpiration) {
-              const dlq = this.deadLetterMessages.get(subscriptionId) || [];
-              dlq.push(msg);
-              this.deadLetterMessages.set(subscriptionId, dlq);
+              // Check for forward dead letter messages
+              if (subscription.forwardDeadLetterMessagesTo) {
+                this.forwardMessage(msg, subscription.forwardDeadLetterMessagesTo);
+              } else {
+                const dlq = this.deadLetterMessages.get(subscriptionId) || [];
+                dlq.push(msg);
+                this.deadLetterMessages.set(subscriptionId, dlq);
+              }
             }
           }
         }
@@ -881,6 +1049,324 @@ export class AzureServiceBusRoutingEngine {
   public getActiveConnections(): number {
     // Simulate active connections based on queues and topics
     return this.queues.size + this.topics.size;
+  }
+
+  /**
+   * Check if message matches subscription filter
+   */
+  private matchesSubscriptionFilter(message: ServiceBusMessage, filter?: SubscriptionFilter): boolean {
+    // No filter means all messages pass
+    if (!filter || filter.type === 'none') {
+      return true;
+    }
+
+    const properties = message.properties || {};
+
+    if (filter.type === 'sql') {
+      // SQL Filter - simplified SQL-like expression evaluation
+      if (!filter.sqlExpression) {
+        return true; // Empty expression means all messages pass
+      }
+      
+      return this.evaluateSQLFilter(filter.sqlExpression, properties);
+    }
+
+    if (filter.type === 'correlation') {
+      // Correlation Filter - match by correlationId or properties
+      if (filter.correlationId) {
+        const messageCorrelationId = properties['CorrelationId'] || properties['correlationId'] || properties['correlation-id'];
+        if (messageCorrelationId !== filter.correlationId) {
+          return false;
+        }
+      }
+
+      // Check properties match
+      if (filter.properties) {
+        for (const [key, value] of Object.entries(filter.properties)) {
+          const messageValue = properties[key] || properties[key.toLowerCase()] || properties[key.toUpperCase()];
+          if (messageValue !== value) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+
+    return true; // Unknown filter type, allow message
+  }
+
+  /**
+   * Evaluate simplified SQL filter expression
+   * Supports basic operators: =, !=, >, <, >=, <=, AND, OR, LIKE
+   * Example: "user.type = 'premium' AND amount > 100"
+   */
+  private evaluateSQLFilter(expression: string, properties: Record<string, unknown>): boolean {
+    try {
+      // Simple SQL filter evaluation
+      // This is a simplified version - real Azure Service Bus SQL filters are more complex
+      
+      // Normalize expression
+      let expr = expression.trim();
+      
+      // Handle simple equality checks: property = 'value'
+      const equalityMatch = expr.match(/^(\w+)\s*=\s*['"]([^'"]+)['"]$/);
+      if (equalityMatch) {
+        const [, propName, expectedValue] = equalityMatch;
+        const propValue = this.getPropertyValue(properties, propName);
+        return String(propValue) === expectedValue;
+      }
+
+      // Handle inequality: property != 'value'
+      const inequalityMatch = expr.match(/^(\w+)\s*!=\s*['"]([^'"]+)['"]$/);
+      if (inequalityMatch) {
+        const [, propName, expectedValue] = inequalityMatch;
+        const propValue = this.getPropertyValue(properties, propName);
+        return String(propValue) !== expectedValue;
+      }
+
+      // Handle numeric comparisons: property > 100
+      const numericMatch = expr.match(/^(\w+)\s*(>|<|>=|<=)\s*(\d+\.?\d*)$/);
+      if (numericMatch) {
+        const [, propName, operator, numericValue] = numericMatch;
+        const propValue = this.getPropertyValue(properties, propName);
+        const numValue = parseFloat(numericValue);
+        const propNum = typeof propValue === 'number' ? propValue : parseFloat(String(propValue));
+        
+        if (isNaN(propNum)) return false;
+        
+        switch (operator) {
+          case '>': return propNum > numValue;
+          case '<': return propNum < numValue;
+          case '>=': return propNum >= numValue;
+          case '<=': return propNum <= numValue;
+          default: return false;
+        }
+      }
+
+      // Handle AND/OR logic (simplified)
+      if (expr.includes(' AND ')) {
+        const parts = expr.split(' AND ');
+        return parts.every(part => this.evaluateSQLFilter(part.trim(), properties));
+      }
+      
+      if (expr.includes(' OR ')) {
+        const parts = expr.split(' OR ');
+        return parts.some(part => this.evaluateSQLFilter(part.trim(), properties));
+      }
+
+      // Default: check if property exists
+      const propMatch = expr.match(/^(\w+)$/);
+      if (propMatch) {
+        const propName = propMatch[1];
+        return this.getPropertyValue(properties, propName) !== undefined;
+      }
+
+      return true; // If we can't parse, allow message (fail open)
+    } catch (error) {
+      console.warn('Error evaluating SQL filter:', error);
+      return true; // Fail open - allow message if filter evaluation fails
+    }
+  }
+
+  /**
+   * Get property value from message properties (case-insensitive)
+   */
+  private getPropertyValue(properties: Record<string, unknown>, key: string): unknown {
+    // Try exact match first
+    if (properties[key] !== undefined) {
+      return properties[key];
+    }
+    
+    // Try case-insensitive match
+    const lowerKey = key.toLowerCase();
+    for (const [propKey, value] of Object.entries(properties)) {
+      if (propKey.toLowerCase() === lowerKey) {
+        return value;
+      }
+    }
+    
+    return undefined;
+  }
+
+  /**
+   * Peek messages from queue (view without locking)
+   */
+  public peekMessages(queueName: string, count: number = 1): ServiceBusMessage[] {
+    const queue = this.queues.get(queueName);
+    if (!queue) {
+      return []; // Queue not found
+    }
+
+    const messages = this.getAvailableMessages(queueName);
+    return messages.slice(0, Math.min(count, messages.length));
+  }
+
+  /**
+   * Peek messages from subscription (view without locking)
+   */
+  public peekSubscriptionMessages(topicName: string, subscriptionName: string, count: number = 1): ServiceBusMessage[] {
+    const subscriptionId = `${topicName}/subscriptions/${subscriptionName}`;
+    const messages = this.getAvailableSubscriptionMessages(subscriptionId);
+    return messages.slice(0, Math.min(count, messages.length));
+  }
+
+  /**
+   * Defer message (move to deferred queue for later processing)
+   */
+  public deferMessage(
+    queueOrSubscriptionId: string,
+    lockToken: string,
+    sequenceNumber?: number
+  ): boolean {
+    const locked = this.lockedMessages.get(queueOrSubscriptionId) || [];
+    const index = locked.findIndex(lm => lm.message.lockToken === lockToken);
+    
+    if (index < 0) {
+      return false; // Message not found or lock expired
+    }
+
+    const lockedMessage = locked[index];
+    const message = lockedMessage.message;
+    
+    // Remove from locked messages
+    locked.splice(index, 1);
+    this.lockedMessages.set(queueOrSubscriptionId, locked);
+
+    // Store deferred message (we'll use a separate map for deferred messages)
+    // For simplicity, we'll store them in a special structure
+    // In real Azure Service Bus, deferred messages are stored separately and can be received by sequence number
+    const deferredKey = `${queueOrSubscriptionId}/deferred`;
+    const deferred = this.deferredMessages.get(deferredKey) || [];
+    
+    // Add sequence number if not provided
+    if (sequenceNumber === undefined) {
+      sequenceNumber = Date.now(); // Use timestamp as sequence number
+    }
+    
+    message.lockToken = undefined;
+    message.lockedUntil = undefined;
+    (message as any).sequenceNumber = sequenceNumber;
+    (message as any).deferredAt = Date.now();
+    
+    deferred.push(message);
+    this.deferredMessages.set(deferredKey, deferred);
+
+    // Update state
+    const isQueue = this.queues.has(queueOrSubscriptionId);
+    if (isQueue) {
+      const state = this.queueState.get(queueOrSubscriptionId);
+      if (state) {
+        state.lastUpdate = Date.now();
+      }
+    } else {
+      const state = this.subscriptionState.get(queueOrSubscriptionId);
+      if (state) {
+        state.lastUpdate = Date.now();
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Receive deferred message by sequence number
+   */
+  public receiveDeferredMessage(
+    queueOrSubscriptionId: string,
+    sequenceNumber: number
+  ): ServiceBusMessage | null {
+    const deferredKey = `${queueOrSubscriptionId}/deferred`;
+    const deferred = this.deferredMessages.get(deferredKey) || [];
+    
+    const index = deferred.findIndex((msg: any) => msg.sequenceNumber === sequenceNumber);
+    if (index < 0) {
+      return null; // Deferred message not found
+    }
+
+    const message = deferred[index];
+    deferred.splice(index, 1);
+    this.deferredMessages.set(deferredKey, deferred);
+
+    // Lock the message (similar to receive)
+    const now = Date.now();
+    const isQueue = this.queues.has(queueOrSubscriptionId);
+    const lockDuration = isQueue
+      ? (this.queues.get(queueOrSubscriptionId)?.lockDuration || 30) * 1000
+      : (() => {
+          const [topicName, , subscriptionName] = queueOrSubscriptionId.split('/');
+          const topic = this.topics.get(topicName);
+          const subscription = topic?.subscriptions?.find(s => s.name === subscriptionName);
+          return (subscription?.lockDuration || 30) * 1000;
+        })();
+
+    const lockExpiresAt = now + lockDuration;
+    message.lockedUntil = lockExpiresAt;
+    message.lockToken = `lock_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    message.deliveryCount = (message.deliveryCount || 0) + 1;
+
+    // Move to locked messages
+    const locked = this.lockedMessages.get(queueOrSubscriptionId) || [];
+    locked.push({
+      message,
+      lockedAt: now,
+      lockExpiresAt,
+    });
+    this.lockedMessages.set(queueOrSubscriptionId, locked);
+
+    return message;
+  }
+
+  /**
+   * Get all messages for a queue (for UI display)
+   * Returns active, locked, scheduled, and dead letter messages
+   */
+  public getQueueMessages(queueName: string): {
+    active: ServiceBusMessage[];
+    locked: ServiceBusMessage[];
+    scheduled: ServiceBusMessage[];
+    deadLetter: ServiceBusMessage[];
+    deferred: ServiceBusMessage[];
+  } {
+    const active = this.getAvailableMessages(queueName);
+    const locked = (this.lockedMessages.get(queueName) || []).map(lm => lm.message);
+    const scheduled = (this.scheduledMessages.get(queueName) || []).filter(msg => {
+      const now = Date.now();
+      return msg.scheduledEnqueueTime && msg.scheduledEnqueueTime > now;
+    });
+    const deadLetter = this.deadLetterMessages.get(queueName) || [];
+    const deferred = this.deferredMessages.get(`${queueName}/deferred`) || [];
+
+    return {
+      active,
+      locked,
+      scheduled,
+      deadLetter,
+      deferred,
+    };
+  }
+
+  /**
+   * Get all messages for a subscription (for UI display)
+   */
+  public getSubscriptionMessages(topicName: string, subscriptionName: string): {
+    active: ServiceBusMessage[];
+    locked: ServiceBusMessage[];
+    deadLetter: ServiceBusMessage[];
+    deferred: ServiceBusMessage[];
+  } {
+    const subscriptionId = `${topicName}/subscriptions/${subscriptionName}`;
+    const active = this.getAvailableSubscriptionMessages(subscriptionId);
+    const locked = (this.lockedMessages.get(subscriptionId) || []).map(lm => lm.message);
+    const deadLetter = this.deadLetterMessages.get(subscriptionId) || [];
+    const deferred = this.deferredMessages.get(`${subscriptionId}/deferred`) || [];
+
+    return {
+      active,
+      locked,
+      deadLetter,
+      deferred,
+    };
   }
 }
 

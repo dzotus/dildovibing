@@ -1,6 +1,7 @@
 import { CanvasNode, CanvasConnection } from '@/types';
 import { ConnectionRule, ConnectionMetadata } from '../types';
 import { ServiceDiscovery } from '../ServiceDiscovery';
+import { DEFAULT_AZURE_SERVICE_BUS_NAMESPACE } from '@/core/constants/azureServiceBus';
 
 /**
  * Правило для Messaging Producer -> Message Queue
@@ -81,7 +82,7 @@ export function createMessagingProducerRule(discovery: ServiceDiscovery): Connec
         case 'azure-service-bus': {
           // Get Azure Service Bus configuration
           const serviceBusConfig = queue.data.config || {};
-          const namespace = serviceBusConfig.namespace || 'archiphoenix.servicebus.windows.net';
+          const namespace = serviceBusConfig.namespace || DEFAULT_AZURE_SERVICE_BUS_NAMESPACE;
           const connectionString = serviceBusConfig.connectionString || 
             `Endpoint=sb://${namespace}/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=...`;
           

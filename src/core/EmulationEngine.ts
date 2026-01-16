@@ -48,6 +48,12 @@ import { GitLabCIEmulationEngine } from './GitLabCIEmulationEngine';
 import { ArgoCDEmulationEngine } from './ArgoCDEmulationEngine';
 import { TerraformEmulationEngine } from './TerraformEmulationEngine';
 import { HarborEmulationEngine } from './HarborEmulationEngine';
+import { 
+  DEFAULT_AZURE_SERVICE_BUS_NAMESPACE,
+  DEFAULT_QUEUE_VALUES,
+  DEFAULT_TOPIC_VALUES,
+  DEFAULT_SUBSCRIPTION_VALUES
+} from './constants/azureServiceBus';
 import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
@@ -3791,36 +3797,47 @@ export class EmulationEngine {
     // Convert UI queue format to routing engine format
     const queues = (config.queues || []).map((q: any) => ({
       name: q.name,
-      namespace: q.namespace || config.namespace || 'archiphoenix.servicebus.windows.net',
-      maxSizeInMegabytes: q.maxSizeInMegabytes || 1024,
-      defaultMessageTimeToLive: q.defaultMessageTimeToLive || 2592000,
-      lockDuration: q.lockDuration || 30,
-      maxDeliveryCount: q.maxDeliveryCount || 10,
-      enablePartitioning: q.enablePartitioning || false,
+      namespace: q.namespace || config.namespace || DEFAULT_AZURE_SERVICE_BUS_NAMESPACE,
+      maxSizeInMegabytes: q.maxSizeInMegabytes ?? DEFAULT_QUEUE_VALUES.maxSizeInMegabytes,
+      defaultMessageTimeToLive: q.defaultMessageTimeToLive ?? DEFAULT_QUEUE_VALUES.defaultMessageTimeToLive,
+      lockDuration: q.lockDuration ?? DEFAULT_QUEUE_VALUES.lockDuration,
+      maxDeliveryCount: q.maxDeliveryCount ?? DEFAULT_QUEUE_VALUES.maxDeliveryCount,
+      enablePartitioning: q.enablePartitioning ?? DEFAULT_QUEUE_VALUES.enablePartitioning,
       enableDeadLetteringOnMessageExpiration: q.enableDeadLetteringOnMessageExpiration !== undefined 
         ? q.enableDeadLetteringOnMessageExpiration 
-        : true,
-      enableSessions: q.enableSessions || false,
+        : DEFAULT_QUEUE_VALUES.enableDeadLetteringOnMessageExpiration,
+      enableSessions: q.enableSessions ?? DEFAULT_QUEUE_VALUES.enableSessions,
       activeMessageCount: q.activeMessageCount || 0,
       deadLetterMessageCount: q.deadLetterMessageCount || 0,
       scheduledMessageCount: q.scheduledMessageCount || 0,
+      enableDuplicateDetection: q.enableDuplicateDetection ?? false,
+      duplicateDetectionHistoryTimeWindow: q.duplicateDetectionHistoryTimeWindow ?? 300,
+      forwardTo: q.forwardTo,
+      forwardDeadLetterMessagesTo: q.forwardDeadLetterMessagesTo,
     }));
     
     // Convert UI topic format to routing engine format
     const topics = (config.topics || []).map((t: any) => ({
       name: t.name,
-      namespace: t.namespace || config.namespace || 'archiphoenix.servicebus.windows.net',
-      maxSizeInMegabytes: t.maxSizeInMegabytes || 1024,
-      defaultMessageTimeToLive: t.defaultMessageTimeToLive || 2592000,
-      enablePartitioning: t.enablePartitioning || false,
+      namespace: t.namespace || config.namespace || DEFAULT_AZURE_SERVICE_BUS_NAMESPACE,
+      maxSizeInMegabytes: t.maxSizeInMegabytes ?? DEFAULT_TOPIC_VALUES.maxSizeInMegabytes,
+      defaultMessageTimeToLive: t.defaultMessageTimeToLive ?? DEFAULT_TOPIC_VALUES.defaultMessageTimeToLive,
+      enablePartitioning: t.enablePartitioning ?? DEFAULT_TOPIC_VALUES.enablePartitioning,
+      enableDuplicateDetection: t.enableDuplicateDetection ?? false,
+      duplicateDetectionHistoryTimeWindow: t.duplicateDetectionHistoryTimeWindow ?? 300,
+      forwardTo: t.forwardTo,
+      forwardDeadLetterMessagesTo: t.forwardDeadLetterMessagesTo,
       subscriptions: (t.subscriptions || []).map((sub: any) => ({
         name: sub.name,
-        maxDeliveryCount: sub.maxDeliveryCount || 10,
-        lockDuration: sub.lockDuration || 30,
+        maxDeliveryCount: sub.maxDeliveryCount ?? DEFAULT_SUBSCRIPTION_VALUES.maxDeliveryCount,
+        lockDuration: sub.lockDuration ?? DEFAULT_SUBSCRIPTION_VALUES.lockDuration,
         enableDeadLetteringOnMessageExpiration: sub.enableDeadLetteringOnMessageExpiration !== undefined
           ? sub.enableDeadLetteringOnMessageExpiration
-          : true,
+          : DEFAULT_SUBSCRIPTION_VALUES.enableDeadLetteringOnMessageExpiration,
         activeMessageCount: sub.activeMessageCount || 0,
+        filter: sub.filter || { type: 'none' }, // Include filter if present
+        forwardTo: sub.forwardTo,
+        forwardDeadLetterMessagesTo: sub.forwardDeadLetterMessagesTo,
       })),
     }));
     
