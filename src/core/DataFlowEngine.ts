@@ -335,6 +335,17 @@ export class DataFlowEngine {
               this.generateTraceForMessage(message, sourceNode, targetNode, connection, result);
             }
             
+            // For SQS messages: delete message from queue after successful processing
+            if (sourceNode?.type === 'aws-sqs' && message.metadata?.receiptHandle && message.metadata?.queueName) {
+              const routingEngine = emulationEngine.getSQSRoutingEngine(sourceNode.id);
+              if (routingEngine) {
+                routingEngine.deleteMessage(
+                  message.metadata.queueName,
+                  message.metadata.receiptHandle
+                );
+              }
+            }
+            
             // Message was processed, add to history and remove from queue
             this.addToHistory(message);
             messages.splice(messages.indexOf(message), 1);
@@ -348,6 +359,9 @@ export class DataFlowEngine {
           if (sourceNode) {
             this.generateTraceForMessage(message, sourceNode, targetNode, connection, message);
           }
+          
+          // For SQS messages: if processing failed, message will be returned to queue after visibility timeout
+          // (handled by routing engine's processConsumption method)
           
           this.addToHistory(message);
           messages.splice(messages.indexOf(message), 1);
@@ -632,6 +646,52 @@ export class DataFlowEngine {
     }
     
     return allMessages;
+  }
+
+  /**
+   * Send a message from one component to another
+   * Used by WebSocket and other components that need to send messages programmatically
+   */
+  public async sendMessage(sourceId: string, targetId: string, message: DataMessage): Promise<DataMessage | null> {
+    try {
+      // Find connection between source and target
+      const connection = this.connections.find(
+        c => c.source === sourceId && c.target === targetId
+      );
+
+      if (!connection) {
+        // No connection found, return null
+        return null;
+      }
+
+      // Ensure message has required fields
+      if (!message.id) {
+        message.id = `msg-${++this.messageIdCounter}`;
+      }
+      if (!message.timestamp) {
+        message.timestamp = Date.now();
+      }
+      message.source = sourceId;
+      message.target = targetId;
+      message.connectionId = connection.id;
+      message.status = 'pending';
+
+      // Add message to queue
+      const queue = this.messageQueue.get(connection.id) || [];
+      queue.push(message);
+      this.messageQueue.set(connection.id, queue);
+
+      // Add to history
+      this.messageHistory.push(message);
+      if (this.messageHistory.length > this.MAX_HISTORY) {
+        this.messageHistory.shift();
+      }
+
+      return message;
+    } catch (error) {
+      console.error('Error sending message:', error);
+      return null;
+    }
   }
 
   // ========== Handler Factory Methods ==========
@@ -1971,6 +2031,148 @@ export class DataFlowEngine {
     
     if (type === 'aws-sqs') {
       return {
+        generateData: (node, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getSQSRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            return null;
+          }
+          
+          const sqsConfig = (node.data.config as any) || {};
+          const queues = sqsConfig.queues || [];
+          const iamPolicies = sqsConfig.iamPolicies || [];
+          
+          // Get outgoing connections from this SQS node
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          
+          if (outgoingConnections.length === 0) {
+            return null; // No outgoing connections, nothing to consume
+          }
+          
+          const messages: DataMessage[] = [];
+          const now = Date.now();
+          
+          // Process each outgoing connection
+          for (const connection of outgoingConnections) {
+            // Extract queue name from connection metadata or config
+            const connectionConfig = (connection.data as any) || {};
+            const messagingConfig = connectionConfig.messaging || config.messaging || {};
+            const queueName = messagingConfig.queueName || 
+                             connectionConfig.queueName;
+            
+            // If queue name not specified, try to find matching queue from config
+            let targetQueueName = queueName;
+            if (!targetQueueName && queues.length > 0) {
+              // Use first queue as default, or try to match by connection target
+              const targetNode = this.nodes.find(n => n.id === connection.target);
+              if (targetNode) {
+                // Try to find queue that matches target node name or use first queue
+                const matchingQueue = queues.find((q: any) => 
+                  q.name && (q.name.includes(targetNode.id.slice(0, 8)) || q.name.includes('default'))
+                ) || queues[0];
+                targetQueueName = matchingQueue?.name;
+              } else {
+                targetQueueName = queues[0]?.name;
+              }
+            }
+            
+            if (!targetQueueName) {
+              continue; // Skip if no queue available
+            }
+            
+            // Get queue configuration first to check long polling settings
+            const queueConfig = queues.find((q: any) => q.name === targetQueueName);
+            if (!queueConfig) {
+              continue; // Queue not found
+            }
+            
+            // Track last consumption time per connection to throttle consumption
+            // Use long polling wait time if configured (0-20 seconds)
+            const lastConsumeKey = `_lastSQSConsume_${node.id}_${connection.id}_${targetQueueName}`;
+            const lastConsume = (node as any)[lastConsumeKey] || 0;
+            
+            // Base interval in ms; scale by long polling wait time if configured
+            const receiveWaitTimeSeconds = queueConfig.receiveMessageWaitTimeSeconds ?? 0;
+            const baseConsumeIntervalMs = 500; // Default short polling
+            const longPollIntervalMs = receiveWaitTimeSeconds > 0 
+              ? Math.min(receiveWaitTimeSeconds * 1000, 20000) // Max 20 seconds
+              : baseConsumeIntervalMs;
+            
+            if (now - lastConsume < longPollIntervalMs) {
+              continue; // Throttle consumption based on long polling wait time
+            }
+            
+            (node as any)[lastConsumeKey] = now;
+            
+            // Check IAM policies for ReceiveMessage
+            const targetNode = this.nodes.find(n => n.id === connection.target);
+            if (targetNode) {
+              const consumerConfig = (targetNode.data.config || {}) as any;
+              const principal = consumerConfig.accessKeyId || 
+                               consumerConfig.clientId || 
+                               consumerConfig.messaging?.principal ||
+                               sqsConfig.accessKeyId || // Fallback to SQS access key
+                               `arn:aws:iam::123456789012:user/${targetNode.id.slice(0, 8)}`;
+              
+              const hasPermission = emulationEngine.checkSQSIAMPolicy?.(
+                iamPolicies,
+                principal,
+                targetQueueName,
+                'sqs:ReceiveMessage'
+              ) ?? true; // Default allow if method doesn't exist
+              
+              if (!hasPermission) {
+                continue; // Skip if no permission
+              }
+            }
+            
+            // Determine max number of messages to receive
+            const maxNumberOfMessages = messagingConfig.maxNumberOfMessages || 
+                                       messagingConfig.batchSize ||
+                                       queueConfig.maxReceiveCount || 
+                                       1;
+            
+            // Receive messages from queue
+            const sqsMessages = routingEngine.receiveMessage(
+              targetQueueName,
+              maxNumberOfMessages,
+              queueConfig.visibilityTimeout
+            );
+            
+            if (sqsMessages.length === 0) {
+              continue; // No messages available
+            }
+            
+            // Convert SQSMessage to DataMessage
+            for (const sqsMsg of sqsMessages) {
+              const dataMessage: DataMessage = {
+                id: `sqs-msg-${++this.messageIdCounter}`,
+                timestamp: sqsMsg.timestamp,
+                source: node.id,
+                target: connection.target,
+                connectionId: connection.id,
+                format: 'json', // Default, can be determined from payload
+                payload: sqsMsg.payload,
+                size: sqsMsg.size,
+                metadata: {
+                  queueName: targetQueueName,
+                  messageId: sqsMsg.messageId,
+                  receiptHandle: sqsMsg.receiptHandle,
+                  attributes: sqsMsg.attributes,
+                  messageGroupId: sqsMsg.messageGroupId,
+                  messageDeduplicationId: sqsMsg.messageDeduplicationId,
+                },
+                status: 'pending',
+              };
+              
+              messages.push(dataMessage);
+            }
+          }
+          
+          return messages.length > 0 ? messages : null;
+        },
+        
         processData: (node, message, config) => {
           // Get routing engine from emulation engine
           const routingEngine = emulationEngine.getSQSRoutingEngine(node.id);

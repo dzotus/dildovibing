@@ -28,6 +28,32 @@ import {
   Download
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { validateSQSQueueName, validateAWSRegion } from '@/utils/validation';
+import { showSuccess, showError } from '@/utils/toast';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { HelpCircle } from 'lucide-react';
+
+// SQS UI thresholds
+const SQS_THRESHOLDS = {
+  MESSAGES_HIGH: 10000,
+  MESSAGES_WARNING: 5000,
+  MESSAGES_HEALTHY: 1000,
+  MESSAGES_MAX_PROGRESS: 50000,
+  IN_FLIGHT_MAX_PROGRESS: 5000,
+  IN_FLIGHT_WARNING: 1000,
+  DELAYED_MAX_PROGRESS: 500,
+  TOTAL_MESSAGES_MAX_PROGRESS: 100000,
+} as const;
 
 interface AWSSQSConfigProps {
   componentId: string;
@@ -42,6 +68,10 @@ interface Queue {
   delaySeconds: number;
   maxReceiveCount?: number;
   deadLetterQueue?: string;
+  // Long polling wait time per queue (ReceiveMessageWaitTimeSeconds)
+  receiveMessageWaitTimeSeconds?: number;
+  // Optional tags (key-value) for better simulation of AWS tagging
+  tags?: Array<{ key: string; value: string }>;
   approximateMessages?: number;
   approximateMessagesNotVisible?: number;
   approximateMessagesDelayed?: number;
@@ -54,6 +84,8 @@ interface AWSSQSConfig {
   accessKeyId?: string;
   secretAccessKey?: string;
   defaultRegion?: string;
+  // Optional AWS account id for building Queue URLs/ARNs
+  accountId?: string;
   iamPolicies?: Array<{
     id: string;
     principal: string;
@@ -79,6 +111,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   const accessKeyId = config.accessKeyId || '';
   const secretAccessKey = config.secretAccessKey || '';
   const defaultRegion = config.defaultRegion || 'us-east-1';
+  const accountId = config.accountId || '123456789012';
   const iamPolicies = config.iamPolicies || [];
 
   const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
@@ -86,6 +119,9 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [testMessage, setTestMessage] = useState('');
+  const [queueErrors, setQueueErrors] = useState<Record<number, Record<string, string>>>({});
+  const [deleteQueueIndex, setDeleteQueueIndex] = useState<number | null>(null);
+  const [deletePolicyId, setDeletePolicyId] = useState<string | null>(null);
 
   // Initialize routing engine when component mounts or queues change
   useEffect(() => {
@@ -96,52 +132,50 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
     emulationEngine.updateNodesAndConnections(nodes, connections);
   }, [componentId, queues.length, node?.id]);
 
-  // Update queue metrics from routing engine periodically
+  // Update queue metrics from routing engine when node config changes
+  // Metrics are updated by EmulationEngine.updateSQSQueueMetricsInConfig during simulation
+  // This effect only syncs when node config is updated externally (e.g., from simulation)
   useEffect(() => {
     if (!node || queues.length === 0) return;
     
-    const interval = setInterval(() => {
-      const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
-      if (!routingEngine) return;
+    const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+    if (!routingEngine) return;
 
-      const allQueueMetrics = routingEngine.getAllQueueMetrics();
-      const currentQueues = (node.data.config as any)?.queues || [];
-      
-      const updatedQueues = currentQueues.map((queue: any) => {
-        const metrics = allQueueMetrics.get(queue.name);
-        if (metrics) {
-          return {
-            ...queue,
-            approximateMessages: metrics.approximateMessages,
-            approximateMessagesNotVisible: metrics.approximateMessagesNotVisible,
-            approximateMessagesDelayed: metrics.approximateMessagesDelayed,
-          };
-        }
-        return queue;
-      });
-
-      // Check if metrics changed
-      const metricsChanged = updatedQueues.some((q: any, i: number) => 
-        q.approximateMessages !== currentQueues[i]?.approximateMessages ||
-        q.approximateMessagesNotVisible !== currentQueues[i]?.approximateMessagesNotVisible ||
-        q.approximateMessagesDelayed !== currentQueues[i]?.approximateMessagesDelayed
-      );
-
-      if (metricsChanged) {
-        updateNode(componentId, {
-          data: {
-            ...node.data,
-            config: {
-              ...(node.data.config as any),
-              queues: updatedQueues,
-            },
-          },
-        });
+    const allQueueMetrics = routingEngine.getAllQueueMetrics();
+    const currentQueues = (node.data.config as any)?.queues || [];
+    
+    const updatedQueues = currentQueues.map((queue: any) => {
+      const metrics = allQueueMetrics.get(queue.name);
+      if (metrics) {
+        return {
+          ...queue,
+          approximateMessages: metrics.approximateMessages,
+          approximateMessagesNotVisible: metrics.approximateMessagesNotVisible,
+          approximateMessagesDelayed: metrics.approximateMessagesDelayed,
+        };
       }
-    }, 500); // Update every 500ms
+      return queue;
+    });
 
-    return () => clearInterval(interval);
-  }, [componentId, queues.length, node?.id, updateNode]);
+    // Check if metrics changed
+    const metricsChanged = updatedQueues.some((q: any, i: number) => 
+      q.approximateMessages !== currentQueues[i]?.approximateMessages ||
+      q.approximateMessagesNotVisible !== currentQueues[i]?.approximateMessagesNotVisible ||
+      q.approximateMessagesDelayed !== currentQueues[i]?.approximateMessagesDelayed
+    );
+
+    if (metricsChanged) {
+      updateNode(componentId, {
+        data: {
+          ...node.data,
+          config: {
+            ...(node.data.config as any),
+            queues: updatedQueues,
+          },
+        },
+      });
+    }
+  }, [componentId, node?.data.config, queues.length, updateNode]);
 
   const updateConfig = (updates: Partial<AWSSQSConfig>) => {
     updateNode(componentId, {
@@ -160,20 +194,89 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
       visibilityTimeout: 30,
       messageRetention: 4,
       delaySeconds: 0,
+      receiveMessageWaitTimeSeconds: 0,
       approximateMessages: 0,
       approximateMessagesNotVisible: 0,
       approximateMessagesDelayed: 0,
+      tags: [],
     };
     updateConfig({ queues: [...queues, newQueue] });
     setShowCreateQueue(false);
   };
 
   const removeQueue = (index: number) => {
-    updateConfig({ queues: queues.filter((_, i) => i !== index) });
+    setDeleteQueueIndex(index);
+  };
+
+  const confirmDeleteQueue = () => {
+    if (deleteQueueIndex !== null) {
+      const queueName = queues[deleteQueueIndex].name;
+      updateConfig({ queues: queues.filter((_, i) => i !== deleteQueueIndex) });
+      setDeleteQueueIndex(null);
+      showSuccess(`Queue "${queueName}" has been deleted`);
+    }
   };
 
   const updateQueue = (index: number, field: string, value: any) => {
     const newQueues = [...queues];
+    const queue = newQueues[index];
+    
+    // Валидация
+    if (field === 'name') {
+      const validation = validateSQSQueueName(value, queue.type === 'fifo');
+      if (!validation.valid) {
+        setQueueErrors({
+          ...queueErrors,
+          [index]: { ...queueErrors[index], name: validation.error || '' },
+        });
+        return; // Не обновлять если невалидно
+      } else {
+        // Очистить ошибку
+        const newErrors = { ...queueErrors };
+        if (newErrors[index]) {
+          delete newErrors[index].name;
+        }
+        setQueueErrors(newErrors);
+      }
+    }
+    
+    if (field === 'region') {
+      const validation = validateAWSRegion(value);
+      if (!validation.valid) {
+        setQueueErrors({
+          ...queueErrors,
+          [index]: { ...queueErrors[index], region: validation.error || '' },
+        });
+        return; // Не обновлять если невалидно
+      } else {
+        // Очистить ошибку
+        const newErrors = { ...queueErrors };
+        if (newErrors[index]) {
+          delete newErrors[index].region;
+        }
+        setQueueErrors(newErrors);
+      }
+    }
+    
+    // Валидация числовых полей
+    if (['visibilityTimeout', 'messageRetention', 'delaySeconds', 'maxReceiveCount', 'receiveMessageWaitTimeSeconds'].includes(field)) {
+      const numValue = Number(value);
+      if (isNaN(numValue) || numValue < 0) {
+        setQueueErrors({
+          ...queueErrors,
+          [index]: { ...queueErrors[index], [field]: `${field} must be a positive number` },
+        });
+        return;
+      } else {
+        // Очистить ошибку
+        const newErrors = { ...queueErrors };
+        if (newErrors[index]) {
+          delete newErrors[index][field];
+        }
+        setQueueErrors(newErrors);
+      }
+    }
+    
     newQueues[index] = { ...newQueues[index], [field]: value };
     updateConfig({ queues: newQueues });
   };
@@ -191,7 +294,15 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   };
 
   const removePolicy = (id: string) => {
-    updateConfig({ iamPolicies: iamPolicies.filter((p) => p.id !== id) });
+    setDeletePolicyId(id);
+  };
+
+  const confirmDeletePolicy = () => {
+    if (deletePolicyId) {
+      updateConfig({ iamPolicies: iamPolicies.filter((p) => p.id !== deletePolicyId) });
+      setDeletePolicyId(null);
+      showSuccess('IAM Policy has been deleted');
+    }
   };
 
   const sendTestMessage = (queueIndex: number) => {
@@ -205,12 +316,15 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
       const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
       
       if (routingEngine) {
+        // Optional one-off attributes for test messages
+        const testAttributes = (queue as any).testAttributes as Record<string, string> | undefined;
+
         // Send message through routing engine
         const messageId = routingEngine.sendMessage(
           queue.name,
           testMessage,
           new Blob([testMessage]).size,
-          undefined, // attributes
+          testAttributes, // attributes
           queue.type === 'fifo' ? 'test-group' : undefined, // messageGroupId for FIFO
           queue.type === 'fifo' && queue.contentBasedDedup ? undefined : `test-${Date.now()}` // deduplicationId
         );
@@ -253,11 +367,67 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                const { nodes, connections } = useCanvasStore.getState();
+                emulationEngine.updateNodesAndConnections(nodes, connections);
+                
+                const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+                if (routingEngine) {
+                  const allQueueMetrics = routingEngine.getAllQueueMetrics();
+                  const currentQueues = (node.data.config as any)?.queues || [];
+                  
+                  const updatedQueues = currentQueues.map((queue: any) => {
+                    const metrics = allQueueMetrics.get(queue.name);
+                    if (metrics) {
+                      return {
+                        ...queue,
+                        approximateMessages: metrics.approximateMessages,
+                        approximateMessagesNotVisible: metrics.approximateMessagesNotVisible,
+                        approximateMessagesDelayed: metrics.approximateMessagesDelayed,
+                      };
+                    }
+                    return queue;
+                  });
+                  
+                  updateNode(componentId, {
+                    data: {
+                      ...node.data,
+                      config: {
+                        ...(node.data.config as any),
+                        queues: updatedQueues,
+                      },
+                    },
+                  });
+                  
+                  showSuccess('Metrics refreshed');
+                } else {
+                  showError('Routing engine not initialized');
+                }
+              }}
+            >
               <RefreshCcw className="h-4 w-4 mr-2" />
               Refresh
             </Button>
-            <Button variant="outline" size="sm">
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => {
+                if (queues.length === 0) {
+                  showError('Please create a queue first');
+                  return;
+                }
+                
+                const queueName = queues[0].name;
+                const region = queues[0].region || defaultRegion;
+                const queueUrl = `https://sqs.${region}.amazonaws.com/${accountId}/${queueName}`;
+                const consoleUrl = `https://console.aws.amazon.com/sqs/v2/home?region=${region}#/queues/${encodeURIComponent(queueUrl)}`;
+                
+                window.open(consoleUrl, '_blank');
+              }}
+            >
               <Cloud className="h-4 w-4 mr-2" />
               AWS Console
             </Button>
@@ -285,11 +455,11 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
               <span className="text-2xl font-bold">{totalMessages.toLocaleString()}</span>
               <p className="text-xs text-muted-foreground mt-1">Approximate count</p>
               <Progress
-                value={Math.min((totalMessages / 100000) * 100, 100)}
+                value={Math.min((totalMessages / SQS_THRESHOLDS.TOTAL_MESSAGES_MAX_PROGRESS) * 100, 100)}
                 className={`h-2 mt-2 ${
-                  totalMessages > 50000 
+                  totalMessages > SQS_THRESHOLDS.MESSAGES_MAX_PROGRESS 
                     ? 'bg-red-500' 
-                    : totalMessages > 10000 
+                    : totalMessages > SQS_THRESHOLDS.MESSAGES_HIGH 
                       ? 'bg-yellow-500' 
                       : 'bg-green-500'
                 }`}
@@ -304,7 +474,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
               <span className="text-2xl font-bold">{totalInFlight.toLocaleString()}</span>
               <p className="text-xs text-muted-foreground mt-1">Being processed</p>
               <Progress
-                value={Math.min((totalInFlight / 5000) * 100, 100)}
+                value={Math.min((totalInFlight / SQS_THRESHOLDS.IN_FLIGHT_MAX_PROGRESS) * 100, 100)}
                 className="h-2 mt-2"
               />
             </CardContent>
@@ -321,20 +491,20 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
         </div>
 
         <Tabs defaultValue="queues" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="queues">
+          <TabsList className="flex flex-wrap gap-2">
+            <TabsTrigger value="queues" className="flex-shrink-0">
               <MessageSquare className="h-4 w-4 mr-2" />
               Queues ({queues.length})
             </TabsTrigger>
-            <TabsTrigger value="credentials">
+            <TabsTrigger value="credentials" className="flex-shrink-0">
               <Key className="h-4 w-4 mr-2" />
               Credentials
             </TabsTrigger>
-            <TabsTrigger value="policies">
+            <TabsTrigger value="policies" className="flex-shrink-0">
               <Shield className="h-4 w-4 mr-2" />
               IAM Policies ({iamPolicies.length})
             </TabsTrigger>
-            <TabsTrigger value="monitoring">
+            <TabsTrigger value="monitoring" className="flex-shrink-0">
               <Activity className="h-4 w-4 mr-2" />
               Monitoring
             </TabsTrigger>
@@ -366,16 +536,21 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             <div>
                               <CardTitle className="text-base">
                                 {editingQueueIndex === index ? (
-                                  <Input
-                                    value={queue.name}
-                                    onChange={(e) => updateQueue(index, 'name', e.target.value)}
-                                    onBlur={() => setEditingQueueIndex(null)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') setEditingQueueIndex(null);
-                                    }}
-                                    className="h-7"
-                                    autoFocus
-                                  />
+                                  <div className="space-y-1">
+                                    <Input
+                                      value={queue.name}
+                                      onChange={(e) => updateQueue(index, 'name', e.target.value)}
+                                      onBlur={() => setEditingQueueIndex(null)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') setEditingQueueIndex(null);
+                                      }}
+                                      className={`h-7 ${queueErrors[index]?.name ? 'border-red-500' : ''}`}
+                                      autoFocus
+                                    />
+                                    {queueErrors[index]?.name && (
+                                      <p className="text-xs text-red-500">{queueErrors[index].name}</p>
+                                    )}
+                                  </div>
                                 ) : (
                                   <span
                                     className="cursor-pointer hover:text-primary"
@@ -409,17 +584,17 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">Messages Available</p>
-                              {(queue.approximateMessages || 0) > 10000 && (
+                              {(queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_HIGH && (
                                 <Badge variant="destructive" className="text-xs">High</Badge>
                               )}
                             </div>
                             <p className="text-2xl font-bold">{queue.approximateMessages?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min(((queue.approximateMessages || 0) / 50000) * 100, 100)}
+                              value={Math.min(((queue.approximateMessages || 0) / SQS_THRESHOLDS.MESSAGES_MAX_PROGRESS) * 100, 100)}
                               className={`h-2 ${
-                                (queue.approximateMessages || 0) > 10000 
+                                (queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_HIGH 
                                   ? 'bg-red-500' 
-                                  : (queue.approximateMessages || 0) > 5000 
+                                  : (queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_WARNING 
                                     ? 'bg-yellow-500' 
                                     : 'bg-green-500'
                               }`}
@@ -429,7 +604,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">In Flight</p>
-                              {(queue.approximateMessagesNotVisible || 0) > 1000 && (
+                              {(queue.approximateMessagesNotVisible || 0) > SQS_THRESHOLDS.IN_FLIGHT_WARNING && (
                                 <Badge variant="outline" className="text-xs">Processing</Badge>
                               )}
                             </div>
@@ -444,7 +619,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             <p className="text-xs text-muted-foreground">Delayed</p>
                             <p className="text-2xl font-bold">{queue.approximateMessagesDelayed?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min(((queue.approximateMessagesDelayed || 0) / 500) * 100, 100)}
+                              value={Math.min(((queue.approximateMessagesDelayed || 0) / SQS_THRESHOLDS.DELAYED_MAX_PROGRESS) * 100, 100)}
                               className="h-2 bg-orange-500"
                             />
                             <p className="text-xs text-muted-foreground">Waiting for delay</p>
@@ -456,31 +631,96 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                 {queue.region}
                               </Badge>
                             </div>
-                            <p className="text-xs font-mono text-muted-foreground truncate" title={`https://sqs.${queue.region}.amazonaws.com/.../${queue.name}`}>
-                              https://sqs.{queue.region}.amazonaws.com/.../{queue.name}
-                            </p>
+                          <p
+                            className="text-xs font-mono text-muted-foreground truncate"
+                            title={`https://sqs.${queue.region}.amazonaws.com/${accountId}/${queue.name}`}
+                          >
+                            https://sqs.{queue.region}.amazonaws.com/{accountId}/{queue.name}
+                          </p>
                             <div className="flex items-center gap-1 mt-1">
                               <div className={`h-1.5 w-1.5 rounded-full ${
-                                (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
-                                  ? 'bg-gray-400'
-                                  : (queue.approximateMessages || 0) < 1000
-                                    ? 'bg-green-500'
-                                    : (queue.approximateMessages || 0) < 10000
-                                      ? 'bg-yellow-500'
-                                      : 'bg-red-500'
+                                  (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
+                                    ? 'bg-gray-400'
+                                    : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
+                                      ? 'bg-green-500'
+                                      : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
+                                        ? 'bg-yellow-500'
+                                        : 'bg-red-500'
                               }`}></div>
                               <p className="text-xs text-muted-foreground">
                                 {
                                   (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
                                     ? 'Idle'
-                                    : (queue.approximateMessages || 0) < 1000
+                                    : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
                                       ? 'Healthy'
-                                      : (queue.approximateMessages || 0) < 10000
+                                      : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
                                         ? 'Warning'
                                         : 'Critical'
                                 }
                               </p>
                             </div>
+                          </div>
+                          {/* Tags Management */}
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between">
+                              <Label>Tags</Label>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  const newQueues = [...queues];
+                                  if (!newQueues[index].tags) {
+                                    newQueues[index].tags = [];
+                                  }
+                                  newQueues[index].tags!.push({ key: '', value: '' });
+                                  updateConfig({ queues: newQueues });
+                                }}
+                              >
+                                <Plus className="h-3 w-3 mr-1" />
+                                Add Tag
+                              </Button>
+                            </div>
+                            {queue.tags && queue.tags.length > 0 ? (
+                              <div className="space-y-2">
+                                {queue.tags.map((tag, tagIndex) => (
+                                  <div key={tagIndex} className="flex gap-2 items-center">
+                                    <Input
+                                      placeholder="Key"
+                                      value={tag.key}
+                                      onChange={(e) => {
+                                        const newQueues = [...queues];
+                                        newQueues[index].tags![tagIndex].key = e.target.value;
+                                        updateConfig({ queues: newQueues });
+                                      }}
+                                      className="flex-1"
+                                    />
+                                    <Input
+                                      placeholder="Value"
+                                      value={tag.value}
+                                      onChange={(e) => {
+                                        const newQueues = [...queues];
+                                        newQueues[index].tags![tagIndex].value = e.target.value;
+                                        updateConfig({ queues: newQueues });
+                                      }}
+                                      className="flex-1"
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => {
+                                        const newQueues = [...queues];
+                                        newQueues[index].tags = newQueues[index].tags!.filter((_, i) => i !== tagIndex);
+                                        updateConfig({ queues: newQueues });
+                                      }}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">No tags configured</p>
+                            )}
                           </div>
                         </div>
 
@@ -489,7 +729,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                         {/* Queue Configuration */}
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-2">
-                            <Label>Queue Type</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Queue Type</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Standard queues provide at-least-once delivery and best-effort ordering. FIFO queues provide exactly-once processing and strict ordering.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Select
                               value={queue.type}
                               onValueChange={(value: 'standard' | 'fifo') => updateQueue(index, 'type', value)}
@@ -504,28 +756,72 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             </Select>
                           </div>
                           <div className="space-y-2">
-                            <Label>Region</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Region</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>AWS region where the queue will be created (e.g., us-east-1, eu-west-1). Affects latency and data residency.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               value={queue.region}
                               onChange={(e) => updateQueue(index, 'region', e.target.value)}
                               placeholder="us-east-1"
+                              className={queueErrors[index]?.region ? 'border-red-500' : ''}
                             />
+                            {queueErrors[index]?.region && (
+                              <p className="text-xs text-red-500">{queueErrors[index].region}</p>
+                            )}
                           </div>
                           <div className="space-y-2">
-                            <Label>Visibility Timeout (seconds)</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Visibility Timeout (seconds)</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Duration (0-43200 seconds) that a message is hidden from other consumers after being received. If not deleted within this time, it becomes visible again.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               type="number"
                               value={queue.visibilityTimeout}
                               onChange={(e) => updateQueue(index, 'visibilityTimeout', Number(e.target.value))}
                               min={0}
                               max={43200}
+                              className={queueErrors[index]?.visibilityTimeout ? 'border-red-500' : ''}
                             />
+                            {queueErrors[index]?.visibilityTimeout && (
+                              <p className="text-xs text-red-500">{queueErrors[index].visibilityTimeout}</p>
+                            )}
                             <p className="text-xs text-muted-foreground">
                               Time a message is hidden after being received
                             </p>
                           </div>
                           <div className="space-y-2">
-                            <Label>Message Retention Period (days)</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Message Retention Period (days)</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>How long SQS retains messages that are not deleted (1-14 days). Messages older than this period are automatically deleted.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               type="number"
                               value={queue.messageRetention}
@@ -538,7 +834,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             </p>
                           </div>
                           <div className="space-y-2">
-                            <Label>Delivery Delay (seconds)</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Delivery Delay (seconds)</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Delay (0-900 seconds) before messages become available for consumption. Useful for scheduling message delivery.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               type="number"
                               value={queue.delaySeconds}
@@ -551,7 +859,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             </p>
                           </div>
                           <div className="space-y-2">
-                            <Label>Dead Letter Queue</Label>
+                            <div className="flex items-center gap-2">
+                              <Label>Dead Letter Queue</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Name of another queue where messages are moved after exceeding maxReceiveCount. Used for handling failed message processing.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
                             <Input
                               value={queue.deadLetterQueue || ''}
                               onChange={(e) => updateQueue(index, 'deadLetterQueue', e.target.value)}
@@ -561,10 +881,59 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                               Queue for messages that fail processing
                             </p>
                           </div>
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <Label>Long Polling Wait Time (seconds)</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p>Maximum time (0-20 seconds) to wait for messages when calling ReceiveMessage. Long polling reduces empty responses and API calls.</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
+                            <Input
+                              type="number"
+                              value={queue.receiveMessageWaitTimeSeconds ?? 0}
+                              onChange={(e) =>
+                                updateQueue(
+                                  index,
+                                  'receiveMessageWaitTimeSeconds',
+                                  Number(e.target.value)
+                                )
+                              }
+                              min={0}
+                              max={20}
+                              className={queueErrors[index]?.receiveMessageWaitTimeSeconds ? 'border-red-500' : ''}
+                            />
+                            {queueErrors[index]?.receiveMessageWaitTimeSeconds && (
+                              <p className="text-xs text-red-500">
+                                {queueErrors[index].receiveMessageWaitTimeSeconds}
+                              </p>
+                            )}
+                            <p className="text-xs text-muted-foreground">
+                              Max wait time for ReceiveMessage (0-20 seconds)
+                            </p>
+                          </div>
                           {queue.type === 'fifo' && (
                             <>
                               <div className="space-y-2">
-                                <Label>Max Receive Count</Label>
+                                <div className="flex items-center gap-2">
+                                  <Label>Max Receive Count</Label>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Maximum number of times a message can be received before being moved to the Dead Letter Queue (1-1000).</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                </div>
                                 <Input
                                   type="number"
                                   value={queue.maxReceiveCount || 3}
@@ -578,7 +947,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                               </div>
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                  <Label>Content-Based Deduplication</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Label>Content-Based Deduplication</Label>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Automatically generate deduplication ID from message content hash. Enables deduplication without providing explicit deduplication ID.</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                   <Switch
                                     checked={queue.contentBasedDedup || false}
                                     onCheckedChange={(checked) => updateQueue(index, 'contentBasedDedup', checked)}
@@ -589,7 +970,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                 </p>
                               </div>
                               <div className="space-y-2">
-                                <Label>FIFO Throughput Limit</Label>
+                                <div className="flex items-center gap-2">
+                                  <Label>FIFO Throughput Limit</Label>
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Per Queue: 3000 messages/sec. Per Message Group ID: 3000 messages/sec per group, unlimited groups. Choose based on your ordering requirements.</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                </div>
                                 <Select
                                   value={queue.fifoThroughputLimit || 'perQueue'}
                                   onValueChange={(value: 'perQueue' | 'perMessageGroupId') =>
@@ -614,20 +1007,44 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                         {/* Test Message */}
                         <div className="space-y-2">
                           <Label>Send Test Message</Label>
-                          <div className="flex gap-2">
+                          <div className="flex flex-col gap-2">
                             <Input
                               value={testMessage}
                               onChange={(e) => setTestMessage(e.target.value)}
                               placeholder="Enter test message..."
                             />
-                            <Button
-                              size="sm"
-                              onClick={() => sendTestMessage(index)}
-                              disabled={!testMessage}
-                            >
-                              <Send className="h-4 w-4 mr-2" />
-                              Send
-                            </Button>
+                            <div className="space-y-1">
+                              <Label className="text-xs">Message Attributes (key=value, comma-separated)</Label>
+                              <Input
+                                placeholder="env=prod, type=order, priority=high"
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const attributes: Record<string, string> = {};
+                                  raw
+                                    .split(',')
+                                    .map((part) => part.trim())
+                                    .filter(Boolean)
+                                    .forEach((pair) => {
+                                      const [key, value] = pair.split('=').map((p) => p.trim());
+                                      if (key && value !== undefined) {
+                                        attributes[key] = value;
+                                      }
+                                    });
+                                  // store parsed attributes on the queue instance (non-persistent, only for test send)
+                                  updateQueue(index, 'testAttributes', attributes as any);
+                                }}
+                              />
+                            </div>
+                            <div className="flex justify-end">
+                              <Button
+                                size="sm"
+                                onClick={() => sendTestMessage(index)}
+                                disabled={!testMessage}
+                              >
+                                <Send className="h-4 w-4 mr-2" />
+                                Send
+                              </Button>
+                            </div>
                           </div>
                         </div>
                       </CardContent>
@@ -647,7 +1064,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="accessKeyId">Access Key ID</Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="accessKeyId">Access Key ID</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>AWS access key identifier (starts with AKIA). Used for authenticating API requests to AWS SQS.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                   <Input
                     id="accessKeyId"
                     value={accessKeyId}
@@ -656,7 +1085,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="secretAccessKey">Secret Access Key</Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="secretAccessKey">Secret Access Key</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Secret key paired with Access Key ID. Keep this secure and never commit to version control. In production, use IAM roles instead.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                   <Input
                     id="secretAccessKey"
                     type="password"
@@ -666,13 +1107,49 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="defaultRegion">Default Region</Label>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="defaultRegion">Default Region</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Default AWS region for queues (e.g., us-east-1, eu-west-1). Individual queues can override this setting.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
                   <Input
                     id="defaultRegion"
                     value={defaultRegion}
                     onChange={(e) => updateConfig({ defaultRegion: e.target.value })}
                     placeholder="us-east-1"
                   />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="accountId">AWS Account ID</Label>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>12-digit AWS account ID used for generating Queue URLs and ARNs in the format: https://sqs.region.amazonaws.com/accountId/queueName</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Input
+                    id="accountId"
+                    value={accountId}
+                    onChange={(e) => updateConfig({ accountId: e.target.value })}
+                    placeholder="123456789012"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used for generating Queue URLs and ARNs
+                  </p>
                 </div>
                 <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-md">
                   <p className="text-sm text-yellow-700 dark:text-yellow-400">
@@ -710,7 +1187,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             <div className="space-y-4">
                               <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-2">
-                                  <Label>Principal</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Label>Principal</Label>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>IAM principal (user, role, or service) that the policy applies to. Use "*" for all principals or an ARN like "arn:aws:iam::123456789012:user/username".</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                   <Input
                                     value={policy.principal}
                                     onChange={(e) => {
@@ -723,7 +1212,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                   />
                                 </div>
                                 <div className="space-y-2">
-                                  <Label>Action</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Label>Action</Label>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>SQS API action to allow or deny: SendMessage, ReceiveMessage, DeleteMessage, GetQueueAttributes, or "*" for all actions.</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                   <Select
                                     value={policy.action}
                                     onValueChange={(value) => {
@@ -746,7 +1247,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                   </Select>
                                 </div>
                                 <div className="space-y-2">
-                                  <Label>Resource</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Label>Resource</Label>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Queue name or ARN that the policy applies to. Use "*" for all queues, or specify a specific queue name.</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                   <Input
                                     value={policy.resource}
                                     onChange={(e) => {
@@ -759,7 +1272,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                   />
                                 </div>
                                 <div className="space-y-2">
-                                  <Label>Effect</Label>
+                                  <div className="flex items-center gap-2">
+                                    <Label>Effect</Label>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <HelpCircle className="h-4 w-4 text-muted-foreground cursor-help" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Allow: Grants permission. Deny: Explicitly denies permission (takes precedence over Allow).</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                   <Select
                                     value={policy.effect}
                                     onValueChange={(value: 'Allow' | 'Deny') => {
@@ -863,17 +1388,17 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">Messages Available</p>
-                              {(queue.approximateMessages || 0) > 10000 && (
+                              {(queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_HIGH && (
                                 <Badge variant="destructive" className="text-xs">High</Badge>
                               )}
                             </div>
                             <p className="text-2xl font-bold">{queue.approximateMessages?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min(((queue.approximateMessages || 0) / 50000) * 100, 100)}
+                              value={Math.min(((queue.approximateMessages || 0) / SQS_THRESHOLDS.MESSAGES_MAX_PROGRESS) * 100, 100)}
                               className={`h-2 ${
-                                (queue.approximateMessages || 0) > 10000 
+                                (queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_HIGH 
                                   ? 'bg-red-500' 
-                                  : (queue.approximateMessages || 0) > 5000 
+                                  : (queue.approximateMessages || 0) > SQS_THRESHOLDS.MESSAGES_WARNING 
                                     ? 'bg-yellow-500' 
                                     : 'bg-green-500'
                               }`}
@@ -883,7 +1408,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                           <div className="space-y-2">
                             <div className="flex items-center justify-between">
                               <p className="text-xs text-muted-foreground">In Flight</p>
-                              {(queue.approximateMessagesNotVisible || 0) > 1000 && (
+                              {(queue.approximateMessagesNotVisible || 0) > SQS_THRESHOLDS.IN_FLIGHT_WARNING && (
                                 <Badge variant="outline" className="text-xs">Processing</Badge>
                               )}
                             </div>
@@ -898,7 +1423,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             <p className="text-xs text-muted-foreground">Delayed</p>
                             <p className="text-2xl font-bold">{queue.approximateMessagesDelayed?.toLocaleString() || 0}</p>
                             <Progress
-                              value={Math.min(((queue.approximateMessagesDelayed || 0) / 500) * 100, 100)}
+                              value={Math.min(((queue.approximateMessagesDelayed || 0) / SQS_THRESHOLDS.DELAYED_MAX_PROGRESS) * 100, 100)}
                               className="h-2 bg-orange-500"
                             />
                             <p className="text-xs text-muted-foreground">Waiting for delay</p>
@@ -912,9 +1437,9 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                               <div className={`h-2 w-2 rounded-full ${
                                 (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
                                   ? 'bg-gray-400'
-                                  : (queue.approximateMessages || 0) < 1000
+                                  : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
                                     ? 'bg-green-500 animate-pulse'
-                                    : (queue.approximateMessages || 0) < 10000
+                                    : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
                                       ? 'bg-yellow-500'
                                       : 'bg-red-500 animate-pulse'
                               }`}></div>
@@ -923,19 +1448,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             <Badge variant={
                               (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
                                 ? 'secondary'
-                                : (queue.approximateMessages || 0) < 1000
+                                : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
                                   ? 'default'
-                                  : (queue.approximateMessages || 0) < 10000
+                                  : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
                                     ? 'outline'
                                     : 'destructive'
                             }>
                               {
                                 (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
                                   ? 'Idle'
-                                  : (queue.approximateMessages || 0) < 1000
-                                    ? 'Healthy'
-                                    : (queue.approximateMessages || 0) < 10000
-                                      ? 'Warning'
+                                    : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
+                                      ? 'Healthy'
+                                      : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
+                                        ? 'Warning'
                                       : 'Critical'
                               }
                             </Badge>
@@ -944,9 +1469,9 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             {
                               (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
                                 ? 'Queue is idle with no messages'
-                                : (queue.approximateMessages || 0) < 1000
+                                : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HEALTHY
                                   ? 'Queue is operating normally'
-                                  : (queue.approximateMessages || 0) < 10000
+                                  : (queue.approximateMessages || 0) < SQS_THRESHOLDS.MESSAGES_HIGH
                                     ? 'Queue has high message count, consider scaling consumers'
                                     : 'Queue is critically overloaded, immediate action required'
                             }
@@ -1022,6 +1547,40 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Delete Queue Confirmation Dialog */}
+      <AlertDialog open={deleteQueueIndex !== null} onOpenChange={(open) => !open && setDeleteQueueIndex(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Queue?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete queue "{queues[deleteQueueIndex || 0]?.name}"? 
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteQueue}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Policy Confirmation Dialog */}
+      <AlertDialog open={deletePolicyId !== null} onOpenChange={(open) => !open && setDeletePolicyId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete IAM Policy?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this IAM policy? 
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeletePolicy}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

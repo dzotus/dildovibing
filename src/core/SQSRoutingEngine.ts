@@ -15,6 +15,10 @@ export interface SQSQueue {
   deadLetterQueue?: string; // DLQ name
   contentBasedDedup?: boolean; // for FIFO
   fifoThroughputLimit?: 'perQueue' | 'perMessageGroupId'; // for FIFO
+  // Long polling wait time per queue (ReceiveMessageWaitTimeSeconds)
+  receiveMessageWaitTimeSeconds?: number;
+  // Tags for queue, similar to AWS SQS tags
+  tags?: Record<string, string>;
 }
 
 export interface SQSMessage {

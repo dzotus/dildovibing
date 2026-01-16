@@ -215,6 +215,14 @@ export class EmulationEngine {
   // gRPC routing engines per node
   private grpcRoutingEngines: Map<string, GRPCRoutingEngine> = new Map();
 
+  // SQS simulation constants
+  private static readonly SQS_DEFAULT_MSG_SIZE = 1024; // bytes
+  private static readonly SQS_DEFAULT_ERROR_RATE = 0.0005;
+  private static readonly SQS_MAX_QUEUE_DEPTH = 100000;
+  private static readonly SQS_LATENCY_PER_1K_MSGS = 1; // ms per 1000 messages
+  private static readonly SQS_MAX_QUEUE_LATENCY = 50; // ms
+  private static readonly SQS_ERROR_RATE_PER_100K = 0.01; // 0.01% per 100k messages
+
   // Webhook Relay routing engines per node
   private webhookRelayRoutingEngines: Map<string, WebhookRelayRoutingEngine> = new Map();
   
@@ -1856,7 +1864,7 @@ export class EmulationEngine {
           this.simulateWebhook(node, config, metrics, hasIncomingConnections);
           break;
         case 'soap':
-          this.simulateSOAP(node, config, metrics, hasIncomingConnections);
+          this.simulateAPI(node, config, metrics, hasIncomingConnections);
           break;
         case 'kong':
           this.simulateKong(node, config, metrics, hasIncomingConnections);
@@ -2442,6 +2450,12 @@ export class EmulationEngine {
     
     // Update topic-level metrics from routing engine (real data)
     for (const topic of topics) {
+      // Declare variables outside if-else block for use in retention/compaction logic
+      const avgMessageSize = (config.avgPayloadSize || 1024); // bytes
+      const timeDelta = this.updateInterval / 1000; // seconds
+      const topicThroughput = metrics.throughput / topicCount; // Distribute evenly across topics
+      const compressionRatio = this.getCompressionRatio(topic.config?.compressionType);
+      
       // Get real metrics from routing engine
       const topicMetrics = routingEngine.getTopicMetrics(topic.name);
       if (topicMetrics) {
@@ -2450,14 +2464,10 @@ export class EmulationEngine {
         topic.size = topicMetrics.size;
       } else {
         // Fallback to calculated metrics if routing engine doesn't have data yet
-        const avgMessageSize = (config.avgPayloadSize || 1024); // bytes
-        const timeDelta = this.updateInterval / 1000; // seconds
-        const topicThroughput = metrics.throughput / topicCount; // Distribute evenly across topics
         const messagesIncrement = topicThroughput * timeDelta;
         topic.messages = (topic.messages || 0) + messagesIncrement;
         
         // Update size (with compression consideration)
-        const compressionRatio = this.getCompressionRatio(topic.config?.compressionType);
         const sizeIncrement = messagesIncrement * avgMessageSize * compressionRatio;
         topic.size = (topic.size || 0) + sizeIncrement;
       }
@@ -4207,20 +4217,24 @@ export class EmulationEngine {
     if (!hasIncomingConnections) {
       // No incoming data, reset metrics but keep queue state
       metrics.throughput = 0;
-      metrics.latency = 5; // Base latency for SQS (AWS API latency)
+      const defaultRegion = sqsConfig.defaultRegion || 'us-east-1';
+      metrics.latency = this.getRegionLatency(defaultRegion); // Base latency for SQS (AWS API latency)
       metrics.errorRate = 0;
       
       // Calculate utilization from existing queue depth
       const totalQueueDepth = routingEngine.getTotalQueueDepth();
-      metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+      metrics.utilization = Math.min(
+        1,
+        totalQueueDepth / EmulationEngine.SQS_MAX_QUEUE_DEPTH
+      );
       
       const allQueueMetrics = routingEngine.getAllQueueMetrics();
       const connections = routingEngine.getActiveConnections();
       
       metrics.customMetrics = {
-        'queue_depth': totalQueueDepth,
-        'connections': connections,
-        'queues': allQueueMetrics.size,
+        queue_depth: totalQueueDepth,
+        connections,
+        queues: allQueueMetrics.size,
       };
       
       // Update queue metrics in config
@@ -4229,22 +4243,29 @@ export class EmulationEngine {
     }
     
     // Calculate incoming throughput from connections
-    const incomingConnections = this.connections.filter(c => c.target === node.id);
+    const incomingConnections = this.connections.filter(
+      (c) => c.target === node.id
+    );
     let totalIncomingThroughput = 0;
+    
+    // Get average message size from config or use default
+    const avgMessageSize =
+      sqsConfig.avgMessageSize ||
+      config.avgPayloadSize ||
+      EmulationEngine.SQS_DEFAULT_MSG_SIZE; // Default 1KB
     
     for (const conn of incomingConnections) {
       const connMetrics = this.connectionMetrics.get(conn.id);
       if (connMetrics) {
         // Estimate messages per second from connection traffic
-        // Assume average message size of 1KB
-        const avgMessageSize = 1024;
         const msgPerSec = connMetrics.traffic / avgMessageSize;
         totalIncomingThroughput += msgPerSec;
       }
     }
     
-    // Use configured throughput if available, otherwise use calculated
-    const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
+    // Use configured throughput if available, otherwise use calculated with a sensible fallback
+    const throughputMsgs =
+      config.throughputMsgs || totalIncomingThroughput || 1000;
     
     // Throughput with random jitter
     const jitter = (Math.random() - 0.5) * 0.1;
@@ -4252,30 +4273,67 @@ export class EmulationEngine {
     
     // Latency based on queue depth and AWS region
     const totalQueueDepth = routingEngine.getTotalQueueDepth();
-    const baseLatency = 5; // Base AWS API latency
-    const queueLatency = Math.min(50, totalQueueDepth / 1000); // 1ms per 1000 messages, max 50ms
+    const defaultRegion = sqsConfig.defaultRegion || 'us-east-1';
+    const baseLatency = this.getRegionLatency(defaultRegion);
+    const queueLatency = Math.min(
+      EmulationEngine.SQS_MAX_QUEUE_LATENCY,
+      (totalQueueDepth / 1000) * EmulationEngine.SQS_LATENCY_PER_1K_MSGS
+    );
     metrics.latency = baseLatency + queueLatency + Math.random() * 5;
     
     // Error rate for queue delivery failures (increases with queue depth)
-    const baseErrorRate = 0.0005;
-    const depthErrorRate = Math.min(0.01, totalQueueDepth / 1000000); // 0.01% per 100k messages
+    const baseErrorRate =
+      sqsConfig.baseErrorRate ?? EmulationEngine.SQS_DEFAULT_ERROR_RATE;
+    const depthErrorRate = Math.min(
+      EmulationEngine.SQS_ERROR_RATE_PER_100K,
+      totalQueueDepth / 1000000
+    ); // 0.01% per 100k messages
     metrics.errorRate = baseErrorRate + depthErrorRate;
     
     // Utilization based on message queue backlog
-    metrics.utilization = Math.min(1, totalQueueDepth / 100000);
+    metrics.utilization = Math.min(
+      1,
+      totalQueueDepth / EmulationEngine.SQS_MAX_QUEUE_DEPTH
+    );
     
     // Get queue metrics
     const allQueueMetrics = routingEngine.getAllQueueMetrics();
     const connections = routingEngine.getActiveConnections();
     
     metrics.customMetrics = {
-      'queue_depth': totalQueueDepth,
-      'connections': connections,
-      'queues': allQueueMetrics.size,
+      queue_depth: totalQueueDepth,
+      connections,
+      queues: allQueueMetrics.size,
     };
     
     // Update queue metrics in node config (for UI display)
     this.updateSQSQueueMetricsInConfig(node, allQueueMetrics);
+  }
+  
+  /**
+   * Get base latency for AWS region
+   */
+  private getRegionLatency(region: string): number {
+    // Базовые латентности для разных регионов (в мс)
+    const regionLatencies: Record<string, number> = {
+      'us-east-1': 5,      // Virginia
+      'us-east-2': 6,      // Ohio
+      'us-west-1': 8,      // California
+      'us-west-2': 8,      // Oregon
+      'eu-west-1': 12,     // Ireland
+      'eu-west-2': 13,     // London
+      'eu-west-3': 14,     // Paris
+      'eu-central-1': 15,  // Frankfurt
+      'ap-southeast-1': 20, // Singapore
+      'ap-southeast-2': 22, // Sydney
+      'ap-northeast-1': 18, // Tokyo
+      'ap-northeast-2': 19, // Seoul
+      'ap-south-1': 21,     // Mumbai
+      'sa-east-1': 25,      // São Paulo
+      'ca-central-1': 7,    // Canada
+    };
+    
+    return regionLatencies[region] || 10; // Default 10ms for unknown regions
   }
   
   /**
@@ -4286,18 +4344,32 @@ export class EmulationEngine {
     const routingEngine = new SQSRoutingEngine();
     
     // Convert UI queue format to SQS routing engine format
-    const queues = (config.queues || []).map((q: any) => ({
-      name: q.name,
-      type: q.type || 'standard',
-      region: q.region || config.defaultRegion || 'us-east-1',
-      visibilityTimeout: q.visibilityTimeout || 30,
-      messageRetention: q.messageRetention || 4,
-      delaySeconds: q.delaySeconds || 0,
-      maxReceiveCount: q.maxReceiveCount,
-      deadLetterQueue: q.deadLetterQueue,
-      contentBasedDedup: q.contentBasedDedup,
-      fifoThroughputLimit: q.fifoThroughputLimit || 'perQueue',
-    }));
+    const queues = (config.queues || []).map((q: any) => {
+      const tagsArray = q.tags as Array<{ key: string; value: string }> | undefined;
+      const tagsRecord: Record<string, string> | undefined = tagsArray
+        ? tagsArray.reduce((acc, tag) => {
+            if (tag.key) {
+              acc[tag.key] = tag.value;
+            }
+            return acc;
+          }, {} as Record<string, string>)
+        : undefined;
+      
+      return {
+        name: q.name,
+        type: q.type || 'standard',
+        region: q.region || config.defaultRegion || 'us-east-1',
+        visibilityTimeout: q.visibilityTimeout || 30,
+        messageRetention: q.messageRetention || 4,
+        delaySeconds: q.delaySeconds || 0,
+        maxReceiveCount: q.maxReceiveCount,
+        deadLetterQueue: q.deadLetterQueue,
+        contentBasedDedup: q.contentBasedDedup,
+        fifoThroughputLimit: q.fifoThroughputLimit || 'perQueue',
+        receiveMessageWaitTimeSeconds: q.receiveMessageWaitTimeSeconds,
+        tags: tagsRecord,
+      };
+    });
     
     routingEngine.initialize({
       queues: queues,

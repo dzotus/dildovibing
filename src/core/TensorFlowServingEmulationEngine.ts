@@ -325,6 +325,16 @@ export class TensorFlowServingEmulationEngine {
   }
   
   /**
+   * Update model metrics count
+   */
+  private updateModelMetrics(): void {
+    this.metrics.totalModels = this.models.size;
+    this.metrics.servingModels = Array.from(this.models.values()).filter(m => m.status === 'serving').length;
+    this.metrics.loadingModels = Array.from(this.models.values()).filter(m => m.status === 'loading').length;
+    this.metrics.unavailableModels = Array.from(this.models.values()).filter(m => m.status === 'unavailable' || m.status === 'error').length;
+  }
+  
+  /**
    * Initialize batch queues for models with batching enabled
    */
   private initializeBatchQueues(): void {

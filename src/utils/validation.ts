@@ -232,3 +232,58 @@ export function getHostValidationError(host: string | undefined | null): string 
   
   return null;
 }
+
+/**
+ * Валидация имени очереди SQS
+ * @param name - имя очереди для проверки
+ * @param isFifo - является ли очередь FIFO
+ * @returns объект с результатом валидации
+ */
+export function validateSQSQueueName(name: string, isFifo: boolean = false): {
+  valid: boolean;
+  error?: string;
+} {
+  if (!name || name.length === 0) {
+    return { valid: false, error: 'Queue name is required' };
+  }
+  
+  if (name.length > 80) {
+    return { valid: false, error: 'Queue name must be 1-80 characters' };
+  }
+  
+  // SQS queue name: alphanumeric, hyphens, underscores
+  const queueNameRegex = /^[a-zA-Z0-9_-]+$/;
+  if (!queueNameRegex.test(name)) {
+    return { valid: false, error: 'Queue name can only contain alphanumeric characters, hyphens, and underscores' };
+  }
+  
+  // FIFO queues must end with .fifo
+  if (isFifo && !name.endsWith('.fifo')) {
+    return { valid: false, error: 'FIFO queue name must end with .fifo' };
+  }
+  
+  return { valid: true };
+}
+
+/**
+ * Валидация AWS региона
+ * @param region - регион для проверки
+ * @returns объект с результатом валидации
+ */
+export function validateAWSRegion(region: string): {
+  valid: boolean;
+  error?: string;
+} {
+  const validRegions = [
+    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+    'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
+    'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2',
+    'ap-south-1', 'sa-east-1', 'ca-central-1',
+  ];
+  
+  if (!region || !validRegions.includes(region)) {
+    return { valid: false, error: 'Invalid AWS region' };
+  }
+  
+  return { valid: true };
+}
