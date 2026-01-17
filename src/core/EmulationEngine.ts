@@ -54,6 +54,11 @@ import {
   DEFAULT_TOPIC_VALUES,
   DEFAULT_SUBSCRIPTION_VALUES
 } from './constants/azureServiceBus';
+import {
+  DEFAULT_GCP_PROJECT_ID,
+  DEFAULT_TOPIC_VALUES as DEFAULT_GCP_TOPIC_VALUES,
+  DEFAULT_SUBSCRIPTION_VALUES as DEFAULT_GCP_SUBSCRIPTION_VALUES
+} from './constants/gcpPubSub';
 import { DockerEmulationEngine } from './DockerEmulationEngine';
 import { KubernetesEmulationEngine } from './KubernetesEmulationEngine';
 import { AnsibleEmulationEngine } from './AnsibleEmulationEngine';
@@ -4076,8 +4081,8 @@ export class EmulationEngine {
     // Convert UI format to routing engine format
     const topics = (config.topics || []).map((t: any) => ({
       name: t.name,
-      projectId: t.projectId || config.projectId || 'archiphoenix-lab',
-      messageRetentionDuration: t.messageRetentionDuration || 604800, // Default 7 days
+      projectId: t.projectId || config.projectId || DEFAULT_GCP_PROJECT_ID,
+      messageRetentionDuration: t.messageRetentionDuration || DEFAULT_GCP_TOPIC_VALUES.messageRetentionDuration,
       labels: t.labels || {},
       messageCount: t.messageCount || 0,
       byteCount: t.byteCount || 0,
@@ -4086,12 +4091,15 @@ export class EmulationEngine {
     const subscriptions = (config.subscriptions || []).map((sub: any) => ({
       name: sub.name,
       topic: sub.topic,
-      projectId: sub.projectId || config.projectId || 'archiphoenix-lab',
-      ackDeadlineSeconds: sub.ackDeadlineSeconds || 10,
+      projectId: sub.projectId || config.projectId || DEFAULT_GCP_PROJECT_ID,
+      ackDeadlineSeconds: sub.ackDeadlineSeconds || DEFAULT_GCP_SUBSCRIPTION_VALUES.ackDeadlineSeconds,
       messageRetentionDuration: sub.messageRetentionDuration,
-      enableMessageOrdering: sub.enableMessageOrdering || false,
+      enableMessageOrdering: sub.enableMessageOrdering !== undefined ? sub.enableMessageOrdering : DEFAULT_GCP_SUBSCRIPTION_VALUES.enableMessageOrdering,
       pushEndpoint: sub.pushEndpoint,
       pushAttributes: sub.pushAttributes || {},
+      filter: sub.filter || { type: 'none' },
+      deadLetterTopic: sub.deadLetterTopic,
+      maxDeliveryAttempts: sub.maxDeliveryAttempts,
       messageCount: sub.messageCount || 0,
       unackedMessageCount: sub.unackedMessageCount || 0,
     }));

@@ -12,6 +12,11 @@ export interface PubSubTopic {
   byteCount?: number;
 }
 
+export interface SubscriptionFilter {
+  type: 'attributes' | 'none';
+  attributes?: Record<string, string>; // attribute key-value pairs for filtering
+}
+
 export interface PubSubSubscription {
   name: string;
   topic: string;
@@ -21,6 +26,9 @@ export interface PubSubSubscription {
   enableMessageOrdering: boolean;
   pushEndpoint?: string; // URL for push subscriptions
   pushAttributes?: Record<string, string>;
+  filter?: SubscriptionFilter; // Subscription filter for attribute-based filtering
+  deadLetterTopic?: string; // Dead letter topic name for failed messages
+  maxDeliveryAttempts?: number; // Maximum delivery attempts before moving to DLQ
   messageCount?: number;
   unackedMessageCount?: number;
 }
@@ -182,6 +190,11 @@ export class PubSubRoutingEngine {
     for (const subName of subscriptions) {
       const subscription = this.subscriptions.get(subName);
       if (!subscription) continue;
+
+      // Check if message matches subscription filter
+      if (!this.matchesSubscriptionFilter(message, subscription.filter)) {
+        continue; // Skip this subscription if filter doesn't match
+      }
 
       // Create a copy of the message for this subscription
       const subscriptionMessage: PubSubMessage = {
@@ -388,29 +401,101 @@ export class PubSubRoutingEngine {
   }
 
   /**
+   * Check if message matches subscription filter
+   */
+  private matchesSubscriptionFilter(message: PubSubMessage, filter?: SubscriptionFilter): boolean {
+    // No filter means all messages pass
+    if (!filter || filter.type === 'none') {
+      return true;
+    }
+
+    if (filter.type === 'attributes') {
+      // Attribute filter - check if message attributes match filter attributes
+      if (!filter.attributes || Object.keys(filter.attributes).length === 0) {
+        return true; // Empty filter means all messages pass
+      }
+
+      const messageAttributes = message.attributes || {};
+
+      // All filter attributes must match message attributes
+      for (const [key, value] of Object.entries(filter.attributes)) {
+        const messageValue = messageAttributes[key];
+        if (messageValue !== value) {
+          return false; // Attribute doesn't match
+        }
+      }
+
+      return true; // All attributes match
+    }
+
+    return true; // Unknown filter type, allow message
+  }
+
+  /**
    * Process consumption: handle ack deadlines, push deliveries, retention cleanup
    */
   public processConsumption(deltaTimeMs: number): void {
     const now = Date.now();
 
-    // Process unacked messages - check ack deadlines
-    for (const [subscriptionName, unacked] of this.unackedMessages.entries()) {
-      const subscription = this.subscriptions.get(subscriptionName);
-      if (!subscription) continue;
+      // Process unacked messages - check ack deadlines and delivery attempts
+      for (const [subscriptionName, unacked] of this.unackedMessages.entries()) {
+        const subscription = this.subscriptions.get(subscriptionName);
+        if (!subscription) continue;
 
-      const expiredMessages: UnackedMessage[] = [];
-      const remainingUnacked: UnackedMessage[] = [];
+        const expiredMessages: UnackedMessage[] = [];
+        const remainingUnacked: UnackedMessage[] = [];
+        const dlqMessages: UnackedMessage[] = [];
 
-      for (const unackedMsg of unacked) {
-        if (now >= unackedMsg.ackDeadlineExpiresAt) {
-          // Ack deadline expired - return message to subscription
-          expiredMessages.push(unackedMsg);
-        } else {
-          remainingUnacked.push(unackedMsg);
+        for (const unackedMsg of unacked) {
+          if (now >= unackedMsg.ackDeadlineExpiresAt) {
+            // Ack deadline expired - check if should move to DLQ
+            const maxAttempts = subscription.maxDeliveryAttempts || 0;
+            if (maxAttempts > 0 && unackedMsg.deliveryAttempt >= maxAttempts) {
+              // Move to dead letter topic
+              dlqMessages.push(unackedMsg);
+            } else {
+              // Return message to subscription for redelivery
+              expiredMessages.push(unackedMsg);
+            }
+          } else {
+            remainingUnacked.push(unackedMsg);
+          }
         }
-      }
 
-      // Return expired messages to subscription queue
+        // Move messages to dead letter topic if configured
+        if (dlqMessages.length > 0 && subscription.deadLetterTopic) {
+          const dlqTopicName = subscription.deadLetterTopic;
+          const dlqTopic = this.topics.get(dlqTopicName);
+          
+          if (dlqTopic) {
+            // Publish failed messages to dead letter topic
+            for (const dlqMsg of dlqMessages) {
+              const dlqTopicMessages = this.topicMessages.get(dlqTopicName) || [];
+              const dlqMessage: PubSubMessage = {
+                ...dlqMsg.message,
+                id: `dlq_${dlqMsg.message.id}`,
+                attributes: {
+                  ...dlqMsg.message.attributes,
+                  'x-original-subscription': subscriptionName,
+                  'x-delivery-attempts': dlqMsg.deliveryAttempt.toString(),
+                  'x-failed-reason': 'max_delivery_attempts_exceeded',
+                },
+              };
+              dlqTopicMessages.push(dlqMessage);
+              this.topicMessages.set(dlqTopicName, dlqTopicMessages);
+
+              // Update DLQ topic state
+              const dlqState = this.topicState.get(dlqTopicName);
+              if (dlqState) {
+                dlqState.messageCount = dlqTopicMessages.length;
+                dlqState.byteCount = (dlqState.byteCount || 0) + dlqMsg.message.size;
+                dlqState.publishedCount = (dlqState.publishedCount || 0) + 1;
+              }
+            }
+          }
+        }
+
+      // Return expired messages to subscription queue (increment delivery attempt)
       if (expiredMessages.length > 0) {
         const subscriptionMessages = this.subscriptionMessages.get(subscriptionName) || [];
         for (const expired of expiredMessages) {
@@ -426,6 +511,11 @@ export class PubSubRoutingEngine {
           state.unackedMessageCount = remainingUnacked.length;
           state.messageCount = subscriptionMessages.length;
         }
+      }
+
+      // Update delivery attempts for expired messages that are being redelivered
+      for (const expired of expiredMessages) {
+        expired.deliveryAttempt += 1;
       }
 
       this.unackedMessages.set(subscriptionName, remainingUnacked);
@@ -451,11 +541,15 @@ export class PubSubRoutingEngine {
           for (const msg of pushedMessages) {
             const ackId = `ack_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             msg.ackId = ackId;
+            // Check if this message was previously delivered (find in unacked by message ID)
+            const existingUnacked = this.unackedMessages.get(subscriptionName) || [];
+            const existingMsg = existingUnacked.find(u => u.message.id === msg.id);
+            const deliveryAttempt = existingMsg ? existingMsg.deliveryAttempt + 1 : 1;
             unacked.push({
               message: msg,
               subscriptionName,
               ackDeadlineExpiresAt: now + ackDeadlineMs,
-              deliveryAttempt: 1,
+              deliveryAttempt,
               orderingKey: msg.orderingKey,
             });
           }

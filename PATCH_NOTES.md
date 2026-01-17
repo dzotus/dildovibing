@@ -1,5 +1,241 @@
 # Patch Notes
 
+## Версия 0.1.8d - Google Cloud Pub/Sub: Устранение хардкода, синхронизация метрик, улучшение UI/UX и добавление недостающих функций
+
+### Обзор изменений
+**Google Cloud Pub/Sub: Устранение хардкода, синхронизация метрик, улучшение UI/UX и добавление недостающих функций (Этап 1-4)**: Устранен весь хардкод project ID и значений по умолчанию через константы, реализована синхронизация метрик в реальном времени из PubSubRoutingEngine, улучшен UI/UX (адаптивные табы, toast-уведомления, подтверждения для критичных действий, отображение всех метрик, валидация полей, tooltips для всех полей, поиск/фильтрация, сортировка, визуализация метрик), добавлены недостающие функции Google Pub/Sub (Subscription Filters, Dead Letter Topics, Labels Management, Push Configuration Enhancement).
+
+**Ключевые достижения**: Компонент Google Cloud Pub/Sub теперь полностью параметризован - все значения по умолчанию берутся из констант, project ID настраивается через UI без хардкода. Метрики синхронизируются в реальном времени из PubSubRoutingEngine во время симуляции. Добавлены адаптивные табы, toast-уведомления для всех операций, подтверждения для удаления, отображение всех метрик (publishedCount, deliveredCount, acknowledgedCount, nackedCount), валидация имен и числовых полей с проверкой диапазонов, tooltips для всех полей конфигурации, поиск и фильтрация для topics и subscriptions, сортировка по различным критериям, визуализация метрик через прогресс-бары, улучшенная обработка ошибок с try-catch для всех критичных операций и информативными сообщениями об ошибках. Реализованы Subscription Filters (attribute-based filtering), Dead Letter Topics с max delivery attempts, Labels Management для topics, Push Attributes configuration для push подписок.
+
+### Ключевые изменения
+
+#### Устранение хардкода (Этап 1) ✅
+- ✅ **Создан файл констант**:
+  - Создан `src/core/constants/gcpPubSub.ts` с константами:
+    - `DEFAULT_GCP_PROJECT_ID = ''` (пустая строка - требует настройки)
+    - `DEFAULT_TOPIC_VALUES` (messageRetentionDuration: 604800 - 7 дней)
+    - `DEFAULT_SUBSCRIPTION_VALUES` (ackDeadlineSeconds: 10, enableMessageOrdering: false)
+    - `NAMING_RULES` (правила именования для project ID и topics/subscriptions)
+    - `VALIDATION_RANGES` (диапазоны для ack deadline и message retention)
+- ✅ **Устранен хардкод project ID**:
+  - Заменен `archiphoenix-lab` на `DEFAULT_GCP_PROJECT_ID` в:
+    - `src/core/EmulationEngine.ts` (строки 4079, 4089)
+    - `src/components/config/messaging/GCPPubSubConfigAdvanced.tsx` (строка 66)
+    - `src/components/config/messaging/profiles.ts` (строка 238)
+- ✅ **Параметризация значений по умолчанию**:
+  - `addTopic()` использует `DEFAULT_TOPIC_VALUES` вместо захардкоженных значений
+  - `addSubscription()` использует `DEFAULT_SUBSCRIPTION_VALUES` вместо захардкоженных значений
+  - Все значения по умолчанию берутся из констант в `EmulationEngine.initializePubSubRoutingEngine`
+
+#### Синхронизация метрик (Этап 2) ✅
+- ✅ **Реал-тайм обновление метрик**:
+  - Добавлен `useEffect` для синхронизации метрик из `PubSubRoutingEngine`
+  - Метрики обновляются каждые 500ms во время симуляции
+  - Используется `useEmulationStore` для получения состояния симуляции
+  - Синхронизируются метрики для topics и subscriptions:
+    - Topics: `messageCount`, `byteCount`, `publishedCount`
+    - Subscriptions: `messageCount`, `unackedMessageCount`, `deliveredCount`, `acknowledgedCount`, `nackedCount`
+- ✅ **Отображение всех метрик**:
+  - Добавлено отображение `publishedCount` для topics
+  - Добавлено отображение `deliveredCount`, `acknowledgedCount`, `nackedCount` для subscriptions
+  - Метрики отображаются в отдельной секции под основными метриками
+
+#### UI/UX улучшения (Этап 4, частично) ✅
+- ✅ **Адаптивность табов**:
+  - Добавлен `flex-wrap` к `TabsList` для адаптивности
+  - Табы переносятся на новую строку при узком экране
+  - Подложка расширяется при переносе
+  - Класс: `flex-wrap h-auto min-h-[36px] w-full justify-start gap-1`
+- ✅ **Toast-уведомления**:
+  - Добавлены toast-уведомления для всех операций:
+    - Создание topic/subscription (`showSuccess`)
+    - Удаление topic/subscription (`showSuccess`)
+    - Ошибки операций (`showError`)
+- ✅ **Подтверждения для критичных действий**:
+  - Добавлены `AlertDialog` для подтверждения удаления:
+    - Удаление topic (с предупреждением о subscriptions, использующих topic)
+    - Удаление subscription (с предупреждением)
+- ✅ **Валидация имен**:
+  - Добавлена функция `validateTopicSubscriptionName` для валидации имен topics/subscriptions
+  - Проверка на уникальность имен
+  - Проверка формата (Google Pub/Sub naming rules: lowercase letters, numbers, hyphens, underscores)
+  - Проверка длины (3-255 символов)
+  - Валидация использует `NAMING_RULES` из констант
+- ✅ **Валидация project ID**:
+  - Добавлена функция `validateProjectId` для валидации project ID
+  - Проверка формата (lowercase letters, numbers, hyphens)
+  - Проверка длины (6-30 символов)
+  - Валидация использует `NAMING_RULES.PROJECT_ID` из констант
+- ✅ **Валидация числовых полей**:
+  - Добавлена функция `validateNumericField` для валидации числовых значений
+  - Валидация для `ackDeadlineSeconds` (10-600 секунд)
+  - Валидация для `messageRetentionDuration` (600-2678400 секунд, 10 минут - 31 день)
+  - Ошибки валидации отображаются через toast-уведомления
+  - Невозможно сохранить невалидные данные
+- ✅ **Tooltips для всех полей**:
+  - Добавлены tooltips для полей topics:
+    - Message Retention (seconds) - как долго сообщения хранятся в топике
+    - Labels - key-value pairs для организации и фильтрации topics
+  - Добавлены tooltips для полей subscriptions:
+    - Topic - топик, на который подписана подписка
+    - Ack Deadline (seconds) - максимальное время для подтверждения сообщения
+    - Push Endpoint URL - URL для push подписок
+    - Push Attributes - кастомные атрибуты, отправляемые с push запросами
+    - Enable Message Ordering - упорядочивание сообщений по ordering key
+    - Subscription Filter - фильтрация сообщений по атрибутам
+    - Filter Attributes - атрибуты для фильтрации сообщений
+    - Dead Letter Topic - топик для неудачных сообщений
+    - Max Delivery Attempts - максимальное количество попыток доставки
+  - Добавлены tooltips для полей Credentials:
+    - Project ID - Google Cloud Project ID
+    - Service Account JSON - JSON credentials для аутентификации
+- ✅ **Поиск и фильтрация**:
+  - Добавлен поиск для topics (по имени и project ID)
+  - Добавлен поиск для subscriptions (по имени, topic и project ID)
+  - Добавлена фильтрация topics:
+    - All Topics
+    - With Messages
+    - Empty
+  - Добавлена фильтрация subscriptions:
+    - All Subscriptions
+    - With Messages
+    - With Unacked
+    - Empty
+  - Добавлена сортировка topics:
+    - По имени (asc/desc)
+    - По количеству сообщений (asc/desc)
+    - По количеству опубликованных сообщений (asc/desc)
+  - Добавлена сортировка subscriptions:
+    - По имени (asc/desc)
+    - По количеству сообщений (asc/desc)
+    - По количеству unacked сообщений (asc/desc)
+  - Отображение количества отфильтрованных элементов
+- ✅ **Визуализация метрик**:
+  - Добавлены прогресс-бары для метрик topics:
+    - Message count (масштаб: до 1000 сообщений)
+    - Byte count (масштаб: до 1MB)
+    - Published count (масштаб: до 1000 сообщений)
+  - Добавлены прогресс-бары для метрик subscriptions:
+    - Message count (масштаб: до 1000 сообщений)
+    - Unacked count (масштаб: до 100 сообщений)
+  - Прогресс-бары отображаются только когда метрики > 0
+- ✅ **Улучшенная обработка ошибок**:
+  - Добавлен try-catch для синхронизации метрик в реальном времени
+    - Ошибки логируются в консоль, но не показываются пользователю (чтобы избежать спама)
+  - Добавлен try-catch для всех операций CRUD (add, remove, update)
+    - Ошибки отображаются через toast-уведомления с информативными сообщениями
+  - Добавлена проверка наличия topics перед созданием subscription
+  - Добавлена проверка использования topic перед удалением
+  - Все ошибки логируются в консоль для отладки
+  - Пользователю показываются понятные сообщения об ошибках
+
+#### Добавление недостающих функций Google Pub/Sub (Этап 3) ✅
+- ✅ **Subscription Filters (Attribute Filters)**:
+  - Добавлен интерфейс `SubscriptionFilter` с типом 'attributes' | 'none'
+  - Реализована логика фильтрации в `PubSubRoutingEngine.publishToTopic()`
+  - Метод `matchesSubscriptionFilter()` проверяет соответствие атрибутов сообщения фильтру подписки
+  - Сообщения без нужных атрибутов не доставляются в подписку
+  - UI для настройки фильтров:
+    - Выбор типа фильтра (none/attributes)
+    - Добавление/удаление/редактирование атрибутов фильтра (key-value pairs)
+    - Визуальное отображение фильтров в отдельной секции
+    - Tooltips с описанием функциональности
+- ✅ **Dead Letter Topics (DLQ)**:
+  - Добавлены поля в `PubSubSubscription`:
+    - `deadLetterTopic?: string` - имя dead letter topic
+    - `maxDeliveryAttempts?: number` - максимальное количество попыток доставки
+  - Реализована логика в `PubSubRoutingEngine.processConsumption()`:
+    - Отслеживание количества попыток доставки для каждого сообщения (в `UnackedMessage.deliveryAttempt`)
+    - Перемещение сообщений в dead letter topic после превышения maxDeliveryAttempts
+    - Сообщения в DLQ получают дополнительные атрибуты:
+      - `x-original-subscription` - исходная подписка
+      - `x-delivery-attempts` - количество попыток доставки
+      - `x-failed-reason` - причина перемещения в DLQ
+    - Учет deliveryAttempt при push delivery и pull operations
+  - UI для настройки DLQ:
+    - Выбор dead letter topic из списка topics
+    - Настройка max delivery attempts (1-100, по умолчанию 5)
+    - Tooltips с описанием функциональности
+    - UI показывается только когда dead letter topic выбран
+- ✅ **Labels Management**:
+  - Добавлен UI для управления labels для topics:
+    - Добавление/удаление labels (key-value pairs)
+    - Редактирование значений labels
+    - Визуальное отображение labels в отдельной секции
+    - Tooltips с описанием назначения labels
+    - Инициализация пустого объекта labels при создании topic
+  - Labels используются для организации и фильтрации topics в реальном Google Pub/Sub
+- ✅ **Push Configuration Enhancement**:
+  - Добавлен UI для настройки push attributes:
+    - Добавление/удаление/редактирование push attributes (key-value pairs)
+    - UI показывается только когда push endpoint задан
+    - Tooltips с описанием функциональности
+    - Push attributes отправляются с каждым push запросом
+  - ⏳ Authentication settings (OIDC, service account) - ОТЛОЖЕНО (низкий приоритет, не критично для симуляции)
+
+### Технические детали
+
+#### Новые файлы
+- `src/core/constants/gcpPubSub.ts` - константы для Google Cloud Pub/Sub
+
+#### Измененные файлы
+- `src/core/EmulationEngine.ts` - устранен хардкод project ID и значений по умолчанию, добавлен импорт констант, добавлена поддержка filter, deadLetterTopic, maxDeliveryAttempts при инициализации PubSubRoutingEngine
+- `src/core/PubSubRoutingEngine.ts` - добавлена поддержка Subscription Filters (интерфейс SubscriptionFilter, метод matchesSubscriptionFilter), добавлена поддержка Dead Letter Topics (логика перемещения сообщений в DLQ при превышении maxDeliveryAttempts, учет deliveryAttempt при push/pull), улучшена логика processConsumption для обработки expired messages с учетом DLQ
+- `src/components/config/messaging/GCPPubSubConfigAdvanced.tsx` - полная переработка:
+  - Устранен хардкод project ID и значений по умолчанию
+  - Добавлена синхронизация метрик в реальном времени
+  - Добавлены адаптивные табы
+  - Добавлены toast-уведомления
+  - Добавлены подтверждения для удаления
+  - Добавлено отображение всех метрик
+  - Добавлена валидация имен (topics, subscriptions, project ID)
+  - Добавлена валидация числовых полей с проверкой диапазонов
+  - Добавлены tooltips для основных полей конфигурации
+  - Добавлен UI для Subscription Filters (выбор типа фильтра, управление атрибутами)
+  - Добавлен UI для Dead Letter Topics (выбор DLQ topic, настройка max delivery attempts)
+  - Добавлен UI для Labels Management (управление labels для topics)
+  - Добавлен UI для Push Attributes (настройка push attributes для push подписок)
+  - Добавлен поиск и фильтрация для topics и subscriptions
+  - Добавлена сортировка для topics и subscriptions
+  - Добавлены tooltips для всех полей конфигурации
+  - Добавлена визуализация метрик через прогресс-бары
+  - Обновлены интерфейсы Subscription и Topic для поддержки новых полей
+  - Улучшена обработка ошибок:
+    - Добавлен try-catch для синхронизации метрик в реальном времени
+    - Добавлен try-catch для всех операций CRUD
+    - Все ошибки логируются в консоль и отображаются пользователю через toast-уведомления
+- `src/components/config/messaging/profiles.ts` - устранен хардкод project ID в профиле
+
+### Что осталось сделать (из roadmap)
+
+#### Этап 3: Добавление недостающих функций Google Pub/Sub (частично выполнено) ✅/⏳
+- ✅ Subscription Filters (attribute filters) - ВЫПОЛНЕНО
+- ✅ Dead Letter Topics - ВЫПОЛНЕНО
+- ✅ Labels Management (полное редактирование) - ВЫПОЛНЕНО
+- ✅ Push Configuration Enhancement (push attributes) - ВЫПОЛНЕНО
+- ⏳ Message Peek и Operations UI - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Snapshots - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Seek Operations - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Expiration Policies - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Retry Policy для push подписок - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Authentication settings (OIDC, service account) для push - ОТЛОЖЕНО (низкий приоритет)
+
+#### Этап 4: Продолжение улучшения UI/UX ✅/⏳
+- ✅ Поиск и фильтрация topics/subscriptions - ВЫПОЛНЕНО
+- ✅ Визуализация метрик (прогресс-бары) - ВЫПОЛНЕНО
+- ✅ Tooltips для всех полей - ВЫПОЛНЕНО
+- ⏳ Просмотр сообщений в UI - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Операции с сообщениями (ack, nack, modify ack deadline) - ОТЛОЖЕНО (низкий приоритет)
+- ⏳ Графики метрик over time - ОТЛОЖЕНО (низкий приоритет)
+
+#### Этап 5: Тестирование и оптимизация ⏳
+- ⏳ Тестирование всех CRUD операций
+- ⏳ Тестирование синхронизации метрик
+- ⏳ Тестирование edge cases
+- ⏳ Оптимизация производительности
+
+---
+
 ## Версия 0.1.8c - Azure Service Bus: Устранение хардкода, синхронизация метрик и новые функции
 
 ### Обзор изменений

@@ -235,7 +235,7 @@ export const MESSAGING_PROFILES: Record<string, MessagingProfile> = {
     description: 'Topics/subscriptions with ack deadlines and push endpoints.',
     docsUrl: 'https://cloud.google.com/pubsub',
     defaults: {
-      projectId: 'archiphoenix-lab',
+      projectId: '',
       topic: 'events',
       subscription: 'events-sub',
       ackDeadline: 10,
