@@ -1,5 +1,222 @@
 # Patch Notes
 
+## Версия 0.1.8e - Kong Gateway: Устранение хардкода, синхронизация метрик, улучшение UI/UX и добавление недостающих функций
+
+### Обзор изменений
+**Kong Gateway: Устранение хардкода, синхронизация метрик, улучшение UI/UX и добавление недостающих функций (Этап 1-3, частично Этап 4)**: Устранен весь хардкод значений по умолчанию через константы, реализована синхронизация метрик в реальном времени из KongRoutingEngine, улучшен UI/UX (адаптивные табы, toast-уведомления, подтверждения для критичных действий, отображение метрик, валидация полей, автоматическое отображение всех полей редактирования при создании сущностей), добавлены недостающие функции Kong Gateway (Route Priority и Protocols, Service Tags, Plugin Configuration UI, Health Check Configuration).
+
+**Ключевые достижения**: Компонент Kong Gateway теперь полностью параметризован - все значения по умолчанию берутся из констант. Метрики синхронизируются в реальном времени из KongRoutingEngine во время симуляции. Добавлены адаптивные табы, toast-уведомления для всех операций, подтверждения для удаления через AlertDialog, отображение метрик (requestCount, errorCount, avgLatency для services/routes, healthyTargets для upstreams), валидация имен, URL, path и числовых полей с проверкой диапазонов, улучшенная обработка ошибок с информативными сообщениями. Реализованы Route Priority и Protocols (UI для настройки priority и выбора протоколов), Service Tags (UI для управления тегами), Plugin Configuration UI (специализированные формы для rate-limiting, key-auth, JWT, CORS, IP restriction), Health Check Configuration (детальная настройка active и passive health checks для upstreams). Улучшен UX при создании сущностей - теперь сразу отображаются все поля для редактирования, что делает настройку очевидной для пользователя (Services, Upstreams, Consumers, Plugins).
+
+### Ключевые изменения
+
+#### Устранение хардкода (Этап 1) ✅
+- ✅ **Создан файл констант**:
+  - Создан `src/core/constants/kongGateway.ts` с константами:
+    - `DEFAULT_KONG_VALUES` (adminUrl, serviceName, upstreamUrl, routePaths, authPlugin, rateLimitPerMinute, loggingTarget, requestsPerSecond)
+    - `DEFAULT_SERVICE_VALUES` (name, url, enabled)
+    - `DEFAULT_ROUTE_VALUES` (path, method, stripPath, priority, protocols)
+    - `DEFAULT_UPSTREAM_VALUES` (name, algorithm, healthchecks, targets)
+    - `DEFAULT_CONSUMER_VALUES` (username, credentials)
+    - `DEFAULT_PLUGIN_VALUES` (name, enabled, config)
+    - `DEFAULT_PLUGINS` (массив дефолтных плагинов)
+    - `NAMING_RULES` (правила именования для services/routes/upstreams/consumers, URL, path)
+    - `VALIDATION_RANGES` (диапазоны для weight, priority, rateLimit, requestsPerSecond)
+    - `METRICS_UPDATE_CONFIG` (интервалы синхронизации метрик)
+- ✅ **Устранен хардкод значений**:
+  - Заменены все захардкоженные значения в `KongConfigAdvanced.tsx` на константы:
+    - `adminUrl: 'http://kong:8001'` → `DEFAULT_KONG_VALUES.ADMIN_URL`
+    - `serviceName: 'core-service'` → `DEFAULT_KONG_VALUES.SERVICE_NAME`
+    - `upstreamUrl: 'http://core:8080'` → `DEFAULT_KONG_VALUES.UPSTREAM_URL`
+    - `routePaths: ['/api', '/v1']` → `DEFAULT_KONG_VALUES.ROUTE_PATHS`
+    - `authPlugin: 'key-auth'` → `DEFAULT_KONG_VALUES.AUTH_PLUGIN`
+    - `rateLimitPerMinute: 1000` → `DEFAULT_KONG_VALUES.RATE_LIMIT_PER_MINUTE`
+    - `loggingTarget: 'loki'` → `DEFAULT_KONG_VALUES.LOGGING_TARGET`
+    - `requestsPerSecond: 450` → `DEFAULT_KONG_VALUES.REQUESTS_PER_SECOND`
+    - Дефолтные плагины → `DEFAULT_PLUGINS`
+- ✅ **Параметризация значений по умолчанию**:
+  - `addService()` использует `DEFAULT_SERVICE_VALUES` вместо захардкоженных значений
+  - `addRoute()` использует `DEFAULT_ROUTE_VALUES` вместо захардкоженных значений
+  - `addUpstream()` использует `DEFAULT_UPSTREAM_VALUES` вместо захардкоженных значений
+  - `addConsumer()` использует `DEFAULT_CONSUMER_VALUES` вместо захардкоженных значений
+  - `addPlugin()` использует `DEFAULT_PLUGIN_VALUES` вместо захардкоженных значений
+  - Все значения по умолчанию берутся из констант
+
+#### Синхронизация метрик (Этап 2) ✅
+- ✅ **Добавлено отслеживание метрик в KongRoutingEngine**:
+  - Добавлены интерфейсы метрик:
+    - `ServiceMetrics` (requestCount, errorCount, avgLatency, lastRequestTime)
+    - `RouteMetrics` (requestCount, errorCount, avgLatency, lastRequestTime)
+    - `UpstreamMetrics` (requestCount, healthyTargets, totalTargets, avgLatency)
+    - `PluginMetrics` (blockedCount, authFailures, allowedCount)
+  - Добавлены Map для хранения метрик:
+    - `serviceMetrics: Map<string, ServiceMetrics>`
+    - `routeMetrics: Map<string, RouteMetrics>`
+    - `upstreamMetrics: Map<string, UpstreamMetrics>`
+    - `pluginMetrics: Map<string, PluginMetrics>`
+  - Метрики обновляются в `routeRequest()`:
+    - Увеличивается request count для service и route
+    - Увеличивается error count при ошибках
+    - Обновляется average latency
+    - Отслеживаются blocked requests для rate-limiting
+    - Отслеживаются auth failures для key-auth/JWT
+    - Обновляется health status для upstream targets
+- ✅ **Добавлены методы для получения метрик**:
+  - `getServiceMetrics(serviceId)` - метрики по service
+  - `getRouteMetrics(routeId)` - метрики по route
+  - `getUpstreamMetrics(upstreamName)` - метрики по upstream
+  - `getPluginMetrics(pluginId)` - метрики по plugin
+  - `getAllMetrics()` - все метрики (возвращает объект с Map для каждого типа)
+- ✅ **Реал-тайм обновление метрик**:
+  - Добавлен `useEffect` для синхронизации метрик из `KongRoutingEngine`
+  - Метрики обновляются каждые 500ms во время симуляции (используется `METRICS_UPDATE_CONFIG.SYNC_INTERVAL_MS`)
+  - Используется `useEmulationStore` для получения состояния симуляции
+  - Используется `useRef` для хранения ссылки на node (чтобы избежать stale closures)
+  - Добавлен `isMounted` флаг для предотвращения обновлений после unmount
+  - Синхронизируются метрики для services, routes и upstreams
+- ✅ **Синхронизация конфигурации с routing engine**:
+  - Добавлен `useEffect` для синхронизации конфигурации с routing engine при изменениях
+  - Конфигурация преобразуется в формат Kong (kongServices, kongRoutes, kongUpstreams, kongConsumers, kongPlugins)
+  - Изменения в UI сразу отражаются в routing engine через `routingEngine.initialize()`
+- ✅ **Отображение метрик в UI**:
+  - Добавлено отображение метрик для services:
+    - Requests count
+    - Errors count
+    - Average latency (ms)
+  - Добавлено отображение метрик для routes:
+    - Requests count
+    - Errors count
+    - Average latency (ms)
+  - Добавлено отображение метрик для upstreams:
+    - Requests count
+    - Healthy targets / Total targets
+  - Метрики отображаются только во время симуляции (`isRunning`)
+
+#### UI/UX улучшения (Этап 4, частично) ✅
+- ✅ **Адаптивность табов**:
+  - Заменен `grid-cols-6` на `flex-wrap` для адаптивности
+  - Табы переносятся на новую строку при узком экране
+  - Подложка расширяется при переносе
+  - Класс: `flex-wrap h-auto min-h-[36px] w-full justify-start gap-1`
+- ✅ **Toast-уведомления**:
+  - Добавлены toast-уведомления для всех операций:
+    - Создание service/route/upstream/consumer/plugin (`showSuccess`)
+    - Удаление service/route/upstream/consumer/plugin (`showSuccess`)
+    - Ошибки операций (`showError`)
+- ✅ **Подтверждения для критичных действий**:
+  - Добавлены `AlertDialog` для подтверждения удаления:
+    - Удаление service (с предупреждением о routes, использующих service)
+    - Удаление route
+    - Удаление upstream (с предупреждением о services, использующих upstream)
+    - Удаление consumer
+    - Удаление plugin
+- ✅ **Валидация полей**:
+  - Добавлена функция `validateName()` для валидации имен:
+    - Проверка на уникальность в рамках компонента
+    - Проверка формата (Kong naming rules: alphanumeric, hyphens, underscores)
+    - Проверка длины (1-255 символов)
+  - Добавлена функция `validateUrl()` для валидации URL:
+    - Проверка формата URL (должен начинаться с http:// или https://)
+  - Добавлена функция `validatePath()` для валидации path:
+    - Проверка формата path (должен начинаться с /)
+  - Добавлена функция `validateNumericField()` для валидации числовых полей:
+    - Weight: 1-1000
+    - Priority: 0-1000
+    - Rate Limit: 1-1000000
+    - Requests Per Second: 1-100000
+  - Ошибки валидации отображаются через toast-уведомления
+  - Невозможно сохранить невалидные данные
+- ✅ **Улучшенная обработка ошибок**:
+  - Добавлена проверка на существование services перед созданием route
+  - Добавлена проверка на использование service/upstream перед удалением
+  - Информативные сообщения об ошибках через toast-уведомления
+- ✅ **Автоматическое отображение полей редактирования при создании**:
+  - При создании **Service** сразу отображаются все поля для редактирования (name, URL, upstream, tags, enabled)
+  - При создании **Upstream** сразу отображаются все поля для редактирования (name, algorithm, targets, health checks)
+  - При создании **Consumer** сразу отображаются все поля для редактирования (username, customId, credentials)
+  - При создании **Plugin**:
+    - Добавлен диалог выбора типа плагина при создании
+    - После выбора типа плагин создается и сразу отображаются все поля для редактирования (type, scope, config)
+    - В форме редактирования можно изменить тип плагина
+  - Убраны отдельные формы создания - теперь сразу видно все настраиваемые поля
+  - Автоматическая генерация уникальных имен при создании (если дефолтное имя занято)
+  - Улучшен UX - пользователю сразу очевидно, какие поля можно настраивать
+
+### Технические детали
+
+#### Файлы изменены:
+- ✅ `src/core/constants/kongGateway.ts` (новый файл) - константы для Kong Gateway
+- ✅ `src/core/KongRoutingEngine.ts` - добавлено отслеживание метрик и методы получения метрик
+- ✅ `src/components/config/integration/KongConfigAdvanced.tsx` - устранен хардкод, добавлена синхронизация метрик, улучшен UI/UX
+
+#### Файлы созданы:
+- ✅ `src/core/constants/kongGateway.ts` - константы для Kong Gateway
+
+### Следующие шаги (осталось реализовать)
+
+#### Этап 3: Недостающие функции Kong Gateway
+- ⏳ Route Priority и Protocols (UI для настройки)
+- ⏳ Service Tags (UI для управления)
+- ⏳ Plugin Configuration UI (специализированные формы для каждого типа плагина)
+- ⏳ Health Check Configuration (детальная настройка health checks)
+
+#### Недостающие функции Kong Gateway (Этап 3) ✅
+- ✅ **Route Priority и Protocols**:
+  - Добавлено поле Priority (числовое, 0-1000) в форму route
+  - Добавлен multi-select для Protocols (http, https, grpc, grpcs) с визуальными кнопками
+  - Добавлен выбор Service из списка в форме route
+  - Priority влияет на порядок маршрутизации (высший priority обрабатывается первым)
+  - Protocols определяют, какие протоколы поддерживает route
+- ✅ **Service Tags**:
+  - Добавлено поле tags в интерфейс Service
+  - Добавлен UI для управления тегами:
+    - Кнопка "Add Tag" для добавления нового тега
+    - Badges с кнопкой удаления для каждого тега
+    - Отображение количества тегов в описании service
+  - Добавлена полная форма редактирования Service:
+    - Service Name (с валидацией)
+    - Service URL (с валидацией)
+    - Upstream (выбор из списка)
+    - Tags (управление тегами)
+    - Enabled (switch)
+- ✅ **Plugin Configuration UI**:
+  - Созданы специализированные формы для основных плагинов:
+    - **Rate Limiting**: поля для minute, hour, day, second limits
+    - **Key Auth**: key names (comma-separated), hide credentials switch
+    - **JWT**: secret, key claim name, algorithm (select с вариантами HS256, RS256, ES256 и т.д.)
+    - **CORS**: origins, methods, headers (comma-separated), credentials switch
+    - **IP Restriction**: whitelist и blacklist (comma-separated IPs/CIDR)
+  - Добавлен выбор scope для плагинов (service, route, consumer) - опционально
+  - JSON редактор доступен как fallback для других плагинов (request-transformer, response-transformer, file-log и т.д.)
+  - Валидация полей для каждого типа плагина
+- ✅ **Health Check Configuration**:
+  - Добавлена детальная настройка Active Health Checks:
+    - Interval (seconds) - интервал проверки
+    - Timeout (seconds) - таймаут проверки
+    - HTTP Path - путь для health check запросов
+    - Healthy Threshold - количество успешных проверок для пометки как healthy
+    - Unhealthy Threshold - количество неудачных проверок для пометки как unhealthy
+  - Добавлена детальная настройка Passive Health Checks:
+    - Healthy Status Codes (comma-separated) - коды ответов, считающиеся healthy
+    - Unhealthy Status Codes (comma-separated) - коды ответов, считающиеся unhealthy
+    - Healthy Threshold - количество успешных ответов для пометки как healthy
+    - Unhealthy Threshold - количество неудачных ответов для пометки как unhealthy
+  - Расширен интерфейс Upstream для поддержки всех параметров health checks
+  - Active и Passive health checks можно включать/выключать независимо
+
+#### Этап 4: UI/UX (дополнительные улучшения)
+- ⏳ Поиск и фильтрация (services, routes, upstreams, consumers, plugins)
+- ⏳ Сортировка
+- ⏳ Подсказки (tooltips для всех полей)
+- ⏳ Визуализация метрик (прогресс-бары, графики)
+
+#### Этап 5: Тестирование и оптимизация
+- ⏳ Тестирование всех CRUD операций
+- ⏳ Тестирование синхронизации метрик
+- ⏳ Тестирование синхронизации конфигурации
+- ⏳ Оптимизация производительности
+
+---
+
 ## Версия 0.1.8d - Google Cloud Pub/Sub: Устранение хардкода, синхронизация метрик, улучшение UI/UX и добавление недостающих функций
 
 ### Обзор изменений

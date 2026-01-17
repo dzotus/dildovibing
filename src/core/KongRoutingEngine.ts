@@ -90,6 +90,36 @@ export interface RouteMatch {
 }
 
 /**
+ * Metrics interfaces for tracking request statistics
+ */
+export interface ServiceMetrics {
+  requestCount: number;
+  errorCount: number;
+  avgLatency: number;
+  lastRequestTime: number;
+}
+
+export interface RouteMetrics {
+  requestCount: number;
+  errorCount: number;
+  avgLatency: number;
+  lastRequestTime: number;
+}
+
+export interface UpstreamMetrics {
+  requestCount: number;
+  healthyTargets: number;
+  totalTargets: number;
+  avgLatency: number;
+}
+
+export interface PluginMetrics {
+  blockedCount?: number; // for rate-limiting
+  authFailures?: number; // for key-auth, JWT
+  allowedCount?: number; // for IP restriction
+}
+
+/**
  * Kong Gateway Routing Engine
  * Simulates Kong Gateway request routing behavior
  */
@@ -107,6 +137,12 @@ export class KongRoutingEngine {
   
   // Rate limiting state
   private rateLimitCounters: Map<string, Map<string, { count: number; resetAt: number }>> = new Map(); // plugin -> consumer/service/route -> counter
+  
+  // Metrics tracking
+  private serviceMetrics: Map<string, ServiceMetrics> = new Map();
+  private routeMetrics: Map<string, RouteMetrics> = new Map();
+  private upstreamMetrics: Map<string, UpstreamMetrics> = new Map();
+  private pluginMetrics: Map<string, PluginMetrics> = new Map();
   
   /**
    * Initialize with Kong configuration
@@ -128,6 +164,10 @@ export class KongRoutingEngine {
     this.connectionCounts.clear();
     this.consistentHashRing.clear();
     this.rateLimitCounters.clear();
+    this.serviceMetrics.clear();
+    this.routeMetrics.clear();
+    this.upstreamMetrics.clear();
+    this.pluginMetrics.clear();
 
     // Initialize services
     if (config.services) {
@@ -198,6 +238,20 @@ export class KongRoutingEngine {
     // Step 2: Execute plugins (access phase)
     const pluginResult = this.executePlugins(request, match, 'access');
     if (pluginResult.blocked) {
+      // Update metrics for blocked request
+      this.updateServiceMetrics(match.service.id, false, Date.now() - startTime);
+      this.updateRouteMetrics(match.route.id, false, Date.now() - startTime);
+      
+      // Track plugin metrics for blocked requests
+      const applicablePlugins = this.plugins.filter(p => {
+        if (p.route && p.route !== match.route.id) return false;
+        if (p.service && p.service !== match.service.id) return false;
+        return true;
+      });
+      for (const plugin of applicablePlugins) {
+        this.updatePluginMetrics(plugin.id, plugin.name, true, false);
+      }
+      
       return {
         match,
         response: {
@@ -211,6 +265,10 @@ export class KongRoutingEngine {
     // Step 3: Resolve upstream target
     const target = this.selectUpstreamTarget(match.service);
     if (!target) {
+      // Update metrics for error
+      this.updateServiceMetrics(match.service.id, false, Date.now() - startTime);
+      this.updateRouteMetrics(match.route.id, false, Date.now() - startTime);
+      
       return {
         match,
         response: {
@@ -232,6 +290,24 @@ export class KongRoutingEngine {
 
     // Simulate upstream latency
     response.latency = (response.latency || 0) + this.simulateUpstreamLatency(target);
+
+    // Update metrics for successful request
+    this.updateServiceMetrics(match.service.id, true, response.latency);
+    this.updateRouteMetrics(match.route.id, true, response.latency);
+    
+    // Update upstream metrics
+    const upstreamName = match.service.upstream || match.service.name;
+    this.updateUpstreamMetrics(upstreamName, target);
+    
+    // Track plugin metrics for successful requests
+    const applicablePlugins = this.plugins.filter(p => {
+      if (p.route && p.route !== match.route.id) return false;
+      if (p.service && p.service !== match.service.id) return false;
+      return true;
+    });
+    for (const plugin of applicablePlugins) {
+      this.updatePluginMetrics(plugin.id, plugin.name, false, true);
+    }
 
     return {
       match,
@@ -603,6 +679,143 @@ export class KongRoutingEngine {
   private simulateUpstreamLatency(target: string): number {
     // Base latency 10-50ms
     return 10 + Math.random() * 40;
+  }
+
+  /**
+   * Update service metrics
+   */
+  private updateServiceMetrics(serviceId: string, success: boolean, latency: number): void {
+    let metrics = this.serviceMetrics.get(serviceId);
+    if (!metrics) {
+      metrics = {
+        requestCount: 0,
+        errorCount: 0,
+        avgLatency: 0,
+        lastRequestTime: Date.now(),
+      };
+      this.serviceMetrics.set(serviceId, metrics);
+    }
+
+    metrics.requestCount++;
+    if (!success) {
+      metrics.errorCount++;
+    }
+    metrics.avgLatency = (metrics.avgLatency * (metrics.requestCount - 1) + latency) / metrics.requestCount;
+    metrics.lastRequestTime = Date.now();
+  }
+
+  /**
+   * Update route metrics
+   */
+  private updateRouteMetrics(routeId: string, success: boolean, latency: number): void {
+    let metrics = this.routeMetrics.get(routeId);
+    if (!metrics) {
+      metrics = {
+        requestCount: 0,
+        errorCount: 0,
+        avgLatency: 0,
+        lastRequestTime: Date.now(),
+      };
+      this.routeMetrics.set(routeId, metrics);
+    }
+
+    metrics.requestCount++;
+    if (!success) {
+      metrics.errorCount++;
+    }
+    metrics.avgLatency = (metrics.avgLatency * (metrics.requestCount - 1) + latency) / metrics.requestCount;
+    metrics.lastRequestTime = Date.now();
+  }
+
+  /**
+   * Update upstream metrics
+   */
+  private updateUpstreamMetrics(upstreamName: string, target: string): void {
+    const upstream = this.upstreams.get(upstreamName);
+    if (!upstream) return;
+
+    let metrics = this.upstreamMetrics.get(upstreamName);
+    if (!metrics) {
+      metrics = {
+        requestCount: 0,
+        healthyTargets: 0,
+        totalTargets: 0,
+        avgLatency: 0,
+      };
+      this.upstreamMetrics.set(upstreamName, metrics);
+    }
+
+    metrics.requestCount++;
+    metrics.totalTargets = upstream.targets?.length || 0;
+    metrics.healthyTargets = upstream.targets?.filter(t => t.health === 'healthy').length || 0;
+  }
+
+  /**
+   * Update plugin metrics
+   */
+  private updatePluginMetrics(pluginId: string, pluginName: string, blocked: boolean, authFailure: boolean): void {
+    let metrics = this.pluginMetrics.get(pluginId);
+    if (!metrics) {
+      metrics = {};
+      this.pluginMetrics.set(pluginId, metrics);
+    }
+
+    if (pluginName === 'rate-limiting' && blocked) {
+      metrics.blockedCount = (metrics.blockedCount || 0) + 1;
+    }
+
+    if ((pluginName === 'key-auth' || pluginName === 'jwt') && authFailure) {
+      metrics.authFailures = (metrics.authFailures || 0) + 1;
+    }
+
+    if (pluginName === 'ip-restriction' && !blocked) {
+      metrics.allowedCount = (metrics.allowedCount || 0) + 1;
+    }
+  }
+
+  /**
+   * Get service metrics
+   */
+  public getServiceMetrics(serviceId: string): ServiceMetrics | undefined {
+    return this.serviceMetrics.get(serviceId);
+  }
+
+  /**
+   * Get route metrics
+   */
+  public getRouteMetrics(routeId: string): RouteMetrics | undefined {
+    return this.routeMetrics.get(routeId);
+  }
+
+  /**
+   * Get upstream metrics
+   */
+  public getUpstreamMetrics(upstreamName: string): UpstreamMetrics | undefined {
+    return this.upstreamMetrics.get(upstreamName);
+  }
+
+  /**
+   * Get plugin metrics
+   */
+  public getPluginMetrics(pluginId: string): PluginMetrics | undefined {
+    return this.pluginMetrics.get(pluginId);
+  }
+
+  /**
+   * Get all metrics
+   */
+  public getAllMetrics(): {
+    services: Map<string, ServiceMetrics>;
+    routes: Map<string, RouteMetrics>;
+    upstreams: Map<string, UpstreamMetrics>;
+    plugins: Map<string, PluginMetrics>;
+  } {
+    return {
+      services: new Map(this.serviceMetrics),
+      routes: new Map(this.routeMetrics),
+      upstreams: new Map(this.upstreamMetrics),
+      plugins: new Map(this.pluginMetrics),
+    };
   }
 
   /**
