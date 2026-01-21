@@ -1,6 +1,7 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
 import { emulationEngine } from '@/core/EmulationEngine';
+import { SQSRoutingEngine } from '@/core/SQSRoutingEngine';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -11,7 +12,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState, useEffect } from 'react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   MessageSquare, 
   Database, 
@@ -25,9 +36,15 @@ import {
   TrendingUp,
   RefreshCcw,
   Send,
-  Download
+  Download,
+  Search,
+  Edit,
+  X
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
+import { showSuccess, showError } from '@/utils/toast';
+import { CreateQueueDialog } from './CreateQueueDialog';
+import { EditQueueDialog } from './EditQueueDialog';
 
 interface AWSSQSConfigProps {
   componentId: string;
@@ -47,6 +64,15 @@ interface Queue {
   approximateMessagesDelayed?: number;
   contentBasedDedup?: boolean;
   fifoThroughputLimit?: 'perQueue' | 'perMessageGroupId';
+  highThroughputFifo?: boolean;
+  accountId?: string;
+  redrivePolicy?: {
+    deadLetterTargetArn?: string;
+    maxReceiveCount: number;
+  };
+  redriveAllowPolicy?: {
+    sourceQueueArns?: string[];
+  };
 }
 
 interface AWSSQSConfig {
@@ -54,6 +80,7 @@ interface AWSSQSConfig {
   accessKeyId?: string;
   secretAccessKey?: string;
   defaultRegion?: string;
+  defaultAccountId?: string;
   iamPolicies?: Array<{
     id: string;
     principal: string;
@@ -79,13 +106,19 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
   const accessKeyId = config.accessKeyId || '';
   const secretAccessKey = config.secretAccessKey || '';
   const defaultRegion = config.defaultRegion || 'us-east-1';
+  const defaultAccountId = config.defaultAccountId || '123456789012';
   const iamPolicies = config.iamPolicies || [];
 
   const [editingQueueIndex, setEditingQueueIndex] = useState<number | null>(null);
   const [showCreateQueue, setShowCreateQueue] = useState(false);
+  const [showEditQueue, setShowEditQueue] = useState(false);
+  const [editingQueue, setEditingQueue] = useState<Queue | null>(null);
+  const [queueToDelete, setQueueToDelete] = useState<number | null>(null);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [testMessage, setTestMessage] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterType, setFilterType] = useState<'all' | 'standard' | 'fifo'>('all');
 
   // Initialize routing engine when component mounts or queues change
   useEffect(() => {
@@ -152,30 +185,111 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
     });
   };
 
-  const addQueue = () => {
-    const newQueue: Queue = {
-      name: 'new-queue',
-      type: 'standard',
-      region: defaultRegion,
-      visibilityTimeout: 30,
-      messageRetention: 4,
-      delaySeconds: 0,
-      approximateMessages: 0,
-      approximateMessagesNotVisible: 0,
-      approximateMessagesDelayed: 0,
-    };
+  // Filtered queues based on search and filter
+  const filteredQueues = useMemo(() => {
+    return queues.filter(queue => {
+      const matchesSearch = !searchQuery || queue.name.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesType = filterType === 'all' || queue.type === filterType;
+      return matchesSearch && matchesType;
+    });
+  }, [queues, searchQuery, filterType]);
+
+  const handleCreateQueue = (newQueue: Queue) => {
+    // Ensure routing engine is initialized
+    const { nodes, connections } = useCanvasStore.getState();
+    emulationEngine.updateNodesAndConnections(nodes, connections);
+    
     updateConfig({ queues: [...queues, newQueue] });
-    setShowCreateQueue(false);
+    showSuccess(`Queue "${newQueue.name}" created successfully`);
+    
+    // Re-initialize routing engine
+    setTimeout(() => {
+      const { nodes, connections } = useCanvasStore.getState();
+      emulationEngine.updateNodesAndConnections(nodes, connections);
+    }, 100);
   };
 
-  const removeQueue = (index: number) => {
+  const handleEditQueue = (updatedQueue: Queue, originalName: string) => {
+    const queueIndex = queues.findIndex(q => q.name === originalName);
+    if (queueIndex === -1) {
+      showError('Queue not found');
+      return;
+    }
+
+    const newQueues = [...queues];
+    
+    // If queue name changed, update routing engine
+    if (updatedQueue.name !== originalName) {
+      const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+      if (routingEngine) {
+        routingEngine.updateQueue(originalName, { name: updatedQueue.name });
+      }
+    }
+    
+    newQueues[queueIndex] = updatedQueue;
+    updateConfig({ queues: newQueues });
+    showSuccess(`Queue "${updatedQueue.name}" updated successfully`);
+    
+    // Re-initialize routing engine
+    setTimeout(() => {
+      const { nodes, connections } = useCanvasStore.getState();
+      emulationEngine.updateNodesAndConnections(nodes, connections);
+    }, 100);
+  };
+
+  const handleDeleteQueue = (index: number) => {
+    const queue = queues[index];
+    if (!queue) return;
+    
     updateConfig({ queues: queues.filter((_, i) => i !== index) });
+    showSuccess(`Queue "${queue.name}" deleted successfully`);
+    setQueueToDelete(null);
+    
+    // Re-initialize routing engine
+    setTimeout(() => {
+      const { nodes, connections } = useCanvasStore.getState();
+      emulationEngine.updateNodesAndConnections(nodes, connections);
+    }, 100);
+  };
+
+  const openEditQueue = (index: number) => {
+    const queue = queues[index];
+    if (queue) {
+      setEditingQueue({ ...queue });
+      setShowEditQueue(true);
+    }
   };
 
   const updateQueue = (index: number, field: string, value: any) => {
     const newQueues = [...queues];
-    newQueues[index] = { ...newQueues[index], [field]: value };
+    const updatedQueue = { ...newQueues[index], [field]: value };
+    
+    // Validate queue name if it's being changed
+    if (field === 'name') {
+      const validation = SQSRoutingEngine.validateQueueName(value, updatedQueue.type);
+      if (!validation.valid) {
+        showError(`Queue name validation error: ${validation.error || 'Invalid queue name'}`);
+        return; // Don't update if invalid
+      }
+    }
+    
+    // Auto-fix FIFO queue name suffix
+    if (field === 'type' && value === 'fifo' && !updatedQueue.name.endsWith('.fifo')) {
+      updatedQueue.name = updatedQueue.name + '.fifo';
+    } else if (field === 'type' && value === 'standard' && updatedQueue.name.endsWith('.fifo')) {
+      updatedQueue.name = updatedQueue.name.slice(0, -5);
+    }
+    
+    newQueues[index] = updatedQueue;
     updateConfig({ queues: newQueues });
+    
+    // Update routing engine if queue name changed
+    if (field === 'name' && value !== queues[index].name) {
+      const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+      if (routingEngine) {
+        routingEngine.updateQueue(queues[index].name, { name: value });
+      }
+    }
   };
 
   const addPolicy = () => {
@@ -188,10 +302,12 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
     };
     updateConfig({ iamPolicies: [...iamPolicies, newPolicy] });
     setShowCreatePolicy(false);
+    showSuccess('IAM policy added successfully');
   };
 
   const removePolicy = (id: string) => {
     updateConfig({ iamPolicies: iamPolicies.filter((p) => p.id !== id) });
+    showSuccess('IAM policy removed successfully');
   };
 
   const sendTestMessage = (queueIndex: number) => {
@@ -227,10 +343,14 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
           
           // Force update emulation engine to sync
           emulationEngine.updateNodesAndConnections(nodes, connections);
+          showSuccess(`Test message sent to queue "${queue.name}"`);
+        } else {
+          showError('Failed to send test message');
         }
       } else {
         // Fallback: just update counter if routing engine not initialized
         updateQueue(queueIndex, 'approximateMessages', (queue.approximateMessages || 0) + 1);
+        showSuccess(`Test message sent to queue "${queue.name}"`);
       }
       
       setTestMessage('');
@@ -321,22 +441,24 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
         </div>
 
         <Tabs defaultValue="queues" className="space-y-4">
-          <TabsList>
-            <TabsTrigger value="queues">
-              <MessageSquare className="h-4 w-4 mr-2" />
-              Queues ({queues.length})
+          <TabsList className="flex flex-wrap gap-2">
+            <TabsTrigger value="queues" className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4" />
+              <span className="hidden sm:inline">Queues</span>
+              <Badge variant="secondary" className="ml-1">{queues.length}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="credentials">
-              <Key className="h-4 w-4 mr-2" />
-              Credentials
+            <TabsTrigger value="credentials" className="flex items-center gap-2">
+              <Key className="h-4 w-4" />
+              <span className="hidden sm:inline">Credentials</span>
             </TabsTrigger>
-            <TabsTrigger value="policies">
-              <Shield className="h-4 w-4 mr-2" />
-              IAM Policies ({iamPolicies.length})
+            <TabsTrigger value="policies" className="flex items-center gap-2">
+              <Shield className="h-4 w-4" />
+              <span className="hidden sm:inline">IAM Policies</span>
+              <Badge variant="secondary" className="ml-1">{iamPolicies.length}</Badge>
             </TabsTrigger>
-            <TabsTrigger value="monitoring">
-              <Activity className="h-4 w-4 mr-2" />
-              Monitoring
+            <TabsTrigger value="monitoring" className="flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              <span className="hidden sm:inline">Monitoring</span>
             </TabsTrigger>
           </TabsList>
 
@@ -344,20 +466,62 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
           <TabsContent value="queues" className="space-y-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>Queues</CardTitle>
                     <CardDescription>Manage SQS queues and their configuration</CardDescription>
                   </div>
-                  <Button onClick={addQueue} size="sm">
+                  <Button onClick={() => setShowCreateQueue(true)} size="sm">
                     <Plus className="h-4 w-4 mr-2" />
                     Create Queue
                   </Button>
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4">
-                  {queues.map((queue, index) => (
+                {/* Search and Filter */}
+                <div className="flex flex-col sm:flex-row gap-4 mb-4">
+                  <div className="relative flex-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search queues by name..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-9"
+                    />
+                    {searchQuery && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="absolute right-1 top-1/2 transform -translate-y-1/2 h-6 w-6"
+                        onClick={() => setSearchQuery('')}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
+                  <Select value={filterType} onValueChange={(value: 'all' | 'standard' | 'fifo') => setFilterType(value)}>
+                    <SelectTrigger className="w-full sm:w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      <SelectItem value="standard">Standard</SelectItem>
+                      <SelectItem value="fifo">FIFO</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {filteredQueues.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    {queues.length === 0 
+                      ? 'No queues configured. Create your first queue to get started.'
+                      : 'No queues match your search criteria.'}
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {filteredQueues.map((queue, index) => {
+                      const originalIndex = queues.findIndex(q => q.name === queue.name);
+                      return (
                     <Card key={index} className="border-l-4 border-l-orange-500">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
@@ -393,14 +557,25 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                               </div>
                             </div>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeQueue(index)}
-                            disabled={queues.length === 1}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => openEditQueue(originalIndex)}
+                              title="Edit queue"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setQueueToDelete(originalIndex)}
+                              disabled={queues.length === 1}
+                              title="Delete queue"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
@@ -456,9 +631,16 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                 {queue.region}
                               </Badge>
                             </div>
-                            <p className="text-xs font-mono text-muted-foreground truncate" title={`https://sqs.${queue.region}.amazonaws.com/.../${queue.name}`}>
-                              https://sqs.{queue.region}.amazonaws.com/.../{queue.name}
-                            </p>
+                            {(() => {
+                              const routingEngine = emulationEngine.getSQSRoutingEngine(componentId);
+                              const queueUrl = routingEngine?.getQueueUrl(queue.name) || 
+                                `https://sqs.${queue.region}.amazonaws.com/${queue.accountId || defaultAccountId}/${queue.name}`;
+                              return (
+                                <p className="text-xs font-mono text-muted-foreground truncate" title={queueUrl}>
+                                  {queueUrl}
+                                </p>
+                              );
+                            })()}
                             <div className="flex items-center gap-1 mt-1">
                               <div className={`h-1.5 w-1.5 rounded-full ${
                                 (queue.approximateMessages || 0) === 0 && (queue.approximateMessagesNotVisible || 0) === 0
@@ -604,9 +786,35 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                                     <SelectItem value="perMessageGroupId">Per Message Group ID</SelectItem>
                                   </SelectContent>
                                 </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  Throughput limit mode for FIFO queue
+                                </p>
+                              </div>
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <Label>High-Throughput FIFO Mode</Label>
+                                  <Switch
+                                    checked={queue.highThroughputFifo || false}
+                                    onCheckedChange={(checked) => updateQueue(index, 'highThroughputFifo', checked)}
+                                  />
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  Enable high-throughput mode for better performance with multiple message groups
+                                </p>
                               </div>
                             </>
                           )}
+                          <div className="space-y-2">
+                            <Label>Account ID</Label>
+                            <Input
+                              value={queue.accountId || defaultAccountId}
+                              onChange={(e) => updateQueue(index, 'accountId', e.target.value)}
+                              placeholder="123456789012"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              AWS account ID for queue URLs and ARNs
+                            </p>
+                          </div>
                         </div>
 
                         <Separator />
@@ -622,7 +830,7 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                             />
                             <Button
                               size="sm"
-                              onClick={() => sendTestMessage(index)}
+                              onClick={() => sendTestMessage(originalIndex)}
                               disabled={!testMessage}
                             >
                               <Send className="h-4 w-4 mr-2" />
@@ -632,10 +840,53 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                         </div>
                       </CardContent>
                     </Card>
-                  ))}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </CardContent>
             </Card>
+
+            {/* Create Queue Dialog */}
+            <CreateQueueDialog
+              open={showCreateQueue}
+              onOpenChange={setShowCreateQueue}
+              onSave={handleCreateQueue}
+              defaultRegion={defaultRegion}
+              defaultAccountId={defaultAccountId}
+              existingQueueNames={queues.map(q => q.name)}
+            />
+
+            {/* Edit Queue Dialog */}
+            <EditQueueDialog
+              open={showEditQueue}
+              onOpenChange={setShowEditQueue}
+              onSave={handleEditQueue}
+              queue={editingQueue}
+              existingQueueNames={queues.map(q => q.name)}
+            />
+
+            {/* Delete Queue Confirmation */}
+            <AlertDialog open={queueToDelete !== null} onOpenChange={(open) => !open && setQueueToDelete(null)}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete Queue</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to delete the queue "{queues[queueToDelete || 0]?.name}"? 
+                    This action cannot be undone and all messages in the queue will be lost.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => queueToDelete !== null && handleDeleteQueue(queueToDelete)}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Delete
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </TabsContent>
 
           {/* Credentials Tab */}
@@ -673,6 +924,18 @@ export function AWSSQSConfigAdvanced({ componentId }: AWSSQSConfigProps) {
                     onChange={(e) => updateConfig({ defaultRegion: e.target.value })}
                     placeholder="us-east-1"
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="defaultAccountId">Default Account ID</Label>
+                  <Input
+                    id="defaultAccountId"
+                    value={defaultAccountId}
+                    onChange={(e) => updateConfig({ defaultAccountId: e.target.value })}
+                    placeholder="123456789012"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    AWS account ID used for queue URLs and ARNs
+                  </p>
                 </div>
                 <div className="p-4 bg-yellow-500/10 border border-yellow-500/20 rounded-md">
                   <p className="text-sm text-yellow-700 dark:text-yellow-400">

@@ -34,7 +34,7 @@ import {
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Info, CheckCircle2, ArrowRight, Link2, Search, AlertCircle } from 'lucide-react';
+import { Info, CheckCircle2, ArrowRight, Link2, Search, AlertCircle, AlertTriangle } from 'lucide-react';
 import { showSuccess, showError } from '@/utils/toast';
 import {
   Dialog,

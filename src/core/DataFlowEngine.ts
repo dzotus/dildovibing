@@ -1974,6 +1974,153 @@ export class DataFlowEngine {
     
     if (type === 'aws-sqs') {
       return {
+        generateData: (node, config) => {
+          // Get SQS routing engine from emulation engine
+          const routingEngine = emulationEngine.getSQSRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            return null;
+          }
+          
+          const sqsConfig = (node.data.config as any) || {};
+          const queues = sqsConfig.queues || [];
+          const iamPolicies = sqsConfig.iamPolicies || [];
+          
+          // Get outgoing connections from this SQS node
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          
+          if (outgoingConnections.length === 0) {
+            return null; // No outgoing connections, nothing to consume
+          }
+          
+          const messages: DataMessage[] = [];
+          const now = Date.now();
+          
+          // Track last consumption time per connection to throttle consumption (simulate polling)
+          const lastConsumeKey = `_lastSQSConsume_${node.id}`;
+          const lastConsume = (node as any)[lastConsumeKey] || 0;
+          const consumeInterval = 500; // Consume every 500ms (short polling default)
+          
+          if (now - lastConsume < consumeInterval) {
+            return null; // Throttle consumption
+          }
+          
+          (node as any)[lastConsumeKey] = now;
+          
+          // Process each outgoing connection
+          for (const connection of outgoingConnections) {
+            // Extract queue name from connection metadata or config
+            const connectionConfig = (connection.data as any) || {};
+            const messagingConfig = connectionConfig.messaging || config.messaging || {};
+            
+            let queueName = messagingConfig.queueName || connectionConfig.queueName;
+            const queueUrl = messagingConfig.queueUrl || connectionConfig.queueUrl;
+            
+            // Extract queue name from URL if provided
+            if (!queueName && queueUrl) {
+              const urlParts = queueUrl.split('/');
+              queueName = urlParts[urlParts.length - 1];
+            }
+            
+            // If not specified, try to use first queue from config
+            if (!queueName && queues.length > 0) {
+              queueName = queues[0].name;
+            }
+            
+            if (!queueName) {
+              continue; // Skip if no queue available
+            }
+            
+            // Check IAM policies for receiving messages
+            const targetNode = this.nodes.find(n => n.id === connection.target);
+            if (targetNode) {
+              const consumerConfig = (targetNode.data.config || {}) as any;
+              const consumerPrincipal = consumerConfig.messaging?.accessKeyId || 
+                                      consumerConfig.accessKeyId || 
+                                      sqsConfig.accessKeyId ||
+                                      `arn:aws:iam::123456789012:user/${targetNode.id.slice(0, 8)}`;
+              
+              // Check if principal has ReceiveMessage permission
+              const hasPermission = emulationEngine.checkSQSIAMPolicy?.(
+                iamPolicies,
+                consumerPrincipal,
+                queueName,
+                'sqs:ReceiveMessage'
+              ) ?? true; // Default allow if method doesn't exist
+              
+              if (!hasPermission) {
+                continue; // Skip if no permission
+              }
+            }
+            
+            // Get polling configuration from connection metadata or use defaults
+            const maxNumberOfMessages = messagingConfig.maxNumberOfMessages || 
+                                      messagingConfig.batchSize || 
+                                      10; // AWS SQS max is 10
+            const waitTimeSeconds = messagingConfig.waitTimeSeconds !== undefined 
+                                  ? messagingConfig.waitTimeSeconds 
+                                  : 0; // 0 = short polling, 1-20 = long polling
+            const visibilityTimeout = messagingConfig.visibilityTimeout; // Optional, uses queue default if not specified
+            const messageAttributeNames = messagingConfig.messageAttributeNames; // Optional: filter custom attributes
+            const attributeNames = messagingConfig.attributeNames; // Optional: filter system attributes (All, ApproximateFirstReceiveTimestamp, etc.)
+            
+            // Simulate long polling: if waitTimeSeconds > 0, wait for messages
+            // In real AWS SQS, long polling waits up to WaitTimeSeconds for messages
+            // For simulation, we check if messages are available, and if not and waitTimeSeconds > 0,
+            // we might skip this cycle (simulating waiting)
+            // For simplicity, we'll always try to receive, but respect the wait time for throttling
+            
+            // Receive messages from queue (batch operation with long polling support)
+            const receivedMessages = routingEngine.receiveMessage(
+              queueName,
+              maxNumberOfMessages,
+              visibilityTimeout,
+              waitTimeSeconds,
+              messageAttributeNames,
+              attributeNames
+            );
+            
+            if (receivedMessages.length === 0) {
+              // No messages available
+              // If long polling (waitTimeSeconds > 0), we could simulate waiting
+              // For now, just continue to next connection
+              continue;
+            }
+            
+            // Convert SQSMessage to DataMessage
+            for (const sqsMsg of receivedMessages) {
+              const dataMessage: DataMessage = {
+                id: `sqs-msg-${++this.messageIdCounter}`,
+                timestamp: sqsMsg.timestamp,
+                source: node.id,
+                target: connection.target,
+                connectionId: connection.id,
+                format: 'json', // Default, can be determined from payload
+                payload: sqsMsg.payload,
+                size: sqsMsg.size,
+                metadata: {
+                  queueName,
+                  receiptHandle: sqsMsg.receiptHandle,
+                  messageId: sqsMsg.messageId,
+                  attributes: sqsMsg.attributes,
+                  systemAttributes: sqsMsg.systemAttributes,
+                  messageGroupId: sqsMsg.messageGroupId,
+                  messageDeduplicationId: sqsMsg.messageDeduplicationId,
+                  receiveCount: sqsMsg.receiveCount,
+                  approximateFirstReceiveTimestamp: sqsMsg.approximateFirstReceiveTimestamp,
+                  approximateReceiveCount: sqsMsg.approximateReceiveCount,
+                  sentTimestamp: sqsMsg.sentTimestamp,
+                },
+                status: 'pending',
+              };
+              
+              messages.push(dataMessage);
+            }
+          }
+          
+          return messages.length > 0 ? messages : null;
+        },
+        
         processData: (node, message, config) => {
           // Get routing engine from emulation engine
           const routingEngine = emulationEngine.getSQSRoutingEngine(node.id);
@@ -2023,6 +2170,7 @@ export class DataFlowEngine {
           const messageGroupId = message.metadata?.messageGroupId;
           const messageDeduplicationId = message.metadata?.messageDeduplicationId;
           const attributes = message.metadata?.attributes;
+          const systemAttributes = message.metadata?.systemAttributes; // System attributes (AWS.SQS.*)
           
           // Send message to queue
           const messageId = routingEngine.sendMessage(
@@ -2031,7 +2179,8 @@ export class DataFlowEngine {
             message.size,
             attributes,
             messageGroupId,
-            messageDeduplicationId
+            messageDeduplicationId,
+            systemAttributes
           );
           
           if (messageId) {
