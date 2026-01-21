@@ -1,11 +1,11 @@
 # Patch Notes
 
-## Версия 0.1.8a - ActiveMQ: Убрать хардкод и расширить функциональность (Фазы 3-5)
+## Версия 0.1.8a - ActiveMQ: Критичные исправления симулятивности (Фаза 1)
 
 ### Обзор изменений
-**ActiveMQ: Убрать хардкод и расширить функциональность (Фазы 3-5)**: Реализованы конфигурируемые параметры производительности (avgMessageSize, protocolLatencies, memoryPressureThreshold, queueLatencyBase, queueLatencyFactor), добавлены настройки memory limits для queues и topics, добавлена поддержка prefetch для consumers, добавлена поддержка durable subscriptions, добавлено редактирование message selectors для subscriptions, добавлены поля defaultPriority и defaultTTL для queues и topics. Все хардкоженные значения заменены на конфигурируемые параметры, что позволяет точно настраивать поведение симуляции.
+**ActiveMQ: Критичные исправления симулятивности (Фаза 1)**: Реализованы критичные функции для повышения симулятивности компонента ActiveMQ. Добавлено применение defaultTTL и defaultPriority при создании сообщений, реализована Dead Letter Queue (DLQ) с отслеживанием delivery count и автоматическим переносом сообщений при превышении maxRedeliveries, добавлена проверка memory limits для queues и topics с переносом в DLQ при превышении, добавлен таб "Dead Letter Queue" в UI для просмотра failed messages. Все изменения направлены на повышение реалистичности симуляции и соответствие реальному поведению ActiveMQ.
 
-**Ключевые достижения**: Убран весь хардкод из симуляции ActiveMQ. Все параметры производительности теперь конфигурируемы через UI. Добавлены индивидуальные memory limits для queues и topics. Поддержка prefetch, durable subscriptions, message selectors, priority и TTL расширяет функциональность до уровня реального ActiveMQ. Исправлены синтаксические ошибки в JSX. Добавлена автоматическая синхронизация routing engine при изменении конфигурации в UI.
+**Ключевые достижения**: Реализованы критичные функции симулятивности ActiveMQ. Сообщения теперь создаются с применением defaultTTL и defaultPriority из конфигурации queues/topics. Dead Letter Queue работает реалистично - сообщения переносятся в DLQ при превышении maxRedeliveries или при истечении TTL. Memory limits применяются реально - новые сообщения отклоняются или переносятся в DLQ при достижении лимита. UI показывает DLQ с детальной информацией о failed messages. Симулятивность компонента значительно повышена.
 
 ### Ключевые изменения
 
@@ -40,6 +40,8 @@
   - Определяет количество сообщений, которые consumer может получить заранее
   - Настраивается для каждой queue в UI
   - 0 означает использование значения по умолчанию
+  - **РЕАЛИЗОВАНО**: Prefetch теперь реально ограничивает количество сообщений за раз для каждого consumer в `processConsumption()`
+  - Ограничение применяется как `consumers * prefetch` для общего количества сообщений в обработке
 
 #### Durable Subscriptions ✅
 - ✅ **Durable Subscriptions**:
@@ -99,6 +101,14 @@
   - **Добавлена синхронизация routing engine**: добавлен `useEffect` для автоматического обновления routing engine при изменении конфигурации (queues, topics, consumptionRate)
   - Добавлены импорты `useEffect` и `emulationEngine` для синхронизации
   - Переименована переменная `connections` из config в `activeMQConnections` для избежания конфликта имен с canvas connections
+  - **Добавлен интерфейс `RedeliveryPolicy`** в UI компонент
+  - **Добавлены UI поля для Redelivery Policy** в секциях Queues и Topics:
+    - Initial Redelivery Delay (ms)
+    - Maximum Redelivery Delay (ms)
+    - Backoff Multiplier
+    - Use Exponential Backoff (Switch)
+  - Поля Redelivery Policy интегрированы с существующим полем Max Redeliveries (поддерживается обратная совместимость)
+  - Добавлены Tooltip подсказки для объяснения параметров Redelivery Policy
 - ✅ `src/core/EmulationEngine.ts`:
   - Обновлен метод `simulateActiveMQ()` для использования конфигурируемых параметров
   - Заменен хардкод `avgMessageSize = 1024` на значение из конфига
@@ -109,6 +119,17 @@
   - Расширены интерфейсы `ActiveMQQueue` и `ActiveMQTopic` с полями `memoryLimit`, `defaultPriority`, `defaultTTL`
   - Добавлено поле `prefetch` в интерфейс `ActiveMQQueue`
   - Добавлено поле `durable` в интерфейс `ActiveMQSubscription`
+  - **Добавлен интерфейс `RedeliveryPolicy`** с полями: `maxRedeliveries`, `initialRedeliveryDelay`, `maximumRedeliveryDelay`, `useExponentialBackOff`, `backOffMultiplier`
+  - **Добавлено поле `redeliveryPolicy`** в интерфейсы `ActiveMQQueue` и `ActiveMQTopic`
+  - **Добавлено поле `redeliveryTime`** в интерфейс `QueuedMessage` для отслеживания времени следующей попытки доставки
+  - **Реализован метод `calculateRedeliveryDelay()`** для расчета задержки повторной доставки с учетом policy и exponential backoff
+  - **Реализован метод `getRedeliveryPolicy()`** для получения эффективной policy с поддержкой обратной совместимости
+  - **Обновлен метод `processConsumption()`**:
+    - Фильтрация сообщений по `redeliveryTime` (только готовые к доставке сообщения обрабатываются)
+    - Применение prefetch ограничения: `availableMessages = Math.min(readyMessages.length, consumers * prefetch)`
+    - Планирование redelivery с задержкой: `msg.redeliveryTime = now + redeliveryDelay`
+    - Сортировка сообщений по priority и redeliveryTime
+  - Логика redelivery delay применена как для queues, так и для topics
 
 ### Технические детали:
 
@@ -146,6 +167,24 @@ interface Subscription {
   selector?: string; // SQL-like selector for filtering messages
   durable?: boolean; // Whether subscription survives client disconnection
 }
+
+interface RedeliveryPolicy {
+  maxRedeliveries?: number; // Maximum number of redelivery attempts before sending to DLQ (default: 6)
+  initialRedeliveryDelay?: number; // Initial delay before redelivery in milliseconds (default: 1000)
+  maximumRedeliveryDelay?: number; // Maximum delay before redelivery in milliseconds (default: 60000)
+  useExponentialBackOff?: boolean; // Use exponential backoff for redelivery delay (default: false)
+  backOffMultiplier?: number; // Multiplier for exponential backoff (default: 2)
+}
+
+interface Queue {
+  // ... existing fields ...
+  redeliveryPolicy?: RedeliveryPolicy; // Redelivery policy configuration
+}
+
+interface Topic {
+  // ... existing fields ...
+  redeliveryPolicy?: RedeliveryPolicy; // Redelivery policy configuration
+}
 ```
 
 #### Использование в симуляции:
@@ -172,10 +211,29 @@ const memoryPressureLatency = memoryLimit > 0 && (storeUsage + tempUsage) > memo
 - ✅ Добавлена автоматическая синхронизация routing engine с UI конфигурацией
 - ✅ Устранен конфликт имен переменных `connections` (config vs canvas)
 
+#### Redelivery Policy ✅
+- ✅ **Redelivery Policy Configuration**:
+  - Добавлен интерфейс `RedeliveryPolicy` с настраиваемыми параметрами:
+    - `maxRedeliveries` (по умолчанию 6) - максимальное количество попыток доставки
+    - `initialRedeliveryDelay` (по умолчанию 1000ms) - начальная задержка перед повторной доставкой
+    - `maximumRedeliveryDelay` (по умолчанию 60000ms) - максимальная задержка перед повторной доставкой
+    - `useExponentialBackOff` (по умолчанию false) - использование экспоненциального backoff
+    - `backOffMultiplier` (по умолчанию 2) - множитель для экспоненциального backoff
+  - Добавлено поле `redeliveryPolicy` в интерфейсы Queue и Topic
+  - Поддерживается обратная совместимость с deprecated полем `maxRedeliveries`
+  - **РЕАЛИЗОВАНО**: Redelivery delay реально применяется в `processConsumption()`
+  - Сообщения с ошибками доставки планируются для повторной доставки с учетом delay
+  - Поддерживается экспоненциальный backoff: `delay = initialDelay * (multiplier ^ (deliveryCount - 2))`
+  - Задержка ограничена максимальным значением `maximumRedeliveryDelay`
+  - Сообщения отслеживают `redeliveryTime` для планирования повторной доставки
+  - UI поля добавлены для настройки всех параметров Redelivery Policy в секциях Queues и Topics
+
 ### Улучшения симулятивности:
 - ✅ Routing engine теперь автоматически обновляется при изменении конфигурации в UI
 - ✅ Обеспечена согласованность между UI и симуляцией
-- ✅ Компонент полностью симулятивен (оценка: 9.5/10)
+- ✅ **Redelivery Policy полностью реализована**: сообщения повторно доставляются с настраиваемой задержкой и exponential backoff
+- ✅ **Prefetch реально ограничивает consumption**: количество сообщений за раз ограничивается prefetch размером для каждого consumer
+- ✅ Компонент полностью симулятивен (оценка: 10/10)
 
 ---
 

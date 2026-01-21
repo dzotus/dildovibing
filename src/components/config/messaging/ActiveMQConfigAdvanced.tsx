@@ -50,6 +50,14 @@ interface ActiveMQConfigProps {
   componentId: string;
 }
 
+interface RedeliveryPolicy {
+  maxRedeliveries?: number; // Maximum number of redelivery attempts before sending to DLQ (default: 6)
+  initialRedeliveryDelay?: number; // Initial delay before redelivery in milliseconds (default: 1000)
+  maximumRedeliveryDelay?: number; // Maximum delay before redelivery in milliseconds (default: 60000)
+  useExponentialBackOff?: boolean; // Use exponential backoff for redelivery delay (default: false)
+  backOffMultiplier?: number; // Multiplier for exponential backoff (default: 2)
+}
+
 interface Queue {
   name: string;
   queueSize?: number;
@@ -62,6 +70,8 @@ interface Queue {
   prefetch?: number; // Prefetch size for consumers
   defaultPriority?: number; // Default message priority (0-9)
   defaultTTL?: number; // Default message TTL in seconds
+  maxRedeliveries?: number; // Maximum number of redelivery attempts before sending to DLQ (default: 6) - DEPRECATED: use redeliveryPolicy
+  redeliveryPolicy?: RedeliveryPolicy; // Redelivery policy configuration
 }
 
 interface Topic {
@@ -74,6 +84,8 @@ interface Topic {
   memoryLimit?: number; // Memory limit in MB for this topic
   defaultPriority?: number; // Default message priority (0-9)
   defaultTTL?: number; // Default message TTL in seconds
+  maxRedeliveries?: number; // Maximum number of redelivery attempts before sending to DLQ (default: 6) - DEPRECATED: use redeliveryPolicy
+  redeliveryPolicy?: RedeliveryPolicy; // Redelivery policy configuration
 }
 
 interface Connection {
@@ -120,6 +132,7 @@ interface ActiveMQConfig {
   memoryPressureThreshold?: number;
   queueLatencyBase?: number;
   queueLatencyFactor?: number;
+  deadLetterQueue?: string; // Dead Letter Queue name (default: 'DLQ')
   acls?: Array<{
     principal: string;
     resource: string;
@@ -165,6 +178,7 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
   const memoryPressureThreshold = config.memoryPressureThreshold ?? 0.8;
   const queueLatencyBase = config.queueLatencyBase ?? 0;
   const queueLatencyFactor = config.queueLatencyFactor ?? 1;
+  const deadLetterQueue = config.deadLetterQueue || 'DLQ';
   const acls = config.acls || [];
 
   const [showCreateAcl, setShowCreateAcl] = useState(false);
@@ -190,11 +204,12 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
       topics: currentConfig.topics || [],
       subscriptions: currentConfig.subscriptions || [],
       consumptionRate: currentConfig.consumptionRate ?? 10,
+      deadLetterQueue: currentConfig.deadLetterQueue || 'DLQ',
     });
 
     // Update nodes and connections to ensure routing engine is properly initialized
     emulationEngine.updateNodesAndConnections(nodes, connections);
-  }, [componentId, queues.length, topics.length, consumptionRate, node?.id, nodes, connections]);
+  }, [componentId, queues.length, topics.length, consumptionRate, deadLetterQueue, node?.id, nodes, connections]);
 
   const updateConfig = (updates: Partial<ActiveMQConfig>) => {
     updateNode(componentId, {
@@ -560,6 +575,10 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
               <Users className="h-4 w-4" />
               Subscriptions ({subscriptions.length})
             </TabsTrigger>
+            <TabsTrigger value="dlq" className="gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Dead Letter Queue
+            </TabsTrigger>
             <TabsTrigger value="security" className="gap-2">
               <Shield className="h-4 w-4" />
               Security
@@ -684,6 +703,18 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                       />
                       <p className="text-xs text-muted-foreground">
                         Number of messages per second that each consumer can process
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="deadLetterQueue">Dead Letter Queue Name</Label>
+                      <Input
+                        id="deadLetterQueue"
+                        value={deadLetterQueue}
+                        onChange={(e) => updateConfig({ deadLetterQueue: e.target.value || 'DLQ' })}
+                        placeholder="DLQ"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Name of the Dead Letter Queue for failed messages (default: DLQ)
                       </p>
                     </div>
                   </div>
@@ -1024,6 +1055,150 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                                 Default message time-to-live in seconds (0 = unlimited)
                               </p>
                             </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`queue-max-redeliveries-${originalIndex}`} className="text-xs">
+                                Max Redeliveries
+                              </Label>
+                              <Input
+                                id={`queue-max-redeliveries-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={queue.redeliveryPolicy?.maxRedeliveries !== undefined 
+                                  ? queue.redeliveryPolicy.maxRedeliveries 
+                                  : (queue.maxRedeliveries !== undefined ? queue.maxRedeliveries : '')}
+                                onChange={(e) => {
+                                  const value = e.target.value ? Number(e.target.value) : undefined;
+                                  const currentPolicy = queue.redeliveryPolicy || {};
+                                  updateQueue(originalIndex, 'redeliveryPolicy', {
+                                    ...currentPolicy,
+                                    maxRedeliveries: value,
+                                  });
+                                  // Also update deprecated field for backward compatibility
+                                  if (!queue.redeliveryPolicy) {
+                                    updateQueue(originalIndex, 'maxRedeliveries', value);
+                                  }
+                                }}
+                                placeholder="6 (default)"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Maximum number of redelivery attempts before sending to DLQ (default: 6)
+                              </p>
+                            </div>
+                          </div>
+                          <Separator />
+                          <div className="space-y-4">
+                            <div className="flex items-center gap-2">
+                              <Label className="text-sm font-semibold">Redelivery Policy</Label>
+                              <TooltipProvider>
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <Info className="h-4 w-4 text-muted-foreground" />
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    <p className="text-xs">Configure how failed messages are redelivered</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <Label htmlFor={`queue-initial-redelivery-delay-${originalIndex}`} className="text-xs">
+                                  Initial Redelivery Delay (ms)
+                                </Label>
+                                <Input
+                                  id={`queue-initial-redelivery-delay-${originalIndex}`}
+                                  type="number"
+                                  min="0"
+                                  value={queue.redeliveryPolicy?.initialRedeliveryDelay !== undefined 
+                                    ? queue.redeliveryPolicy.initialRedeliveryDelay 
+                                    : ''}
+                                  onChange={(e) => {
+                                    const value = e.target.value ? Number(e.target.value) : undefined;
+                                    const currentPolicy = queue.redeliveryPolicy || {};
+                                    updateQueue(originalIndex, 'redeliveryPolicy', {
+                                      ...currentPolicy,
+                                      initialRedeliveryDelay: value,
+                                    });
+                                  }}
+                                  placeholder="1000 (default)"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Initial delay before redelivery in milliseconds (default: 1000)
+                                </p>
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`queue-maximum-redelivery-delay-${originalIndex}`} className="text-xs">
+                                  Maximum Redelivery Delay (ms)
+                                </Label>
+                                <Input
+                                  id={`queue-maximum-redelivery-delay-${originalIndex}`}
+                                  type="number"
+                                  min="0"
+                                  value={queue.redeliveryPolicy?.maximumRedeliveryDelay !== undefined 
+                                    ? queue.redeliveryPolicy.maximumRedeliveryDelay 
+                                    : ''}
+                                  onChange={(e) => {
+                                    const value = e.target.value ? Number(e.target.value) : undefined;
+                                    const currentPolicy = queue.redeliveryPolicy || {};
+                                    updateQueue(originalIndex, 'redeliveryPolicy', {
+                                      ...currentPolicy,
+                                      maximumRedeliveryDelay: value,
+                                    });
+                                  }}
+                                  placeholder="60000 (default)"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Maximum delay before redelivery in milliseconds (default: 60000)
+                                </p>
+                              </div>
+                              <div className="space-y-2">
+                                <Label htmlFor={`queue-backoff-multiplier-${originalIndex}`} className="text-xs">
+                                  Backoff Multiplier
+                                </Label>
+                                <Input
+                                  id={`queue-backoff-multiplier-${originalIndex}`}
+                                  type="number"
+                                  min="1"
+                                  step="0.1"
+                                  value={queue.redeliveryPolicy?.backOffMultiplier !== undefined 
+                                    ? queue.redeliveryPolicy.backOffMultiplier 
+                                    : ''}
+                                  onChange={(e) => {
+                                    const value = e.target.value ? Number(e.target.value) : undefined;
+                                    const currentPolicy = queue.redeliveryPolicy || {};
+                                    updateQueue(originalIndex, 'redeliveryPolicy', {
+                                      ...currentPolicy,
+                                      backOffMultiplier: value,
+                                    });
+                                  }}
+                                  placeholder="2 (default)"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Multiplier for exponential backoff (default: 2)
+                                </p>
+                              </div>
+                              <div className="space-y-2">
+                                <div className="flex items-center space-x-2 pt-6">
+                                  <Switch
+                                    id={`queue-use-exponential-backoff-${originalIndex}`}
+                                    checked={queue.redeliveryPolicy?.useExponentialBackOff ?? false}
+                                    onCheckedChange={(checked) => {
+                                      const currentPolicy = queue.redeliveryPolicy || {};
+                                      updateQueue(originalIndex, 'redeliveryPolicy', {
+                                        ...currentPolicy,
+                                        useExponentialBackOff: checked,
+                                      });
+                                    }}
+                                  />
+                                  <Label htmlFor={`queue-use-exponential-backoff-${originalIndex}`} className="text-xs cursor-pointer">
+                                    Use Exponential Backoff
+                                  </Label>
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                  Enable exponential backoff for redelivery delay (default: false)
+                                </p>
+                              </div>
+                            </div>
                           </div>
                           {queue.memoryUsage !== undefined && (
                             <div className="mt-4">
@@ -1235,6 +1410,150 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                             <p className="text-xs text-muted-foreground">
                               Default message time-to-live in seconds (0 = unlimited)
                             </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor={`topic-max-redeliveries-${originalIndex}`} className="text-xs">
+                              Max Redeliveries
+                            </Label>
+                            <Input
+                              id={`topic-max-redeliveries-${originalIndex}`}
+                              type="number"
+                              min="0"
+                              value={topic.redeliveryPolicy?.maxRedeliveries !== undefined 
+                                ? topic.redeliveryPolicy.maxRedeliveries 
+                                : (topic.maxRedeliveries !== undefined ? topic.maxRedeliveries : '')}
+                              onChange={(e) => {
+                                const value = e.target.value ? Number(e.target.value) : undefined;
+                                const currentPolicy = topic.redeliveryPolicy || {};
+                                updateTopic(originalIndex, 'redeliveryPolicy', {
+                                  ...currentPolicy,
+                                  maxRedeliveries: value,
+                                });
+                                // Also update deprecated field for backward compatibility
+                                if (!topic.redeliveryPolicy) {
+                                  updateTopic(originalIndex, 'maxRedeliveries', value);
+                                }
+                              }}
+                              placeholder="6 (default)"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              Maximum number of redelivery attempts before sending to DLQ (default: 6)
+                            </p>
+                          </div>
+                        </div>
+                        <Separator />
+                        <div className="space-y-4">
+                          <div className="flex items-center gap-2">
+                            <Label className="text-sm font-semibold">Redelivery Policy</Label>
+                            <TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Info className="h-4 w-4 text-muted-foreground" />
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  <p className="text-xs">Configure how failed messages are redelivered</p>
+                                </TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor={`topic-initial-redelivery-delay-${originalIndex}`} className="text-xs">
+                                Initial Redelivery Delay (ms)
+                              </Label>
+                              <Input
+                                id={`topic-initial-redelivery-delay-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={topic.redeliveryPolicy?.initialRedeliveryDelay !== undefined 
+                                  ? topic.redeliveryPolicy.initialRedeliveryDelay 
+                                  : ''}
+                                onChange={(e) => {
+                                  const value = e.target.value ? Number(e.target.value) : undefined;
+                                  const currentPolicy = topic.redeliveryPolicy || {};
+                                  updateTopic(originalIndex, 'redeliveryPolicy', {
+                                    ...currentPolicy,
+                                    initialRedeliveryDelay: value,
+                                  });
+                                }}
+                                placeholder="1000 (default)"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Initial delay before redelivery in milliseconds (default: 1000)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`topic-maximum-redelivery-delay-${originalIndex}`} className="text-xs">
+                                Maximum Redelivery Delay (ms)
+                              </Label>
+                              <Input
+                                id={`topic-maximum-redelivery-delay-${originalIndex}`}
+                                type="number"
+                                min="0"
+                                value={topic.redeliveryPolicy?.maximumRedeliveryDelay !== undefined 
+                                  ? topic.redeliveryPolicy.maximumRedeliveryDelay 
+                                  : ''}
+                                onChange={(e) => {
+                                  const value = e.target.value ? Number(e.target.value) : undefined;
+                                  const currentPolicy = topic.redeliveryPolicy || {};
+                                  updateTopic(originalIndex, 'redeliveryPolicy', {
+                                    ...currentPolicy,
+                                    maximumRedeliveryDelay: value,
+                                  });
+                                }}
+                                placeholder="60000 (default)"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Maximum delay before redelivery in milliseconds (default: 60000)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label htmlFor={`topic-backoff-multiplier-${originalIndex}`} className="text-xs">
+                                Backoff Multiplier
+                              </Label>
+                              <Input
+                                id={`topic-backoff-multiplier-${originalIndex}`}
+                                type="number"
+                                min="1"
+                                step="0.1"
+                                value={topic.redeliveryPolicy?.backOffMultiplier !== undefined 
+                                  ? topic.redeliveryPolicy.backOffMultiplier 
+                                  : ''}
+                                onChange={(e) => {
+                                  const value = e.target.value ? Number(e.target.value) : undefined;
+                                  const currentPolicy = topic.redeliveryPolicy || {};
+                                  updateTopic(originalIndex, 'redeliveryPolicy', {
+                                    ...currentPolicy,
+                                    backOffMultiplier: value,
+                                  });
+                                }}
+                                placeholder="2 (default)"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Multiplier for exponential backoff (default: 2)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <div className="flex items-center space-x-2 pt-6">
+                                <Switch
+                                  id={`topic-use-exponential-backoff-${originalIndex}`}
+                                  checked={topic.redeliveryPolicy?.useExponentialBackOff ?? false}
+                                  onCheckedChange={(checked) => {
+                                    const currentPolicy = topic.redeliveryPolicy || {};
+                                    updateTopic(originalIndex, 'redeliveryPolicy', {
+                                      ...currentPolicy,
+                                      useExponentialBackOff: checked,
+                                    });
+                                  }}
+                                />
+                                <Label htmlFor={`topic-use-exponential-backoff-${originalIndex}`} className="text-xs cursor-pointer">
+                                  Use Exponential Backoff
+                                </Label>
+                              </div>
+                              <p className="text-xs text-muted-foreground">
+                                Enable exponential backoff for redelivery delay (default: false)
+                              </p>
+                            </div>
                           </div>
                         </div>
                         {topic.memoryPercent !== undefined && (
@@ -1482,6 +1801,115 @@ export function ActiveMQConfigAdvanced({ componentId }: ActiveMQConfigProps) {
                     })}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Dead Letter Queue */}
+          <TabsContent value="dlq" className="space-y-4">
+            <Alert className="mb-4">
+              <Info className="h-4 w-4" />
+              <AlertTitle>Dead Letter Queue (DLQ)</AlertTitle>
+              <AlertDescription className="text-sm space-y-1">
+                <p>Messages that fail delivery after exceeding the maximum redelivery attempts are moved to the Dead Letter Queue.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  <strong>Note:</strong> Configure maxRedeliveries for queues and topics to control when messages are sent to DLQ.
+                </p>
+              </AlertDescription>
+            </Alert>
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Dead Letter Queue</CardTitle>
+                    <CardDescription>Messages that failed delivery after max redeliveries</CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="dlq-name" className="text-xs">DLQ Name:</Label>
+                    <Input
+                      id="dlq-name"
+                      value={deadLetterQueue}
+                      onChange={(e) => updateConfig({ deadLetterQueue: e.target.value || 'DLQ' })}
+                      className="w-32"
+                      placeholder="DLQ"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const routingEngine = emulationEngine.getActiveMQRoutingEngine(componentId);
+                        if (routingEngine) {
+                          routingEngine.clearDeadLetterQueue();
+                          showSuccess('Dead Letter Queue cleared');
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Clear DLQ
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const routingEngine = emulationEngine.getActiveMQRoutingEngine(componentId);
+                  const dlqMessages = routingEngine ? routingEngine.getDeadLetterQueueMessages() : [];
+                  const dlqSize = routingEngine ? routingEngine.getDeadLetterQueueSize() : 0;
+                  
+                  return (
+                    <>
+                      <div className="mb-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium">DLQ Size</span>
+                          <span className="text-lg font-bold">{dlqSize}</span>
+                        </div>
+                        <Progress value={Math.min(100, (dlqSize / 1000) * 100)} className="h-2" />
+                      </div>
+                      {dlqSize === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-8">
+                          No messages in Dead Letter Queue
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {dlqMessages.slice(0, 100).map((msg) => (
+                            <Card key={msg.id} className="border-l-4 border-l-red-500">
+                              <CardContent className="pt-4">
+                                <div className="grid grid-cols-4 gap-4">
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Message ID</p>
+                                    <p className="text-sm font-mono">{msg.id.slice(0, 20)}...</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Original Destination</p>
+                                    <p className="text-sm font-medium">{msg.headers?.originalDestination as string || 'N/A'}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Reason</p>
+                                    <Badge variant="destructive">{msg.headers?.reason as string || 'unknown'}</Badge>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Delivery Count</p>
+                                    <p className="text-sm font-medium">{msg.deliveryCount || 0}</p>
+                                  </div>
+                                </div>
+                                {msg.headers?.movedToDLQAt && (
+                                  <p className="text-xs text-muted-foreground mt-2">
+                                    Moved to DLQ: {new Date(msg.headers.movedToDLQAt as number).toLocaleString()}
+                                  </p>
+                                )}
+                              </CardContent>
+                            </Card>
+                          ))}
+                          {dlqSize > 100 && (
+                            <p className="text-xs text-muted-foreground text-center py-2">
+                              Showing first 100 of {dlqSize} messages
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           </TabsContent>

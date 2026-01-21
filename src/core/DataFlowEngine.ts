@@ -1872,6 +1872,7 @@ export class DataFlowEngine {
           const topic = messagingConfig.topic;
           const headers = message.metadata?.headers;
           const priority = message.metadata?.priority;
+          const ttl = message.metadata?.ttl; // TTL in seconds
           
           let routed = false;
           let destination = '';
@@ -1910,7 +1911,8 @@ export class DataFlowEngine {
               message.payload,
               message.size,
               headers,
-              priority
+              priority,
+              ttl
             );
             if (success) {
               routed = true;
@@ -1939,7 +1941,8 @@ export class DataFlowEngine {
               message.payload,
               message.size,
               headers,
-              priority
+              priority,
+              ttl
             );
             if (subscriptionIds.length > 0) {
               routed = true;

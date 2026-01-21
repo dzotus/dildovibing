@@ -3375,6 +3375,7 @@ export class EmulationEngine {
       topics: config.topics || [],
       subscriptions: config.subscriptions || [],
       consumptionRate: config.consumptionRate ?? 10, // Default 10 msgs/sec per consumer
+      deadLetterQueue: config.deadLetterQueue || 'DLQ', // Default DLQ name
     });
     
     this.activeMQRoutingEngines.set(node.id, routingEngine);
