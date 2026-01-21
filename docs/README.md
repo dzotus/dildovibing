@@ -17,16 +17,21 @@
   - Реалистичная маршрутизация сообщений
 
 - **[ActiveMQ](./messaging/activemq.md)** - Мультипротокольный брокер сообщений
-- **[AWS SQS](./messaging/aws-sqs.md)** - Управляемая служба очередей сообщений Amazon
   - Поддержка OpenWire, AMQP, MQTT, STOMP, WebSocket
   - Очереди и топики, персистентность, управление памятью
   - Redelivery Policy, Dead Letter Queue, ACL
 
-**AWS SQS:**
-- Standard и FIFO очереди
-- Visibility timeout, message retention, Dead Letter Queue
-- Batch операции, long polling, IAM policies
-- Message groups, deduplication, CloudWatch метрики
+- **[AWS SQS](./messaging/aws-sqs.md)** - Управляемая служба очередей сообщений Amazon
+  - Standard и FIFO очереди
+  - Visibility timeout, message retention, Dead Letter Queue
+  - Batch операции, long polling, IAM policies
+  - Message groups, deduplication, CloudWatch метрики
+
+- **[Azure Service Bus](./messaging/azure-service-bus.md)** - Управляемая платформа обмена сообщениями Microsoft
+  - Очереди и топики с подписками, peek-lock паттерн
+  - Dead Letter Queue, Message Sessions, Scheduled Messages
+  - Duplicate Detection, Auto-forwarding, Subscription Filters
+  - Message Deferral, Partitioning, полный набор метрик
 
 ## Формат документации
 
@@ -98,6 +103,8 @@
 - **Kafka:** [Документация Kafka](./messaging/kafka.md)
 - **RabbitMQ:** [Документация RabbitMQ](./messaging/rabbitmq.md)
 - **ActiveMQ:** [Документация ActiveMQ](./messaging/activemq.md)
+- **AWS SQS:** [Документация AWS SQS](./messaging/aws-sqs.md)
+- **Azure Service Bus:** [Документация Azure Service Bus](./messaging/azure-service-bus.md)
 
 ## Обновления
 
@@ -116,3 +123,5 @@
 - [Официальная документация Apache Kafka](https://kafka.apache.org/documentation/)
 - [Официальная документация RabbitMQ](https://www.rabbitmq.com/documentation.html)
 - [Официальная документация ActiveMQ](https://activemq.apache.org/documentation)
+- [Официальная документация AWS SQS](https://docs.aws.amazon.com/sqs/)
+- [Официальная документация Azure Service Bus](https://docs.microsoft.com/azure/service-bus-messaging/)

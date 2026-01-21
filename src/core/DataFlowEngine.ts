@@ -2224,6 +2224,7 @@ export class DataFlowEngine {
           const properties = message.metadata?.properties || message.metadata?.headers;
           const sessionId = message.metadata?.sessionId;
           const scheduledEnqueueTime = message.metadata?.scheduledEnqueueTime;
+          const messageId = message.metadata?.messageId; // For duplicate detection
           
           let routed = false;
           let destination = '';
@@ -2231,19 +2232,20 @@ export class DataFlowEngine {
           
           // Route to queue (point-to-point)
           if (queue) {
-            const messageId = routingEngine.sendToQueue(
+            const resultMessageId = routingEngine.sendToQueue(
               queue,
               message.payload,
               message.size,
               properties,
               sessionId,
-              scheduledEnqueueTime
+              scheduledEnqueueTime,
+              messageId
             );
             
-            if (messageId) {
+            if (resultMessageId) {
               routed = true;
               destination = queue;
-              messageIds.push(messageId);
+              messageIds.push(resultMessageId);
             }
           }
           
@@ -2254,7 +2256,8 @@ export class DataFlowEngine {
               message.payload,
               message.size,
               properties,
-              scheduledEnqueueTime
+              scheduledEnqueueTime,
+              messageId
             );
             
             if (ids.length > 0) {
@@ -2282,6 +2285,71 @@ export class DataFlowEngine {
           }
           
           return message;
+        },
+        
+        generateData: (node, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getAzureServiceBusRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            return null;
+          }
+          
+          const serviceBusConfig = (node.data.config as any) || {};
+          const queues = serviceBusConfig.queues || [];
+          const topics = serviceBusConfig.topics || [];
+          
+          // Get outgoing connections from this Azure Service Bus node
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          
+          if (outgoingConnections.length === 0) {
+            return null; // No outgoing connections, nothing to consume
+          }
+          
+          const messages: DataMessage[] = [];
+          const now = Date.now();
+          
+          // Get consumed messages from EmulationEngine
+          const consumedMessagesKey = `_azureServiceBusConsumedMessages_${node.id}`;
+          const consumedMessages = (node as any)[consumedMessagesKey] || [];
+          
+          // Process consumed messages and send to outgoing connections
+          for (const consumed of consumedMessages) {
+            const { message: serviceBusMessage, queueName, topicName, subscriptionName } = consumed;
+            
+            // Create DataMessage for each outgoing connection
+            for (const connection of outgoingConnections) {
+              const dataMessage: DataMessage = {
+                id: `asb-msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                timestamp: now,
+                source: node.id,
+                target: connection.target,
+                connectionId: connection.id,
+                format: typeof serviceBusMessage.payload === 'string' ? 'text' : 'json',
+                payload: serviceBusMessage.payload,
+                size: serviceBusMessage.size,
+                metadata: {
+                  messaging: {
+                    queue: queueName,
+                    topic: topicName,
+                    subscription: subscriptionName,
+                  },
+                  properties: serviceBusMessage.properties,
+                  messageId: serviceBusMessage.messageId,
+                  sessionId: serviceBusMessage.sessionId,
+                  sequenceNumber: serviceBusMessage.sequenceNumber,
+                },
+                status: 'pending',
+              };
+              
+              messages.push(dataMessage);
+            }
+          }
+          
+          // Clear consumed messages after processing
+          (node as any)[consumedMessagesKey] = [];
+          
+          return messages.length > 0 ? messages : null;
         },
         
         getSupportedFormats: () => ['json', 'binary', 'text'],

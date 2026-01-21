@@ -1,5 +1,245 @@
 # Patch Notes
 
+## Версия 0.1.8c - Azure Service Bus: Расширение функциональности до уровня 10/10
+
+### Обзор изменений
+**Azure Service Bus: Расширение функциональности до уровня 10/10**: Реализованы критичные функции Azure Service Bus: Duplicate Detection, Auto-forwarding, Message Deferral, Subscription Filters/Rules. Добавлено автоматическое потребление сообщений из очередей/подписок в исходящие соединения с обработкой ошибок. Реализовано влияние Pricing Tier на симуляцию (latency, throughput limits). Расширен UI с новыми полями для всех функций, валидацией и адаптивностью. Добавлена синхронизация изменений конфигурации с routing engine. Все изменения направлены на повышение соответствия реальному поведению Azure Service Bus и улучшение симулятивности.
+
+**Ключевые достижения**: Реализована полная поддержка Duplicate Detection с временным окном для queues и topics. Добавлен Auto-forwarding для queues и subscriptions с поддержкой цепочек пересылки. Реализован Message Deferral с методами defer/receive deferred/complete deferred. Добавлена поддержка Subscription Filters/Rules (SQL и Correlation фильтры) с простым парсером SQL выражений. Реализовано автоматическое потребление сообщений из очередей/подписок в исходящие соединения через DataFlowEngine с обработкой ошибок (abandon при ошибке, учет maxDeliveryCount, отправка в DLQ). Добавлено влияние Pricing Tier (Basic/Standard/Premium) на latency и throughput limits. Расширен UI с новыми табами и полями для всех функций. Добавлена валидация имен очередей/топиков/подписок согласно правилам Azure. Добавлена адаптивность табов. Реализована автоматическая синхронизация изменений конфигурации с routing engine.
+
+### Ключевые изменения
+
+#### Duplicate Detection ✅
+- ✅ **Duplicate Detection Support**:
+  - Добавлена поддержка duplicate detection для queues и topics
+  - Реализовано хранение messageId с timestamp в временном окне
+  - Автоматическая очистка старых messageId по истечении окна
+  - Проверка дубликатов в sendToQueue() и publishToTopic()
+  - Метрики: duplicateMessagesDetected
+
+#### Auto-forwarding ✅
+- ✅ **Auto-forwarding Support**:
+  - Добавлена поддержка auto-forwarding для queues и subscriptions
+  - Автоматическая пересылка сообщений после complete
+  - Поддержка цепочек пересылки (queue -> topic -> queue)
+  - Метрики: forwardedMessages
+
+#### Message Deferral ✅
+- ✅ **Message Deferral Support**:
+  - Реализован deferMessage() для отложения сообщений
+  - Реализован receiveDeferredMessages() для получения отложенных сообщений по sequence numbers
+  - Реализован completeDeferredMessage() для завершения отложенных сообщений
+  - Метрики: deferredMessageCount
+
+#### Subscription Filters/Rules ✅
+- ✅ **Subscription Filters/Rules Support**:
+  - Добавлена поддержка SQL фильтров для subscriptions
+  - Добавлена поддержка Correlation фильтров
+  - Реализован простой SQL фильтр парсер (операторы: =, !=, >, <, LIKE)
+  - Применение фильтров при публикации в topic
+  - Метрики: filteredMessages
+
+#### Автоматическое потребление сообщений ✅
+- ✅ **Automatic Message Consumption**:
+  - Реализовано автоматическое потребление из queues в исходящие соединения
+  - Реализовано автоматическое потребление из subscriptions в исходящие соединения
+  - Учет consumptionRate из конфигурации
+  - Поддержка peek-lock pattern (complete после обработки)
+  - Интеграция с DataFlowEngine через generateData
+  - ✅ **Обработка ошибок при потреблении**:
+    - При ошибке обработки - abandon message (возврат в очередь/подписку)
+    - Учет maxDeliveryCount - при превышении автоматическая отправка в DLQ через abandonMessage
+    - Симуляция ошибок обработки на основе metrics.errorRate
+    - Обновление метрик error rate при ошибках
+
+#### Pricing Tier влияние на симуляцию ✅
+- ✅ **Pricing Tier Impact**:
+  - Добавлен pricingTier в конфигурацию (basic/standard/premium)
+  - Добавлен messagingUnits для Premium tier
+  - Влияние на latency: Basic (10ms), Standard (5ms), Premium (2ms)
+  - Влияние на throughput limits: Basic (1000 msg/s), Standard (10000 msg/s), Premium (100000 msg/s * messagingUnits)
+  - Влияние на utilization capacity
+  - ✅ **Ограничение throughput на основе tier**: Добавлено ограничение throughput в симуляции на основе pricing tier (при превышении лимита throughput ограничивается до максимального значения для tier)
+  - ✅ **Влияние превышения лимитов на error rate**: При превышении throughput лимита увеличивается error rate (до 10% в зависимости от превышения)
+  - ✅ **Метрики в customMetrics**: Добавлены метрики `duplicate_messages_detected`, `forwarded_messages`, `filtered_messages` в customMetrics для отображения в симуляции
+
+#### Расширение UI ✅
+- ✅ **UI Enhancements**:
+  - Добавлен таб "Namespace Settings" с полями для Pricing Tier, Messaging Units, Consumption Rate
+  - Расширен таб Queues: Duplicate Detection, Auto-forwarding, Batched Operations
+  - Расширен таб Topics: Duplicate Detection, Auto-forwarding, Batched Operations
+  - Расширен таб Subscriptions: Filters/Rules, RequiresSession, Auto-forwarding, Batched Operations
+  - Добавлена поддержка CRUD операций для Subscription Rules
+  - ✅ **Адаптивность табов**: flex-wrap для переноса на новую строку при узком экране
+  - ✅ **Валидация полей**:
+    - Валидация имен очередей/топиков/подписок согласно правилам Azure (1-260 символов, только буквы/цифры/дефисы/подчеркивания/точки)
+    - Отображение ошибок валидации через Alert компоненты
+    - Проверка на начало/конец с точкой или дефисом
+    - Проверка на последовательные точки
+  - ✅ **Синхронизация конфигурации**:
+    - Автоматическое отслеживание изменений конфигурации через хеш
+    - Автоматическая переинициализация routing engine при изменениях queues/topics
+    - Сохранение состояния сообщений при обновлении конфигурации
+  - ✅ **Синхронизация метрик в реальном времени**:
+    - Добавлен useEffect для синхронизации метрик из routing engine в UI каждые 500ms
+    - Обновление activeMessageCount, deadLetterMessageCount, scheduledMessageCount, deferredMessageCount
+    - Синхронизация метрик для очередей и подписок
+    - Обновление происходит только когда симуляция запущена (isRunning)
+    - Использование nodeRef для избежания stale closures
+  - ✅ **Отображение deferred messages**:
+    - Добавлено отображение deferredMessageCount в UI для очередей (grid-cols-4)
+    - Добавлено отображение deadLetterMessageCount и deferredMessageCount для подписок (grid-cols-3)
+    - Все метрики обновляются в реальном времени из routing engine
+  - ✅ **Исправление багов**:
+    - Исправлена очистка ошибок валидации при удалении очередей (reindex ошибок)
+    - Исправлена очистка ошибок валидации при удалении топиков (reindex ошибок топиков и подписок)
+    - Исправлена очистка ошибок валидации при удалении подписок (reindex ошибок)
+    - Все CRUD операции проверены и работают корректно
+
+### Изменённые файлы:
+
+#### Изменённые файлы:
+- ✅ `src/core/AzureServiceBusRoutingEngine.ts`:
+  - Расширены интерфейсы ServiceBusQueue, ServiceBusTopic, ServiceBusSubscription с новыми полями
+  - Добавлен интерфейс SubscriptionRule для фильтров
+  - Реализован checkDuplicateMessage() для проверки дубликатов
+  - Реализован forwardMessage() для автоматической пересылки
+  - Реализованы методы deferMessage(), receiveDeferredMessages(), completeDeferredMessage()
+  - Реализован evaluateSubscriptionRule() и evaluateSqlFilter() для фильтрации сообщений
+  - Обновлены sendToQueue() и publishToTopic() для поддержки duplicate detection и messageId
+  - Обновлен completeMessage() для поддержки auto-forwarding
+  - Обновлены метрики с новыми полями (duplicateMessagesDetected, forwardedMessages, deferredMessageCount, filteredMessages)
+  - ✅ Добавлены методы для Message Explorer:
+    - peekQueueMessages(), peekSubscriptionMessages() - просмотр сообщений без блокировки
+    - getLockedQueueMessages(), getLockedSubscriptionMessages() - получение заблокированных сообщений
+    - getDeadLetterQueueMessages(), getDeadLetterSubscriptionMessages() - получение сообщений из DLQ
+    - getDeferredQueueMessages(), getDeferredSubscriptionMessages() - получение отложенных сообщений
+    - getScheduledQueueMessages(), getScheduledTopicMessages() - получение запланированных сообщений
+    - resubmitMessage() - возврат сообщения из DLQ в очередь/подписку
+    - deleteDeadLetterMessage() - удаление сообщения из DLQ
+    - sendToDeadLetter() - ручная отправка сообщения в DLQ
+
+- ✅ `src/core/EmulationEngine.ts`:
+  - Обновлен initializeAzureServiceBusRoutingEngine() для поддержки новых полей
+  - Добавлено автоматическое потребление сообщений в simulateAzureServiceBus() с обработкой ошибок
+  - Добавлена обработка ошибок при потреблении (abandon при ошибке, учет maxDeliveryCount)
+  - Добавлено влияние pricingTier на latency и throughput limits
+  - ✅ **Ограничение throughput на основе tier**: Добавлено ограничение throughput в simulateAzureServiceBus() на основе pricing tier (Basic: 1000 msg/s, Standard: 10000 msg/s, Premium: 100000 msg/s * messagingUnits)
+  - ✅ **Влияние превышения лимитов на error rate**: При превышении throughput лимита увеличивается error rate (до 10% в зависимости от превышения)
+  - ✅ **Метрики в customMetrics**: Добавлены метрики duplicate_messages_detected, forwarded_messages, filtered_messages в customMetrics для отображения в симуляции
+  - Обновлен updateAzureServiceBusMetricsInConfig() для новых метрик
+  - Добавлено отслеживание изменений конфигурации через azureServiceBusConfigHash
+  - Автоматическая переинициализация routing engine при изменениях конфигурации
+
+- ✅ `src/core/DataFlowEngine.ts`:
+  - Обновлен processData для Azure Service Bus для поддержки messageId в duplicate detection
+  - Добавлен generateData для Azure Service Bus для автоматического потребления и отправки в исходящие соединения
+
+- ✅ `src/components/config/messaging/AzureServiceBusConfigAdvanced.tsx`:
+  - Расширены интерфейсы Queue, Topic, Subscription с новыми полями
+  - Добавлен интерфейс SubscriptionRule
+  - Добавлен таб "Namespace Settings" с полями для Pricing Tier, Messaging Units, Consumption Rate
+  - Добавлены поля Duplicate Detection для Queues и Topics
+  - Добавлены поля Auto-forwarding для Queues, Topics и Subscriptions
+  - Добавлены поля Batched Operations для Queues, Topics и Subscriptions
+  - Добавлены поля RequiresSession для Subscriptions
+  - Добавлена секция Rules/Filters для Subscriptions с CRUD операциями
+  - ✅ Добавлена адаптивность табов (flex-wrap для переноса на новую строку)
+  - ✅ Добавлена валидация имен очередей/топиков/подписок с отображением ошибок через Alert
+  - ✅ Добавлена функция validateEntityName() для проверки имен согласно правилам Azure
+  - ✅ Добавлены состояния для ошибок валидации (queueNameErrors, topicNameErrors, subscriptionNameErrors)
+  - ✅ Добавлена синхронизация метрик из routing engine в UI (useEffect с интервалом 500ms)
+  - ✅ Добавлен импорт emulationEngine и useEmulationStore для доступа к routing engine
+  - ✅ Добавлен nodeRef для избежания stale closures при обновлении метрик
+  - ✅ Добавлено отображение deferredMessageCount в UI для очередей (grid-cols-4)
+  - ✅ Добавлено отображение deadLetterMessageCount и deferredMessageCount для подписок (grid-cols-3)
+  - ✅ Исправлена очистка ошибок валидации при удалении очередей (reindex ошибок)
+  - ✅ Исправлена очистка ошибок валидации при удалении топиков (reindex ошибок топиков и подписок)
+  - ✅ Исправлена очистка ошибок валидации при удалении подписок (reindex ошибок)
+  - ✅ Добавлен таб "Message Explorer" с выбором entity (queue/subscription)
+  - ✅ Добавлены переключатели для показа различных типов сообщений (Active, DLQ, Deferred, Scheduled, Locked)
+  - ✅ Реализована таблица сообщений с колонками и действиями
+  - ✅ Добавлен поиск и фильтрация сообщений
+  - ✅ Добавлено автоматическое обновление сообщений при запущенной симуляции
+  - ✅ Реализованы действия для сообщений: Complete, Abandon, Defer, Send to Dead Letter, Resubmit, Delete
+  - ✅ Добавлен таб "Networking" с настройками сети (Public Network Access, TLS, Firewall Rules, VNet Rules, Private Endpoints)
+  - ✅ Добавлен таб "Security" с настройками безопасности (SAS Policies, RBAC, Managed Identities)
+  - ✅ Удалены неиспользуемые импорты (Activity, Users, Globe, Progress)
+
+### Технические детали:
+
+#### Duplicate Detection
+- Временное окно для хранения messageId (duplicateDetectionHistoryTimeWindow в секундах)
+- Автоматическая очистка старых записей при проверке
+- Дубликаты отклоняются и не добавляются в очередь/топик
+- Метрика duplicateMessagesDetected отслеживает количество обнаруженных дубликатов
+
+#### Auto-forwarding
+- Настройка forwardTo для queues и subscriptions
+- Автоматическая пересылка после complete message
+- Поддержка цепочек пересылки между queues и topics
+- Метрика forwardedMessages отслеживает количество пересланных сообщений
+
+#### Message Deferral
+- Сообщения откладываются с помощью deferMessage(lockToken)
+- Получение отложенных сообщений по sequence numbers через receiveDeferredMessages()
+- Завершение отложенных сообщений через completeDeferredMessage()
+- Метрика deferredMessageCount отслеживает количество отложенных сообщений
+
+#### Subscription Filters/Rules
+- SQL фильтры: поддержка операторов =, !=, >, <, LIKE
+- Correlation фильтры: проверка correlationId и properties
+- Фильтры применяются при публикации в topic
+- Метрика filteredMessages отслеживает количество отфильтрованных сообщений
+
+#### Автоматическое потребление
+- Потребление из queues и subscriptions с учетом consumptionRate
+- Отправка потребленных сообщений в исходящие соединения через DataFlowEngine
+- Поддержка peek-lock pattern (complete после обработки)
+- Автоматическая обработка ошибок (abandon при ошибке)
+
+#### Pricing Tier
+- Basic: latency 10ms, throughput 1000 msg/s, capacity 10000 messages
+- Standard: latency 5ms, throughput 10000 msg/s, capacity 100000 messages
+- Premium: latency 2ms, throughput 100000 msg/s * messagingUnits, capacity 1000000 * messagingUnits
+
+### Совместимость:
+- ✅ Обратная совместимость сохранена - все существующие конфигурации работают без изменений
+- ✅ Новые поля опциональны и имеют значения по умолчанию
+- ✅ Duplicate Detection отключен по умолчанию
+- ✅ Auto-forwarding не настроен по умолчанию
+
+#### Networking Tab ✅
+- ✅ **Networking Configuration**:
+  - Добавлен таб "Networking" с иконкой Network
+  - Поле: Public Network Access (Enabled/Disabled) - select
+  - Поле: Minimum TLS Version (1.0/1.1/1.2) - select
+  - Секция: Firewall Rules с CRUD операциями (IP ranges в CIDR notation)
+  - Секция: Virtual Network Rules с CRUD операциями (Subnet Resource IDs)
+  - Секция: Private Endpoints с CRUD операциями (Subnet Resource IDs)
+  - Конфигурация сохраняется в `config.networking`
+
+#### Security Tab ✅
+- ✅ **Security Configuration**:
+  - Добавлен таб "Security" с иконкой Shield
+  - Секция: Shared Access Signatures (SAS) Policies с CRUD операциями
+    - Поля: Name, Permissions (Send, Listen, Manage) с переключателями
+  - Секция: Role-Based Access Control (RBAC) с CRUD операциями
+    - Поля: Principal ID, Role (Owner, Contributor, Reader, Data Owner, Data Receiver, Data Sender)
+  - Секция: Managed Identities с CRUD операциями
+    - Поля: Name, Type (SystemAssigned/UserAssigned), Principal ID (для UserAssigned)
+  - Конфигурация сохраняется в `config.security`
+
+#### Оптимизация и очистка ✅
+- ✅ **Code Optimization**:
+  - Удалены неиспользуемые импорты (Activity, Users, Globe, Progress)
+  - Оптимизировано обновление метрик (проверка изменений перед обновлением)
+  - Duplicate detection уже оптимизирован (очистка при проверке)
+
+### Следующие шаги:
+- ⚠️ Улучшение UX: toast-уведомления (требует toast библиотеки)
+- ⚠️ Transactions: группировка операций в транзакции (не критично для симуляции)
+
 ## Версия 0.1.8b - AWS SQS: Улучшение обработки message attributes и retention
 
 ### Обзор изменений

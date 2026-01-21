@@ -166,6 +166,7 @@ export class EmulationEngine {
   // Azure Service Bus routing engines per node
   private azureServiceBusRoutingEngines: Map<string, AzureServiceBusRoutingEngine> = new Map();
   private lastAzureServiceBusUpdate: Map<string, number> = new Map();
+  private azureServiceBusConfigHash: Map<string, string> = new Map(); // Track config changes
   
   // Pub/Sub routing engines per node
   private pubSubRoutingEngines: Map<string, PubSubRoutingEngine> = new Map();
@@ -3658,13 +3659,25 @@ export class EmulationEngine {
    * Azure Service Bus emulation
    */
   private simulateAzureServiceBus(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
-    // Initialize routing engine if not exists
-    if (!this.azureServiceBusRoutingEngines.has(node.id)) {
+    const serviceBusConfig = (node.data.config as any) || {};
+    
+    // Check if configuration changed (reinitialize if needed)
+    const configHash = JSON.stringify({
+      queues: serviceBusConfig.queues || [],
+      topics: serviceBusConfig.topics || [],
+      pricingTier: serviceBusConfig.pricingTier,
+      messagingUnits: serviceBusConfig.messagingUnits,
+      consumptionRate: serviceBusConfig.consumptionRate,
+    });
+    const lastConfigHash = this.azureServiceBusConfigHash.get(node.id);
+    
+    // Initialize or reinitialize routing engine if config changed
+    if (!this.azureServiceBusRoutingEngines.has(node.id) || lastConfigHash !== configHash) {
       this.initializeAzureServiceBusRoutingEngine(node);
+      this.azureServiceBusConfigHash.set(node.id, configHash);
     }
     
     const routingEngine = this.azureServiceBusRoutingEngines.get(node.id)!;
-    const serviceBusConfig = (node.data.config as any) || {};
     
     if (!hasIncomingConnections) {
       // No incoming data, reset metrics but keep queue/topic state
@@ -3710,19 +3723,39 @@ export class EmulationEngine {
       }
     }
     
+    // Base latency and throughput limits depend on pricing tier
+    const pricingTier = serviceBusConfig.pricingTier || 'standard';
+    const messagingUnits = serviceBusConfig.messagingUnits || 1;
+    
+    // Calculate throughput limits based on pricing tier
+    let maxThroughput = 10000; // Standard tier default (msg/s)
+    if (pricingTier === 'basic') {
+      maxThroughput = 1000; // Basic tier: 1000 msg/s
+    } else if (pricingTier === 'premium') {
+      maxThroughput = 100000 * messagingUnits; // Premium tier: 100000 msg/s per messaging unit
+    }
+    
     // Use configured throughput if available, otherwise use calculated
     const throughputMsgs = config.throughputMsgs || totalIncomingThroughput || 1000;
     
-    // Throughput with random jitter
+    // Apply tier-based throughput limit
+    const limitedThroughput = Math.min(throughputMsgs, maxThroughput);
+    
+    // Throughput with random jitter (but not exceeding tier limit)
     const jitter = (Math.random() - 0.5) * 0.1;
-    metrics.throughput = throughputMsgs * (1 + jitter);
+    metrics.throughput = Math.min(limitedThroughput * (1 + jitter), maxThroughput);
     
     // Latency based on queue depth and Azure Service Bus characteristics
     const totalQueueDepth = routingEngine.getTotalQueueDepth();
     const totalSubscriptionMessages = routingEngine.getTotalSubscriptionMessages();
     const totalMessages = totalQueueDepth + totalSubscriptionMessages;
+    let baseLatency = 5; // Standard tier default
+    if (pricingTier === 'basic') {
+      baseLatency = 10; // Basic tier has higher latency
+    } else if (pricingTier === 'premium') {
+      baseLatency = 2; // Premium tier has lower latency
+    }
     
-    const baseLatency = 5; // Base Azure Service Bus latency (cloud service)
     const queueLatency = Math.min(50, totalMessages / 1000); // 1ms per 1000 messages, max 50ms
     const lockLatency = 2; // Peek-lock overhead
     metrics.latency = baseLatency + queueLatency + lockLatency + Math.random() * 5;
@@ -3736,20 +3769,42 @@ export class EmulationEngine {
     const baseErrorRate = 0.0005;
     const depthErrorRate = Math.min(0.01, totalMessages / 1000000); // 0.01% per 100k messages
     
+    // Check for throughput limit exceeded (increases error rate)
+    const throughputLimitExceeded = throughputMsgs > maxThroughput;
+    const throughputErrorRate = throughputLimitExceeded 
+      ? Math.min(0.1, (throughputMsgs - maxThroughput) / maxThroughput) // Up to 10% error rate when exceeding limit
+      : 0;
+    
     // Check for dead letter messages (failed deliveries)
     let totalDeadLetterMessages = 0;
+    let totalDuplicateMessagesDetected = 0;
+    let totalForwardedMessages = 0;
+    let totalFilteredMessages = 0;
+    
     for (const queueMetrics of allQueueMetrics.values()) {
       totalDeadLetterMessages += queueMetrics.deadLetterMessageCount || 0;
+      totalDuplicateMessagesDetected += queueMetrics.duplicateMessagesDetected || 0;
+      totalForwardedMessages += queueMetrics.forwardedMessages || 0;
     }
     for (const subMetrics of allSubscriptionMetrics.values()) {
       totalDeadLetterMessages += subMetrics.deadLetterMessageCount || 0;
+      totalForwardedMessages += subMetrics.forwardedMessages || 0;
+      totalFilteredMessages += subMetrics.filteredMessages || 0;
     }
     const dlqErrorRate = totalDeadLetterMessages > 0 ? Math.min(0.05, totalDeadLetterMessages / 10000) : 0;
     
-    metrics.errorRate = Math.min(1, baseErrorRate + depthErrorRate + dlqErrorRate);
+    metrics.errorRate = Math.min(1, baseErrorRate + depthErrorRate + throughputErrorRate + dlqErrorRate);
     
-    // Utilization based on message queue backlog
-    metrics.utilization = Math.min(1, totalMessages / 100000);
+    // Utilization based on message queue backlog and tier limits
+    // pricingTier and messagingUnits already declared above for latency calculation
+    let maxCapacity = 100000; // Standard tier default
+    if (pricingTier === 'basic') {
+      maxCapacity = 10000; // Basic tier: lower capacity
+    } else if (pricingTier === 'premium') {
+      maxCapacity = 1000000 * messagingUnits; // Premium tier: higher capacity per messaging unit
+    }
+    
+    metrics.utilization = Math.min(1, totalMessages / maxCapacity);
     
     // Calculate total subscriptions
     let totalSubscriptions = 0;
@@ -3762,6 +3817,9 @@ export class EmulationEngine {
       'queue_depth': totalQueueDepth,
       'subscription_messages': totalSubscriptionMessages,
       'dead_letter_messages': totalDeadLetterMessages,
+      'duplicate_messages_detected': totalDuplicateMessagesDetected,
+      'forwarded_messages': totalForwardedMessages,
+      'filtered_messages': totalFilteredMessages,
       'connections': connections,
       'queues': serviceBusConfig.queues?.length || 0,
       'topics': serviceBusConfig.topics?.length || 0,
@@ -3770,6 +3828,107 @@ export class EmulationEngine {
     
     // Update queue and subscription metrics in node config (for UI display)
     this.updateAzureServiceBusMetricsInConfig(node, allQueueMetrics, allSubscriptionMetrics);
+    
+    // Automatic message consumption - consume messages from queues/subscriptions and send to outgoing connections
+    const outgoingConnections = this.connections.filter(c => c.source === node.id);
+    if (outgoingConnections.length > 0) {
+      const consumptionRate = (serviceBusConfig.consumptionRate || 10) * 1000; // messages per second -> messages per 1000ms
+      const now = Date.now();
+      const lastConsumeKey = `_lastAzureServiceBusConsume_${node.id}`;
+      const lastConsume = (node as any)[lastConsumeKey] || now;
+      const deltaTime = now - lastConsume;
+      
+      if (deltaTime > 0) {
+        const messagesToConsume = Math.floor((consumptionRate * deltaTime) / 1000);
+        
+        // Simulate processing error rate (based on errorRate metric)
+        const processingErrorRate = Math.min(0.1, metrics.errorRate || 0.01); // Max 10% error rate
+        
+        // Consume from queues
+        const queues = serviceBusConfig.queues || [];
+        for (const queue of queues) {
+          for (let i = 0; i < messagesToConsume && i < outgoingConnections.length; i++) {
+            const message = routingEngine.receiveFromQueue(queue.name);
+            if (message) {
+              // Check if message exceeded max delivery count (will be handled by abandonMessage)
+              const queueConfig = queues.find(q => q.name === queue.name);
+              const maxDeliveryCount = queueConfig?.maxDeliveryCount || 10;
+              
+              // Simulate processing error (random based on error rate)
+              const processingError = Math.random() < processingErrorRate;
+              
+              if (processingError && message.deliveryCount < maxDeliveryCount) {
+                // Processing failed - abandon message (will increment delivery count)
+                if (message.lockToken) {
+                  routingEngine.abandonMessage(queue.name, message.lockToken);
+                }
+              } else {
+                // Processing successful or message exceeded max delivery count (will go to DLQ on next abandon)
+                // Store message for DataFlowEngine to process
+                const consumedMessagesKey = `_azureServiceBusConsumedMessages_${node.id}`;
+                if (!(node as any)[consumedMessagesKey]) {
+                  (node as any)[consumedMessagesKey] = [];
+                }
+                (node as any)[consumedMessagesKey].push({
+                  message,
+                  queueName: queue.name,
+                  timestamp: now,
+                });
+                
+                // Complete message after successful processing
+                if (message.lockToken) {
+                  routingEngine.completeMessage(queue.name, message.lockToken);
+                }
+              }
+            }
+          }
+        }
+        
+        // Consume from subscriptions
+        const topics = serviceBusConfig.topics || [];
+        for (const topic of topics) {
+          const subscriptions = topic.subscriptions || [];
+          for (const subscription of subscriptions) {
+            for (let i = 0; i < messagesToConsume && i < outgoingConnections.length; i++) {
+              const message = routingEngine.receiveFromSubscription(topic.name, subscription.name);
+              if (message) {
+                const subscriptionId = `${topic.name}/subscriptions/${subscription.name}`;
+                const maxDeliveryCount = subscription.maxDeliveryCount || 10;
+                
+                // Simulate processing error
+                const processingError = Math.random() < processingErrorRate;
+                
+                if (processingError && message.deliveryCount < maxDeliveryCount) {
+                  // Processing failed - abandon message
+                  if (message.lockToken) {
+                    routingEngine.abandonMessage(subscriptionId, message.lockToken);
+                  }
+                } else {
+                  // Processing successful
+                  const consumedMessagesKey = `_azureServiceBusConsumedMessages_${node.id}`;
+                  if (!(node as any)[consumedMessagesKey]) {
+                    (node as any)[consumedMessagesKey] = [];
+                  }
+                  (node as any)[consumedMessagesKey].push({
+                    message,
+                    topicName: topic.name,
+                    subscriptionName: subscription.name,
+                    timestamp: now,
+                  });
+                  
+                  // Complete message after successful processing
+                  if (message.lockToken) {
+                    routingEngine.completeMessage(subscriptionId, message.lockToken);
+                  }
+                }
+              }
+            }
+          }
+        }
+        
+        (node as any)[lastConsumeKey] = now;
+      }
+    }
   }
   
   /**
@@ -3792,6 +3951,10 @@ export class EmulationEngine {
         ? q.enableDeadLetteringOnMessageExpiration 
         : true,
       enableSessions: q.enableSessions || false,
+      enableDuplicateDetection: q.enableDuplicateDetection || false,
+      duplicateDetectionHistoryTimeWindow: q.duplicateDetectionHistoryTimeWindow || 600, // Default 10 minutes
+      forwardTo: q.forwardTo || undefined,
+      enableBatchedOperations: q.enableBatchedOperations || false,
       activeMessageCount: q.activeMessageCount || 0,
       deadLetterMessageCount: q.deadLetterMessageCount || 0,
       scheduledMessageCount: q.scheduledMessageCount || 0,
@@ -3804,6 +3967,10 @@ export class EmulationEngine {
       maxSizeInMegabytes: t.maxSizeInMegabytes || 1024,
       defaultMessageTimeToLive: t.defaultMessageTimeToLive || 2592000,
       enablePartitioning: t.enablePartitioning || false,
+      enableDuplicateDetection: t.enableDuplicateDetection || false,
+      duplicateDetectionHistoryTimeWindow: t.duplicateDetectionHistoryTimeWindow || 600, // Default 10 minutes
+      forwardTo: t.forwardTo || undefined,
+      enableBatchedOperations: t.enableBatchedOperations || false,
       subscriptions: (t.subscriptions || []).map((sub: any) => ({
         name: sub.name,
         maxDeliveryCount: sub.maxDeliveryCount || 10,
@@ -3811,6 +3978,10 @@ export class EmulationEngine {
         enableDeadLetteringOnMessageExpiration: sub.enableDeadLetteringOnMessageExpiration !== undefined
           ? sub.enableDeadLetteringOnMessageExpiration
           : true,
+        requiresSession: sub.requiresSession || false,
+        forwardTo: sub.forwardTo || undefined,
+        enableBatchedOperations: sub.enableBatchedOperations || false,
+        rules: sub.rules || [],
         activeMessageCount: sub.activeMessageCount || 0,
       })),
     }));
@@ -3833,6 +4004,9 @@ export class EmulationEngine {
       activeMessageCount: number;
       deadLetterMessageCount: number;
       scheduledMessageCount: number;
+      deferredMessageCount: number;
+      duplicateMessagesDetected: number;
+      forwardedMessages: number;
       sentCount: number;
       receivedCount: number;
       completedCount: number;
@@ -3841,6 +4015,9 @@ export class EmulationEngine {
     subscriptionMetrics: Map<string, {
       activeMessageCount: number;
       deadLetterMessageCount: number;
+      deferredMessageCount: number;
+      filteredMessages: number;
+      forwardedMessages: number;
       sentCount: number;
       receivedCount: number;
       completedCount: number;
