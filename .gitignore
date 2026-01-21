@@ -11,3 +11,6 @@ et GIT_PAGER=cat
 *.swp
 *.swo
 *~
+
+# OpenAI GPT Image MCP (not needed)
+openai-gpt-image-mcp/
