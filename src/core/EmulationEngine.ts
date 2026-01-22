@@ -8508,6 +8508,11 @@ export class EmulationEngine {
       environment: config.environment,
       proxies: config.proxies || [],
       policies: config.policies || [],
+      products: config.products || [],
+      developerApps: config.developerApps || [],
+      apiKeys: config.apiKeys || [],
+      oauthTokens: config.oauthTokens || [],
+      jwtConfigs: config.jwtConfigs || [],
     });
     
     this.apigeeRoutingEngines.set(node.id, routingEngine);
@@ -9637,6 +9642,57 @@ export class EmulationEngine {
    */
   public getApigeeRoutingEngine(nodeId: string): ApigeeRoutingEngine | undefined {
     return this.apigeeRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Update Apigee routing engine configuration for a node
+   * Called when configuration changes in UI
+   */
+  public updateApigeeRoutingEngine(nodeId: string): void {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'apigee') {
+      return;
+    }
+
+    const routingEngine = this.apigeeRoutingEngines.get(nodeId);
+    if (!routingEngine) {
+      // If engine doesn't exist, initialize it
+      try {
+        this.initializeApigeeRoutingEngine(node);
+      } catch (error) {
+        this.errorCollector.addError(error as Error, {
+          severity: 'critical',
+          source: 'apigee-update',
+          componentId: nodeId,
+          componentType: 'apigee',
+        });
+      }
+      return;
+    }
+
+    const config = (node.data.config || {}) as any;
+    
+    // Update configuration without full reinitialization
+    try {
+      routingEngine.updateConfig({
+        organization: config.organization,
+        environment: config.environment,
+        proxies: config.proxies || [],
+        policies: config.policies || [],
+        products: config.products || [],
+        developerApps: config.developerApps || [],
+        apiKeys: config.apiKeys || [],
+        oauthTokens: config.oauthTokens || [],
+        jwtConfigs: config.jwtConfigs || [],
+      });
+    } catch (error) {
+      this.errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'apigee-update',
+        componentId: nodeId,
+        componentType: 'apigee',
+      });
+    }
   }
 
   /**

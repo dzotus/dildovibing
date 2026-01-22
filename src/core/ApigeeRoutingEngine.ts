@@ -22,9 +22,84 @@ export interface ApigeePolicy {
   name: string;
   type: 'quota' | 'spike-arrest' | 'oauth' | 'jwt' | 'verify-api-key' | 'cors' | 'xml-to-json';
   enabled: boolean;
-  executionFlow?: 'PreFlow' | 'RequestFlow' | 'PostFlow' | 'ErrorFlow';
+  executionFlow?: 'PreFlow' | 'RequestFlow' | 'ResponseFlow' | 'PostFlow' | 'ErrorFlow';
   condition?: string; // Optional condition for conditional execution
   config?: Record<string, any>;
+}
+
+export interface APIKeyConfig {
+  key: string;
+  consumerId?: string;
+  appId?: string;
+  products?: string[];
+  expiresAt?: number;
+  createdAt?: number;
+}
+
+export interface OAuthTokenConfig {
+  token: string;
+  tokenType?: 'Bearer' | 'OAuth';
+  expiresAt?: number;
+  scopes?: string[];
+  clientId?: string;
+}
+
+export interface JWTConfig {
+  issuer: string;
+  audience?: string;
+  publicKey?: string;
+  algorithm?: string;
+  allowedIssuers?: string[];
+}
+
+/**
+ * API Product - groups proxies together for access control
+ */
+export interface ApigeeProduct {
+  id: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  proxies: string[]; // Array of proxy names
+  environments?: ('dev' | 'stage' | 'prod')[];
+  quota?: number; // Product-level quota
+  quotaInterval?: number; // seconds
+  attributes?: Record<string, string>;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+/**
+ * Developer App API Key
+ */
+export interface DeveloperAppKey {
+  id: string;
+  key: string;
+  consumerKey?: string;
+  consumerSecret?: string;
+  status?: 'approved' | 'revoked';
+  expiresAt?: number;
+  createdAt: number;
+  attributes?: Record<string, string>;
+  apiProducts?: string[]; // Array of product IDs
+}
+
+/**
+ * Developer App - represents a developer application
+ */
+export interface DeveloperApp {
+  id: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  developerId?: string;
+  developerEmail?: string;
+  status?: 'approved' | 'pending' | 'revoked';
+  apiProducts: string[]; // Array of product IDs
+  keys: DeveloperAppKey[]; // Array of API keys
+  attributes?: Record<string, string>;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ApigeeRequest {
@@ -77,8 +152,26 @@ interface SpikeArrestBucket {
 export class ApigeeRoutingEngine {
   private proxies: Map<string, ApigeeProxy> = new Map(); // proxy name -> proxy
   private policies: ApigeePolicy[] = [];
+  private products: Map<string, ApigeeProduct> = new Map(); // product id -> product
+  private developerApps: Map<string, DeveloperApp> = new Map(); // app id -> developer app
   private organization?: string;
   private environment?: string;
+  
+  // API Keys configuration (legacy, for backward compatibility)
+  private apiKeys: APIKeyConfig[] = [];
+  
+  // OAuth tokens configuration
+  private oauthTokens: OAuthTokenConfig[] = [];
+  
+  // JWT configuration
+  private jwtConfigs: JWTConfig[] = [];
+  
+  // API Key usage tracking: Map<key, {appId, requestCount, lastUsed}>
+  private keyUsageMetrics: Map<string, {
+    appId: string;
+    requestCount: number;
+    lastUsed: number;
+  }> = new Map();
   
   // Quota tracking: Map<proxyName, Map<identifier, QuotaCounter>>
   private quotaCounters: Map<string, Map<string, QuotaCounter>> = new Map();
@@ -111,16 +204,24 @@ export class ApigeeRoutingEngine {
     environment?: string;
     proxies?: ApigeeProxy[];
     policies?: ApigeePolicy[];
+    products?: ApigeeProduct[];
+    developerApps?: DeveloperApp[];
+    apiKeys?: APIKeyConfig[];
+    oauthTokens?: OAuthTokenConfig[];
+    jwtConfigs?: JWTConfig[];
   }) {
     // Clear previous state
     this.proxies.clear();
     this.policies = [];
+    this.products.clear();
+    this.developerApps.clear();
     this.quotaCounters.clear();
     this.spikeArrestBuckets.clear();
     this.apiKeyCache.clear();
     this.oauthTokenCache.clear();
     this.jwtTokenCache.clear();
     this.proxyMetrics.clear();
+    this.keyUsageMetrics.clear();
 
     this.organization = config.organization || 'archiphoenix-org';
     this.environment = config.environment || 'prod';
@@ -152,6 +253,202 @@ export class ApigeeRoutingEngine {
     // Initialize policies
     if (config.policies) {
       this.policies = config.policies.filter(p => p.enabled);
+    }
+
+    // Initialize products
+    if (config.products) {
+      for (const product of config.products) {
+        this.products.set(product.id, { ...product });
+      }
+    }
+
+    // Initialize Developer Apps
+    if (config.developerApps) {
+      for (const app of config.developerApps) {
+        this.developerApps.set(app.id, { ...app });
+        // Extract API keys from developer apps and add to apiKeys for validation
+        for (const key of app.keys) {
+          if (key.status === 'approved') {
+            this.apiKeys.push({
+              key: key.key,
+              consumerId: app.developerId || app.id,
+              appId: app.id,
+              products: key.apiProducts || app.apiProducts,
+              expiresAt: key.expiresAt,
+              createdAt: key.createdAt,
+            });
+          }
+        }
+      }
+    }
+
+    // Initialize API Keys (legacy, for backward compatibility)
+    if (config.apiKeys) {
+      this.apiKeys = [...this.apiKeys, ...config.apiKeys];
+    }
+
+    // Initialize OAuth tokens
+    if (config.oauthTokens) {
+      this.oauthTokens = config.oauthTokens;
+    }
+
+    // Initialize JWT configs
+    if (config.jwtConfigs) {
+      this.jwtConfigs = config.jwtConfigs;
+    }
+  }
+
+  /**
+   * Update configuration without full reinitialization
+   * Preserves caches and metrics state
+   */
+  public updateConfig(config: {
+    organization?: string;
+    environment?: string;
+    proxies?: ApigeeProxy[];
+    policies?: ApigeePolicy[];
+    products?: ApigeeProduct[];
+    developerApps?: DeveloperApp[];
+    apiKeys?: APIKeyConfig[];
+    oauthTokens?: OAuthTokenConfig[];
+    jwtConfigs?: JWTConfig[];
+  }): void {
+    // Update organization and environment
+    if (config.organization !== undefined) {
+      this.organization = config.organization || 'archiphoenix-org';
+    }
+    if (config.environment !== undefined) {
+      this.environment = config.environment || 'prod';
+    }
+
+    // Update proxies
+    if (config.proxies !== undefined) {
+      const existingProxyNames = new Set(this.proxies.keys());
+      const newProxyNames = new Set(config.proxies.map(p => p.name));
+
+      // Remove proxies that no longer exist
+      for (const proxyName of existingProxyNames) {
+        if (!newProxyNames.has(proxyName)) {
+          this.proxies.delete(proxyName);
+          this.quotaCounters.delete(proxyName);
+          this.spikeArrestBuckets.delete(proxyName);
+          this.proxyMetrics.delete(proxyName);
+        }
+      }
+
+      // Add or update proxies
+      for (const proxy of config.proxies) {
+        const existing = this.proxies.has(proxy.name);
+        this.proxies.set(proxy.name, { ...proxy });
+
+        // Initialize metrics if new proxy
+        if (!existing) {
+          this.proxyMetrics.set(proxy.name, {
+            requestCount: 0,
+            errorCount: 0,
+            totalLatency: 0,
+            lastRequestTime: 0,
+          });
+        }
+
+        // Update spike arrest bucket if configured
+        if (proxy.spikeArrest && proxy.spikeArrest > 0) {
+          const existingBucket = this.spikeArrestBuckets.get(proxy.name);
+          if (existingBucket) {
+            // Update rate, preserve tokens
+            existingBucket.rate = proxy.spikeArrest;
+          } else {
+            // Create new bucket
+            this.spikeArrestBuckets.set(proxy.name, {
+              tokens: proxy.spikeArrest,
+              lastRefill: Date.now(),
+              rate: proxy.spikeArrest,
+            });
+          }
+        } else {
+          // Remove bucket if spike arrest disabled
+          this.spikeArrestBuckets.delete(proxy.name);
+        }
+      }
+    }
+
+    // Update policies
+    if (config.policies !== undefined) {
+      this.policies = config.policies.filter(p => p.enabled);
+    }
+
+    // Update products
+    if (config.products !== undefined) {
+      const existingProductIds = new Set(this.products.keys());
+      const newProductIds = new Set(config.products.map(p => p.id));
+
+      // Remove products that no longer exist
+      for (const productId of existingProductIds) {
+        if (!newProductIds.has(productId)) {
+          this.products.delete(productId);
+        }
+      }
+
+      // Add or update products
+      for (const product of config.products) {
+        this.products.set(product.id, { ...product });
+      }
+    }
+
+    // Update Developer Apps
+    if (config.developerApps !== undefined) {
+      const existingAppIds = new Set(this.developerApps.keys());
+      const newAppIds = new Set(config.developerApps.map(a => a.id));
+
+      // Remove apps that no longer exist
+      for (const appId of existingAppIds) {
+        if (!newAppIds.has(appId)) {
+          this.developerApps.delete(appId);
+        }
+      }
+
+      // Rebuild apiKeys from developer apps
+      this.apiKeys = config.apiKeys || [];
+      for (const app of config.developerApps) {
+        this.developerApps.set(app.id, { ...app });
+        // Extract API keys from developer apps
+        for (const key of app.keys) {
+          if (key.status === 'approved') {
+            // Remove old key if exists
+            this.apiKeys = this.apiKeys.filter(k => k.key !== key.key);
+            // Add new key
+            this.apiKeys.push({
+              key: key.key,
+              consumerId: app.developerId || app.id,
+              appId: app.id,
+              products: key.apiProducts || app.apiProducts,
+              expiresAt: key.expiresAt,
+              createdAt: key.createdAt,
+            });
+          }
+        }
+      }
+      // Clear cache when API keys change
+      this.apiKeyCache.clear();
+    } else if (config.apiKeys !== undefined) {
+      // Update API Keys (legacy, for backward compatibility)
+      this.apiKeys = config.apiKeys;
+      // Clear cache when API keys change
+      this.apiKeyCache.clear();
+    }
+
+    // Update OAuth tokens
+    if (config.oauthTokens !== undefined) {
+      this.oauthTokens = config.oauthTokens;
+      // Clear cache when OAuth tokens change
+      this.oauthTokenCache.clear();
+    }
+
+    // Update JWT configs
+    if (config.jwtConfigs !== undefined) {
+      this.jwtConfigs = config.jwtConfigs;
+      // Clear cache when JWT configs change
+      this.jwtTokenCache.clear();
     }
   }
 
@@ -232,16 +529,22 @@ export class ApigeeRoutingEngine {
     const upstreamLatency = this.simulateUpstreamLatency(target);
     const totalLatency = Date.now() - startTime + upstreamLatency;
 
-    // Step 6: Execute PostFlow policies (CORS, transformation)
-    const postFlowPolicies = this.policies.filter(p => 
-      p.enabled && (p.executionFlow === 'PostFlow' || (!p.executionFlow && this.isPostFlowPolicy(p.type)))
-    );
+    // Step 6: Create initial response
     const response: ApigeeResponse = {
       status: 200,
       latency: totalLatency,
     };
 
-    // Apply PostFlow policies
+    // Step 7: Execute ResponseFlow policies (response transformation)
+    const responseFlowPolicies = this.policies.filter(p => 
+      p.enabled && p.executionFlow === 'ResponseFlow'
+    );
+    this.executePolicies(responseFlowPolicies, request, match, 'ResponseFlow', response);
+
+    // Step 8: Execute PostFlow policies (CORS, final transformation)
+    const postFlowPolicies = this.policies.filter(p => 
+      p.enabled && (p.executionFlow === 'PostFlow' || (!p.executionFlow && this.isPostFlowPolicy(p.type)))
+    );
     this.executePolicies(postFlowPolicies, request, match, 'PostFlow', response);
 
     // Update metrics
@@ -328,7 +631,7 @@ export class ApigeeRoutingEngine {
     policies: ApigeePolicy[],
     request: ApigeeRequest,
     match: ProxyMatch,
-    flow: 'PreFlow' | 'RequestFlow' | 'PostFlow' | 'ErrorFlow',
+    flow: 'PreFlow' | 'RequestFlow' | 'ResponseFlow' | 'PostFlow' | 'ErrorFlow',
     response?: ApigeeResponse
   ): { blocked: boolean; status?: number; error?: string } {
     for (const policy of policies) {
@@ -343,6 +646,8 @@ export class ApigeeRoutingEngine {
       } else if (flow === 'RequestFlow') {
         const result = this.executeRequestFlowPolicy(policy, request, match);
         if (result.blocked) return result;
+      } else if (flow === 'ResponseFlow' && response) {
+        this.executeResponseFlowPolicy(policy, request, match, response);
       } else if (flow === 'PostFlow' && response) {
         this.executePostFlowPolicy(policy, request, match, response);
       }
@@ -450,8 +755,25 @@ export class ApigeeRoutingEngine {
 
     if (policy.type === 'quota') {
       // Use policy config or proxy config
-      const quota = policy.config?.quota || proxy.quota;
-      const quotaInterval = policy.config?.interval || proxy.quotaInterval;
+      const quota = policy.config?.quota || policy.config?.allowCount || proxy.quota;
+      let quotaInterval = policy.config?.interval || policy.config?.quotaInterval || proxy.quotaInterval;
+      const timeUnit = policy.config?.timeUnit || 'second';
+      
+      // Convert interval to seconds based on time unit
+      if (quotaInterval) {
+        switch (timeUnit) {
+          case 'minute':
+            quotaInterval = quotaInterval * 60;
+            break;
+          case 'hour':
+            quotaInterval = quotaInterval * 3600;
+            break;
+          case 'day':
+            quotaInterval = quotaInterval * 86400;
+            break;
+          // 'second' is default, no conversion needed
+        }
+      }
       
       if (quota && quotaInterval) {
         if (!this.checkQuota(proxy.name, identifier, quota, quotaInterval)) {
@@ -466,9 +788,15 @@ export class ApigeeRoutingEngine {
 
     if (policy.type === 'spike-arrest') {
       // Use policy config or proxy config
-      const rate = policy.config?.rate || proxy.spikeArrest;
+      let rate = policy.config?.rate || proxy.spikeArrest;
+      const timeUnit = policy.config?.timeUnit || 'second';
       
+      // Convert rate to requests per second based on time unit
       if (rate && rate > 0) {
+        if (timeUnit === 'minute') {
+          rate = rate / 60; // Convert per minute to per second
+        }
+        
         if (!this.checkSpikeArrest(proxy.name, rate)) {
           return {
             blocked: true,
@@ -480,6 +808,51 @@ export class ApigeeRoutingEngine {
     }
 
     return { blocked: false };
+  }
+
+  /**
+   * Execute a single ResponseFlow policy
+   */
+  private executeResponseFlowPolicy(
+    policy: ApigeePolicy,
+    request: ApigeeRequest,
+    match: ProxyMatch,
+    response: ApigeeResponse
+  ): void {
+    // ResponseFlow policies can transform response body, headers, status
+    if (policy.type === 'xml-to-json') {
+      // Transformation would happen here
+      // For simulation, we just mark it
+      if (!response.headers) {
+        response.headers = {};
+      }
+      response.headers['Content-Type'] = 'application/json';
+      
+      // Apply XML to JSON transformation options from config
+      const options = policy.config?.options;
+      const attributes = policy.config?.attributes || 'prefix';
+      const namespaces = policy.config?.namespaces || 'prefix';
+      
+      // In a real implementation, these would affect the transformation
+      // For simulation, we just mark that transformation occurred
+      if (options || attributes !== 'prefix' || namespaces !== 'prefix') {
+        // Transformation applied with custom options
+      }
+    }
+
+    // Custom response transformation based on policy config
+    if (policy.config?.transformResponse) {
+      // Apply custom transformations from config
+      if (policy.config.statusCode) {
+        response.status = policy.config.statusCode;
+      }
+      if (policy.config.responseHeaders) {
+        if (!response.headers) {
+          response.headers = {};
+        }
+        Object.assign(response.headers, policy.config.responseHeaders);
+      }
+    }
   }
 
   /**
@@ -495,18 +868,19 @@ export class ApigeeRoutingEngine {
       if (!response.headers) {
         response.headers = {};
       }
-      response.headers['Access-Control-Allow-Origin'] = policy.config?.origins?.[0] || '*';
-      response.headers['Access-Control-Allow-Methods'] = policy.config?.methods?.join(', ') || 'GET, POST, PUT, DELETE';
-      response.headers['Access-Control-Allow-Headers'] = policy.config?.headers?.join(', ') || 'Content-Type, Authorization';
-    }
-
-    if (policy.type === 'xml-to-json') {
-      // Transformation would happen here
-      // For simulation, we just mark it
-      if (!response.headers) {
-        response.headers = {};
+      const origins = policy.config?.origins || ['*'];
+      const methods = policy.config?.methods || ['GET', 'POST', 'PUT', 'DELETE'];
+      const headers = policy.config?.headers || ['Content-Type', 'Authorization'];
+      const maxAge = policy.config?.maxAge || 3600;
+      const allowCredentials = policy.config?.allowCredentials || false;
+      
+      response.headers['Access-Control-Allow-Origin'] = Array.isArray(origins) ? origins[0] : (origins || '*');
+      response.headers['Access-Control-Allow-Methods'] = Array.isArray(methods) ? methods.join(', ') : methods;
+      response.headers['Access-Control-Allow-Headers'] = Array.isArray(headers) ? headers.join(', ') : headers;
+      response.headers['Access-Control-Max-Age'] = maxAge.toString();
+      if (allowCredentials) {
+        response.headers['Access-Control-Allow-Credentials'] = 'true';
       }
-      response.headers['Content-Type'] = 'application/json';
     }
   }
 
@@ -585,64 +959,150 @@ export class ApigeeRoutingEngine {
   }
 
   /**
-   * Validate API key (simplified validation)
+   * Validate API key against configured keys
    */
   private validateApiKey(apiKey: string): boolean {
+    if (!apiKey || apiKey.trim() === '') {
+      return false;
+    }
+
     // Check cache first
     const cached = this.apiKeyCache.get(apiKey);
     if (cached && cached.expiresAt > Date.now()) {
+      // Track usage
+      if (cached.valid && cached.consumerId) {
+        this.trackKeyUsage(apiKey, cached.consumerId);
+      }
       return cached.valid;
     }
 
-    // Simplified validation: API key should be non-empty
-    // In real Apigee, this would check against registered API keys
-    const valid = apiKey.length >= 10; // Basic validation
+    // Check against configured API keys
+    const keyConfig = this.apiKeys.find(k => k.key === apiKey);
+    if (!keyConfig) {
+      this.apiKeyCache.set(apiKey, {
+        valid: false,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return false;
+    }
     
-    // Cache result (5 minutes)
+    // Check expiration if configured
+    if (keyConfig.expiresAt && keyConfig.expiresAt < Date.now()) {
+      this.apiKeyCache.set(apiKey, {
+        valid: false,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+      });
+      return false;
+    }
+    
+    // Cache valid result (5 minutes)
     this.apiKeyCache.set(apiKey, {
-      valid,
+      valid: true,
+      consumerId: keyConfig.consumerId,
       expiresAt: Date.now() + 5 * 60 * 1000,
     });
-
-    return valid;
+    
+    // Track usage
+    if (keyConfig.appId) {
+      this.trackKeyUsage(apiKey, keyConfig.appId);
+    }
+    
+    return true;
   }
 
   /**
-   * Validate OAuth token (simplified validation)
+   * Track API key usage for metrics
+   */
+  private trackKeyUsage(apiKey: string, appId: string): void {
+    const existing = this.keyUsageMetrics.get(apiKey);
+    if (existing) {
+      existing.requestCount++;
+      existing.lastUsed = Date.now();
+    } else {
+      this.keyUsageMetrics.set(apiKey, {
+        appId,
+        requestCount: 1,
+        lastUsed: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * Validate OAuth token against configured tokens
    */
   private validateOAuthToken(token: string): boolean {
+    if (!token || token.trim() === '') {
+      return false;
+    }
+
     // Check cache first
     const cached = this.oauthTokenCache.get(token);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.valid;
     }
 
-    // Simplified validation: token should be non-empty
-    // In real Apigee, this would validate against OAuth provider
-    const valid = token.length >= 20; // Basic validation
+    // Check against configured OAuth tokens
+    const tokenConfig = this.oauthTokens.find(t => t.token === token);
+    if (!tokenConfig) {
+      this.oauthTokenCache.set(token, {
+        valid: false,
+        expiresAt: Date.now() + 60 * 60 * 1000,
+      });
+      return false;
+    }
+
+    // Check expiration if configured
+    if (tokenConfig.expiresAt && tokenConfig.expiresAt < Date.now()) {
+      this.oauthTokenCache.set(token, {
+        valid: false,
+        expiresAt: Date.now() + 60 * 60 * 1000,
+      });
+      return false;
+    }
     
-    // Cache result (1 hour, typical OAuth token lifetime)
+    // Cache valid result (1 hour, typical OAuth token lifetime)
     this.oauthTokenCache.set(token, {
-      valid,
+      valid: true,
       expiresAt: Date.now() + 60 * 60 * 1000,
     });
-
-    return valid;
+    return true;
   }
 
   /**
-   * Validate JWT token (simplified validation)
+   * Validate JWT token against configured JWT configs
    */
   private validateJWTToken(token: string, expectedIssuer: string): boolean {
+    if (!token || token.trim() === '') {
+      return false;
+    }
+
     // Check cache first
     const cached = this.jwtTokenCache.get(token);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.valid && cached.issuer === expectedIssuer;
     }
 
-    // Simplified validation: token should be non-empty and contain issuer
-    // In real Apigee, this would decode and validate JWT signature
-    const valid = token.length >= 20; // Basic validation
+    // Find JWT config for this issuer
+    const jwtConfig = this.jwtConfigs.find(c => c.issuer === expectedIssuer);
+    if (!jwtConfig) {
+      // If no config found, check if issuer is in allowed issuers
+      const hasAllowedIssuers = this.jwtConfigs.some(c => 
+        c.allowedIssuers?.includes(expectedIssuer) || c.issuer === expectedIssuer
+      );
+      if (!hasAllowedIssuers) {
+        this.jwtTokenCache.set(token, {
+          valid: false,
+          issuer: expectedIssuer,
+          expiresAt: Date.now() + 60 * 60 * 1000,
+        });
+        return false;
+      }
+    }
+
+    // Simplified JWT validation: check token structure (header.payload.signature)
+    // In real Apigee, this would decode and validate JWT signature using public key
+    const parts = token.split('.');
+    const valid = parts.length === 3; // JWT has 3 parts
     
     // Cache result (1 hour, typical JWT lifetime)
     this.jwtTokenCache.set(token, {
@@ -692,11 +1152,97 @@ export class ApigeeRoutingEngine {
   }
 
   /**
+   * Get all products
+   */
+  public getProducts(): ApigeeProduct[] {
+    return Array.from(this.products.values());
+  }
+
+  /**
+   * Get product by ID
+   */
+  public getProduct(productId: string): ApigeeProduct | null {
+    return this.products.get(productId) || null;
+  }
+
+  /**
+   * Get products for a proxy
+   */
+  public getProductsForProxy(proxyName: string): ApigeeProduct[] {
+    return Array.from(this.products.values()).filter(p => p.proxies.includes(proxyName));
+  }
+
+  /**
+   * Get all developer apps
+   */
+  public getDeveloperApps(): DeveloperApp[] {
+    return Array.from(this.developerApps.values());
+  }
+
+  /**
+   * Get developer app by ID
+   */
+  public getDeveloperApp(appId: string): DeveloperApp | null {
+    return this.developerApps.get(appId) || null;
+  }
+
+  /**
+   * Get developer apps for a product
+   */
+  public getDeveloperAppsForProduct(productId: string): DeveloperApp[] {
+    return Array.from(this.developerApps.values()).filter(app => 
+      app.apiProducts.includes(productId)
+    );
+  }
+
+  /**
+   * Generate a new API key
+   */
+  public generateApiKey(): string {
+    // Generate a random API key (32 characters, alphanumeric)
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let key = '';
+    for (let i = 0; i < 32; i++) {
+      key += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return key;
+  }
+
+  /**
+   * Get API key usage metrics
+   */
+  public getKeyUsageMetrics(apiKey: string): {
+    appId: string;
+    requestCount: number;
+    lastUsed: number;
+  } | null {
+    return this.keyUsageMetrics.get(apiKey) || null;
+  }
+
+  /**
+   * Get all key usage metrics for an app
+   */
+  public getAppKeyUsageMetrics(appId: string): Map<string, {
+    appId: string;
+    requestCount: number;
+    lastUsed: number;
+  }> {
+    const result = new Map();
+    for (const [key, metrics] of this.keyUsageMetrics.entries()) {
+      if (metrics.appId === appId) {
+        result.set(key, metrics);
+      }
+    }
+    return result;
+  }
+
+  /**
    * Get statistics
    */
   public getStats(): {
     proxies: number;
     policies: number;
+    products: number;
     totalRequests: number;
     totalErrors: number;
     avgLatency: number;
@@ -716,6 +1262,7 @@ export class ApigeeRoutingEngine {
     return {
       proxies: this.proxies.size,
       policies: this.policies.length,
+      products: this.products.size,
       totalRequests,
       totalErrors,
       avgLatency,

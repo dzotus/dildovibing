@@ -47,6 +47,12 @@
   - Retry logic, timeout handling, аутентификация
   - Rate limiting, CORS, IP restriction, полный набор метрик
 
+- **[Apigee API Gateway](./integration/apigee.md)** - Платформа управления API от Google Cloud
+  - API Proxies, Policies, API Products, Developer Apps
+  - Execution Flows (PreFlow, RequestFlow, ResponseFlow, PostFlow)
+  - Quota, Spike Arrest, OAuth, JWT, API Keys
+  - CORS, XML to JSON transformation, полный набор метрик
+
 ## Формат документации
 
 Каждый документ компонента содержит следующие разделы:
@@ -121,6 +127,7 @@
 - **Azure Service Bus:** [Документация Azure Service Bus](./messaging/azure-service-bus.md)
 - **Google Cloud Pub/Sub:** [Документация Google Cloud Pub/Sub](./messaging/gcp-pubsub.md)
 - **Kong Gateway:** [Документация Kong Gateway](./integration/kong-gateway.md)
+- **Apigee API Gateway:** [Документация Apigee API Gateway](./integration/apigee.md)
 
 ## Обновления
 
@@ -143,3 +150,4 @@
 - [Официальная документация Azure Service Bus](https://docs.microsoft.com/azure/service-bus-messaging/)
 - [Официальная документация Google Cloud Pub/Sub](https://cloud.google.com/pubsub/docs)
 - [Официальная документация Kong Gateway](https://docs.konghq.com/gateway/)
+- [Официальная документация Apigee API Gateway](https://cloud.google.com/apigee/docs)

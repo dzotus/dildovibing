@@ -321,7 +321,7 @@ export class TensorFlowServingEmulationEngine {
       }
     }
     
-    this.updateModelMetrics();
+    this.updateModelSpecificMetrics();
   }
   
   /**
