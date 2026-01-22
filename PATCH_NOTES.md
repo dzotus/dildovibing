@@ -1,5 +1,400 @@
 # Patch Notes
 
+## Версия 0.1.8e - Kong Gateway: UI формы для плагинов, поиск и подтверждения удаления
+
+### Обзор изменений
+**Kong Gateway: UI формы для плагинов, поиск и подтверждения удаления**: Реализованы UI формы для конфигурации популярных плагинов Kong Gateway вместо JSON редактора. Добавлены специализированные формы для rate-limiting, key-auth, jwt, cors, ip-restriction, file-log, http-log с полями согласно Kong Admin API. Улучшено отображение Plugins с показом scope (global, service, route, consumer) через Badge, enabled/disabled статуса через Switch и визуализации связей. Добавлен поиск во всех списках (Services, Routes, Upstreams, Consumers, Plugins) с фильтрацией по имени и другим полям. Реализованы подтверждения удаления через AlertDialog для всех сущностей (Services, Routes, Upstreams, Consumers, Plugins) с проверкой связанных сущностей. Добавлены toast уведомления для всех операций (создание, обновление, удаление) с информативными сообщениями. Исправлена индексация при использовании фильтрованных списков для корректной работы редактирования и удаления. Все изменения направлены на улучшение UX, повышение симулятивности и соответствие реальному поведению Kong Gateway.
+
+**Ключевые достижения**: Реализованы UI формы для 7 популярных плагинов (rate-limiting, key-auth, jwt, cors, ip-restriction, file-log, http-log) с поддержкой всех основных полей конфигурации. Для неподдерживаемых плагинов сохранен JSON редактор как fallback. Добавлен поиск с фильтрацией для всех 5 основных сущностей Kong Gateway. Реализованы подтверждения удаления с проверкой зависимостей (например, нельзя удалить Service с Routes, Upstream с Services). Улучшена навигация и UX с toast уведомлениями и информативными сообщениями об ошибках.
+
+### Ключевые изменения
+
+#### UI формы для плагинов ✅
+- ✅ **Rate Limiting Plugin**:
+  - Поля: minute, hour, day limits
+  - Limit by (consumer, ip, credential)
+  - Policy (local, redis, cluster)
+  - Redis configuration (host, port, password, database) при выборе redis policy
+
+- ✅ **Key Auth Plugin**:
+  - Key names (comma-separated)
+  - Hide credentials toggle
+
+- ✅ **JWT Plugin**:
+  - Secret is base64 toggle
+  - Run on (first, all)
+
+- ✅ **CORS Plugin**:
+  - Origins (comma-separated, * for all)
+  - Methods (comma-separated)
+  - Headers и Exposed Headers
+  - Credentials toggle
+  - Max age (seconds)
+
+- ✅ **IP Restriction Plugin**:
+  - Whitelist (comma-separated IPs)
+  - Blacklist (comma-separated IPs)
+
+- ✅ **File Log Plugin**:
+  - Path
+  - Reopen toggle
+
+- ✅ **HTTP Log Plugin**:
+  - HTTP endpoint
+  - Method (POST, PUT, PATCH)
+  - Timeout и Keepalive (ms)
+
+- ✅ **Fallback для других плагинов**:
+  - JSON редактор сохранен для неподдерживаемых плагинов
+  - Поддержка request-transformer, response-transformer и других через JSON
+
+#### Улучшение отображения Plugins ✅
+- ✅ **Scope отображение**:
+  - Badge для scope: Global, Service, Route, Consumer
+  - Цветовая индикация scope
+
+- ✅ **Enabled/Disabled статус**:
+  - Switch для переключения enabled/disabled
+  - Визуальная индикация состояния
+
+- ✅ **Визуализация связей**:
+  - Показ связанного Service/Route/Consumer в описании плагина
+  - Информация о scope плагина
+
+#### Поиск и фильтрация ✅
+- ✅ **Поиск в Services**:
+  - Поиск по name и host
+  - Фильтрация в реальном времени
+  - Сообщение "No services found" при отсутствии результатов
+
+- ✅ **Поиск в Routes**:
+  - Поиск по name, paths, service
+  - Фильтрация в реальном времени
+
+- ✅ **Поиск в Upstreams**:
+  - Поиск по name
+  - Фильтрация в реальном времени
+
+- ✅ **Поиск в Consumers**:
+  - Поиск по username, custom_id
+  - Фильтрация в реальном времени
+
+- ✅ **Поиск в Plugins**:
+  - Поиск по name, service, route, consumer
+  - Фильтрация в реальном времени
+
+#### Подтверждения удаления ✅
+- ✅ **Delete Service Confirmation**:
+  - Проверка связанных Routes
+  - Предупреждение при наличии Routes
+  - AlertDialog с описанием действия
+
+- ✅ **Delete Route Confirmation**:
+  - AlertDialog с информацией о Route
+  - Подтверждение перед удалением
+
+- ✅ **Delete Upstream Confirmation**:
+  - Проверка связанных Services
+  - Предупреждение при наличии Services
+  - AlertDialog с описанием действия
+
+- ✅ **Delete Plugin Confirmation**:
+  - AlertDialog с информацией о Plugin
+  - Подтверждение перед удалением
+
+- ✅ **Delete Consumer Confirmation** (уже было):
+  - Проверка связанных Credentials
+  - Предупреждение при наличии Credentials
+
+- ✅ **Delete Credential Confirmation** (уже было):
+  - AlertDialog с информацией о типе Credential
+
+#### Toast уведомления ✅
+- ✅ **Успешные операции**:
+  - showSuccess для создания Service, Route, Upstream, Consumer, Plugin
+  - showSuccess для обновления всех сущностей
+  - showSuccess для удаления всех сущностей
+  - Информативные сообщения с именами сущностей
+
+- ✅ **Ошибки**:
+  - showError для валидации (дубликаты, обязательные поля)
+  - showError для операций с зависимостями (нельзя удалить Service с Routes)
+  - Информативные сообщения об ошибках
+
+#### Исправление индексации ✅
+- ✅ **Фильтрованные списки**:
+  - Использование originalIndex для корректной работы с фильтрованными списками
+  - findIndex для поиска оригинального индекса по id или уникальным полям
+  - Исправлена индексация для Services, Routes, Upstreams, Consumers, Plugins
+
+- ✅ **Редактирование**:
+  - Корректная работа editingServiceIndex, editingRouteIndex, editingUpstreamIndex, editingConsumerIndex, editingPluginIndex
+  - Исправлена индексация для всех операций редактирования
+
+- ✅ **Удаление**:
+  - Корректная работа confirmRemoveService, confirmRemoveRoute, confirmRemoveUpstream, confirmRemovePlugin
+  - Исправлена индексация для всех операций удаления
+
+#### Технические улучшения ✅
+- ✅ **updatePluginConfig функция**:
+  - Поддержка вложенных путей конфигурации (например, redis.host)
+  - Автоматическое создание вложенных объектов
+  - Безопасное обновление конфигурации
+
+- ✅ **Фильтрация функций**:
+  - filteredServices, filteredRoutes, filteredUpstreams, filteredConsumers, filteredPlugins
+  - Эффективная фильтрация в реальном времени
+  - Сохранение оригинальных индексов для корректной работы
+
+- ✅ **Состояние поиска**:
+  - serviceSearch, routeSearch, upstreamSearch, consumerSearch, pluginSearch
+  - Независимое состояние для каждого списка
+
+---
+
+## Версия 0.1.8d - Kong Gateway: Расширение UI для Consumers и улучшение UX
+
+### Обзор изменений
+**Kong Gateway: Расширение UI для Consumers и улучшение UX**: Реализованы полные формы редактирования для Consumers со всеми полями согласно Kong Admin API. Расширен интерфейс Consumer в KongConfigAdvanced.tsx до полного соответствия KongConsumer из KongRoutingEngine. Добавлена полная форма редактирования Consumer со всеми полями (username, custom_id, tags) с валидацией на дубликаты. Реализованы полные формы редактирования Credentials для всех типов аутентификации: key-auth, jwt, oauth2, basic-auth, hmac-auth, ldap-auth, mtls-auth с специфичными полями для каждого типа. Добавлена валидация полей (проверка на дубликаты username и custom_id, обязательность username). Добавлены toast уведомления для всех операций с Consumers (создание, обновление, удаление, добавление/удаление credentials). Добавлены подтверждения удаления через AlertDialog для Consumers и Credentials. Улучшено отображение Consumers с показом количества credentials, типов credentials (с количеством каждого типа), tags (badges) и связанных метаданных. Все изменения направлены на повышение симулятивности, улучшение UX и соответствие реальному поведению Kong Gateway.
+
+**Ключевые достижения**: Расширены интерфейсы Service, KongRoute и Upstream в KongConfigAdvanced.tsx до полного соответствия типам из KongRoutingEngine. Реализована полная форма редактирования Service с поддержкой всех полей (protocol, host, port, path, timeouts, retries, upstream) и отображением связанных Routes. Реализована полная форма редактирования Route с поддержкой всех основных полей (name, methods, hosts, paths, protocols, regex_priority, preserve_host, request_buffering, response_buffering, https_redirect_status_code, path_handling, strip_path, service). Реализована полная форма редактирования Upstream с поддержкой всех полей включая health checks configuration (active и passive со всеми вложенными полями), slots, hash_on, hash_fallback и связанные параметры. Реализована полная форма редактирования Target с поддержкой всех полей (target, weight, tags). Добавлены функции getServiceRoutesCount и getServiceRoutes для подсчета и отображения связанных Routes. Добавлена функция updateUpstreamTarget для редактирования полей target. Улучшено отображение Services, Routes и Upstreams с показом связанных сущностей, статусов, health status и метаданных. Все формы адаптивны и используют grid layout для оптимального использования пространства.
+
+### Ключевые изменения
+
+#### Синхронизация конфигурации ✅
+- ✅ **updateConfig в KongRoutingEngine**:
+  - Метод updateConfig обновляет конфигурацию без полной переинициализации
+  - Сохраняет состояние: counters, connections, health checks, circuit breakers
+  - Поддерживает частичное обновление (только измененные сущности)
+  - Удаляет сущности, отсутствующие в новой конфигурации
+  - Пересоздает health check timers при изменении upstreams
+
+- ✅ **Синхронизация в EmulationEngine**:
+  - Добавлен метод updateKongRoutingEngine(nodeId: string)
+  - Метод вызывается при изменениях конфигурации из UI
+  - Поддержка в useEmulationStore для доступа из компонентов
+
+- ✅ **Синхронизация в UI**:
+  - useEffect в KongConfigAdvanced синхронизирует конфигурацию при изменениях
+  - Автоматическое обновление routing engine при изменении services, routes, upstreams, consumers, plugins
+  - Использование useEmulationStore для доступа к движку
+
+#### Расширение типов данных ✅
+- ✅ **KongService**: добавлены все поля (protocol, host, port, path, connect_timeout, write_timeout, read_timeout, retries, tags, enabled, ca_certificates, client_certificate, tls_verify, tls_verify_depth)
+- ✅ **KongRoute**: добавлены все поля (hosts, snis, sources, destinations, regex_priority, preserve_host, request_buffering, response_buffering, https_redirect_status_code, path_handling, strip_path, methods, protocols, tags)
+- ✅ **KongUpstream**: добавлены все поля healthchecks (active и passive со всеми вложенными полями), slots, hash_on, hash_fallback, hash_on_header, hash_fallback_header, hash_on_cookie, hash_on_cookie_path
+- ✅ **KongUpstreamTarget**: добавлены поля (tags, created_at)
+- ✅ **KongConsumer**: добавлены поля (tags, created_at, поддержка custom_id)
+- ✅ **KongConsumerCredential**: расширен для всех типов (key-auth, jwt, oauth2, basic-auth, hmac-auth, ldap-auth, mtls-auth)
+- ✅ **KongPlugin**: добавлены все поля (instance_name, protocols, consumer_group, tags, ordering, run_on, created_at)
+
+#### Health Checks для Upstream Targets ✅
+- ✅ **Active Health Checks**:
+  - Реализованы активные проверки здоровья через интервалы
+  - Настраиваемые интервалы, таймауты, thresholds для healthy/unhealthy
+  - Поддержка HTTP и TCP проверок
+  - Автоматическое обновление health status targets
+  - Учет health status при load balancing
+
+- ✅ **Passive Health Checks**:
+  - Пассивные проверки на основе результатов реальных запросов
+  - Отслеживание successes и failures
+  - Автоматическое обновление health status при достижении thresholds
+  - Интеграция с routeRequest для записи результатов
+
+#### Circuit Breakers ✅
+- ✅ **Circuit Breaker Implementation**:
+  - Три состояния: closed, open, half-open
+  - Автоматический переход в open при превышении failure threshold (5 failures)
+  - Переход в half-open после timeout (30 секунд)
+  - Закрытие circuit после success threshold (2 успешных запроса)
+  - Учет circuit breaker состояния при выборе upstream targets
+  - Отдельные circuit breakers для каждого target
+
+#### Retry Logic ✅
+- ✅ **Retry Implementation**:
+  - Retry для failed requests с учетом конфигурации Service.retries
+  - Retry при server errors (status >= 500)
+  - Retry при gateway timeouts (status 504)
+  - Симуляция задержки между retry attempts
+  - Учет retry attempts в latency метриках
+
+#### Timeout Handling ✅
+- ✅ **Timeout Implementation**:
+  - Connect timeout (connect_timeout из Service)
+  - Write timeout (write_timeout из Service)
+  - Read timeout (read_timeout из Service)
+  - Симуляция timeout errors с соответствующими статусами (504)
+  - Учет timeout в latency метриках
+  - Дефолтные значения: 60000ms для всех таймаутов
+
+#### Удаление хардкода ✅
+- ✅ **Удален хардкод дефолтных плагинов**:
+  - Удален хардкод трех дефолтных плагинов (rate-limiting, key-auth, cors)
+  - Используется пустой массив по умолчанию
+  - Плагины создаются только через UI
+
+#### Адаптивность UI ✅
+- ✅ **Адаптивные табы**:
+  - Табы используют flex-wrap для переноса на новую строку
+  - flex-shrink-0 для предотвращения сжатия табов
+  - Адаптивность работает на всех размерах экранов
+
+#### Обратная совместимость ✅
+- ✅ **Backward Compatibility**:
+  - Поддержка старых полей (stripPath и strip_path, method и methods, path и paths)
+  - Автоматическое преобразование старых форматов в новые
+  - Сохранение работоспособности существующих конфигураций
+
+#### Расширение UI для Services ✅
+- ✅ **Полная форма редактирования Service**:
+  - Расширен интерфейс Service до полного соответствия KongService из KongRoutingEngine
+  - Добавлены все поля: protocol, host, port, path, connect_timeout, write_timeout, read_timeout, retries, enabled, upstream, tags
+  - Выбор upstream из списка доступных upstreams
+  - Отображение связанных Routes в форме редактирования
+  - Адаптивная grid layout для полей формы
+
+- ✅ **Улучшенное отображение Services**:
+  - Показ количества связанных Routes
+  - Показ статуса (enabled/disabled)
+  - Показ связанного upstream
+  - Формирование URL из protocol, host, port, path если url не задан
+  - Редактирование имени по клику
+  - Кнопка Edit/Hide для раскрытия/скрытия формы редактирования
+
+#### Расширение UI для Routes ✅
+- ✅ **Полная форма редактирования Route**:
+  - Расширен интерфейс KongRoute до полного соответствия KongRoute из KongRoutingEngine
+  - Добавлены все основные поля: name, methods, hosts, paths, protocols, regex_priority, preserve_host, request_buffering, response_buffering, https_redirect_status_code, path_handling, strip_path, service
+  - Поддержка множественных методов и путей
+  - Динамическое добавление/удаление hosts
+  - Выбор protocols через чекбоксы
+  - Выбор service из списка доступных services
+  - Адаптивная grid layout для полей формы
+
+- ✅ **Улучшенное отображение Routes**:
+  - Показ связанного Service
+  - Показ hosts если они заданы
+  - Показ метода и пути
+  - Редактирование через кнопку Edit/Hide
+  - Поддержка backward compatibility (path/method для старых конфигураций)
+
+#### Расширение UI для Consumers ✅
+- ✅ **Полная форма редактирования Consumer**:
+  - Расширен интерфейс Consumer до полного соответствия KongConsumer из KongRoutingEngine
+  - Добавлены все поля: username, custom_id, tags
+  - Валидация на дубликаты username и custom_id
+  - Обязательность поля username
+  - Редактирование tags через comma-separated строку
+  - Поддержка backward compatibility (customId и custom_id)
+  - Адаптивная grid layout для полей формы
+
+- ✅ **Полные формы редактирования Credentials**:
+  - UI для всех типов: key-auth, jwt, oauth2, basic-auth, hmac-auth, ldap-auth, mtls-auth
+  - Специфичные поля для каждого типа:
+    - key-auth: key
+    - jwt: secret, algorithm (HS256/HS384/HS512/RS256/RS384/RS512/ES256/ES384/ES512), rsa_public_key
+    - oauth2: name, client_id, client_secret
+    - basic-auth: username, password
+    - hmac-auth: username, secret
+    - ldap-auth: ldap_host, ldap_port, start_tls
+    - mtls-auth: certificate
+  - Функция updateConsumerCredential для редактирования полей credentials
+  - Автоматическое создание дефолтных значений при добавлении credential
+
+- ✅ **Валидация полей**:
+  - Проверка на дубликаты username при создании и редактировании
+  - Проверка на дубликаты custom_id при создании и редактировании
+  - Проверка обязательности username
+  - Toast уведомления об ошибках валидации
+
+- ✅ **Toast уведомления**:
+  - Успешное создание Consumer
+  - Успешное удаление Consumer
+  - Успешное добавление Credential
+  - Успешное удаление Credential
+  - Ошибки валидации (дубликаты, обязательные поля)
+
+- ✅ **Подтверждения удаления**:
+  - AlertDialog для подтверждения удаления Consumer
+  - AlertDialog для подтверждения удаления Credential
+  - Предупреждение при попытке удалить Consumer с credentials
+  - Деструктивный стиль кнопок удаления
+
+- ✅ **Улучшенное отображение Consumers**:
+  - Показ количества credentials
+  - Показ типов credentials с количеством каждого типа (badges)
+  - Показ tags (badges)
+  - Показ custom_id если задан
+  - Редактирование через кнопку Edit/Hide
+  - Сообщение "No consumers configured" когда список пуст
+  - Сообщение "No credentials configured" когда credentials отсутствуют
+
+#### Расширение UI для Upstreams ✅
+- ✅ **Полная форма редактирования Upstream**:
+  - Расширен интерфейс Upstream до полного соответствия KongUpstream из KongRoutingEngine
+  - Добавлены все поля: name, algorithm, slots, hash_on, hash_fallback, hash_on_header, hash_fallback_header, hash_on_cookie, hash_on_cookie_path, tags
+  - Полная конфигурация Health Checks:
+    - Active Health Checks: type, http_path, timeout, concurrency, healthy thresholds (interval, successes, http_statuses, timeouts), unhealthy thresholds (interval, timeouts, http_statuses, tcp_failures, http_failures)
+    - Passive Health Checks: type, healthy thresholds (successes, http_statuses, timeouts), unhealthy thresholds (timeouts, http_statuses, tcp_failures, http_failures)
+  - Условное отображение полей hash_on_header, hash_fallback_header, hash_on_cookie, hash_on_cookie_path в зависимости от выбранных значений hash_on и hash_fallback
+  - Адаптивная grid layout для полей формы
+  - Подсказки и описания для всех полей
+
+- ✅ **Полная форма редактирования Target**:
+  - Расширен интерфейс UpstreamTarget до полного соответствия KongUpstreamTarget из KongRoutingEngine
+  - Добавлены все поля: target, weight, tags
+  - Редактирование target (host:port)
+  - Редактирование weight
+  - Отображение tags
+  - Health status отображается из конфигурации
+
+- ✅ **Улучшенное отображение Upstreams**:
+  - Показ количества targets и healthy targets
+  - Показ алгоритма балансировки нагрузки
+  - Показ количества связанных Services
+  - Отображение health status для каждого target
+  - Визуализация связей (отображение связанных Services в форме редактирования)
+  - Использование Card компонента для улучшенного UI
+  - Редактирование через кнопку Edit/Hide
+
+### Изменённые файлы
+- `src/core/KongRoutingEngine.ts` - добавлен updateConfig, расширены типы, реализованы health checks, circuit breakers, retry logic, timeout handling
+- `src/core/EmulationEngine.ts` - добавлен метод updateKongRoutingEngine
+- `src/store/useEmulationStore.ts` - добавлен метод updateKongRoutingEngine в интерфейс и реализацию
+- `src/components/config/integration/KongConfigAdvanced.tsx` - удален хардкод плагинов, добавлена синхронизация через useEffect, адаптивные табы, расширены интерфейсы Service, KongRoute, Upstream и Consumer, добавлены полные формы редактирования для Services, Routes, Upstreams и Consumers, добавлены полные формы для всех типов Credentials, добавлены валидация, toast уведомления и подтверждения удаления, добавлена функция updateUpstreamTarget, добавлена функция updateConsumerCredential
+
+### Статистика изменений
+- **~400 строк** кода добавлено в `KongRoutingEngine.ts`
+- **~800 строк** кода добавлено в `KongConfigAdvanced.tsx` для расширения UI Services, Routes, Upstreams и Consumers
+- **~30 строк** кода добавлено в `EmulationEngine.ts`
+- **~10 строк** кода добавлено в `useEmulationStore.ts`
+- **~15 строк** кода изменено в `KongConfigAdvanced.tsx`
+- **8 расширенных интерфейсов** типов данных (Service, KongRoute, Upstream, UpstreamTarget, KongConsumer, KongConsumerCredential, KongPlugin)
+- **4 новые функции** симуляции (health checks, circuit breakers, retry, timeout)
+- **2 новые функции** updateUpstreamTarget и updateConsumerCredential для редактирования полей
+- **7 типов Credentials** с полными формами редактирования (key-auth, jwt, oauth2, basic-auth, hmac-auth, ldap-auth, mtls-auth)
+- **2 AlertDialog** для подтверждений удаления (Consumer и Credential)
+
+### Улучшения симулятивности
+- ✅ Синхронизация конфигурации работает в реальном времени
+- ✅ Health checks влияют на выбор upstream targets
+- ✅ Circuit breakers предотвращают отправку запросов к неработающим targets
+- ✅ Retry logic повышает надежность при временных сбоях
+- ✅ Timeout handling симулирует реальные таймауты соединений
+- ✅ Метрики частично отражают реальное состояние (требует дальнейшей работы)
+
+### Следующие шаги
+- ✅ Расширение UI для всех полей Consumer (tags, custom_id редактирование) - ВЫПОЛНЕНО
+- ✅ Расширение UI для всех типов Credentials - ВЫПОЛНЕНО
+- ⚠️ Расширение UI для Plugins (UI для конфигурации большинства плагинов, не только JSON)
+- ⚠️ Добавление поиска и фильтрации в списках сущностей
+- ⚠️ Улучшение отображения метрик из симуляции (requests/sec, latency, error rate для каждого target, auth failures для Consumers)
+- ⚠️ Визуализация circuit breaker состояния в UI
+- ⚠️ Реализация дополнительных плагинов Kong
+
+---
+
 ## Версия 0.1.8d - GCP Pub/Sub: Flow Control, Labels Editor, Schema Configuration, Payload Format и синхронизация метрик
 
 ### Обзор изменений

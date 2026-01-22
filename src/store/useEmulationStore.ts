@@ -21,6 +21,7 @@ interface EmulationStore {
   reset: () => void;
   setUpdateInterval: (interval: number) => void;
   updateMetrics: () => void;
+  updateKongRoutingEngine: (nodeId: string) => void;
   
   // Getters
   getComponentMetrics: (nodeId: string) => ComponentMetrics | undefined;
@@ -151,5 +152,9 @@ export const useEmulationStore = create<EmulationStore>((set, get) => ({
 
   getConnectionMetrics: (connectionId) => {
     return get().connectionMetrics.get(connectionId);
+  },
+
+  updateKongRoutingEngine: (nodeId) => {
+    emulationEngine.updateKongRoutingEngine(nodeId);
   },
 }));

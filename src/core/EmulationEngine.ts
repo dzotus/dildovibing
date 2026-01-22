@@ -8142,6 +8142,35 @@ export class EmulationEngine {
   }
 
   /**
+   * Update Kong routing engine configuration for a node
+   * Called when configuration changes in UI
+   */
+  public updateKongRoutingEngine(nodeId: string): void {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'kong') {
+      return;
+    }
+
+    const routingEngine = this.kongRoutingEngines.get(nodeId);
+    if (!routingEngine) {
+      // If engine doesn't exist, initialize it
+      this.initializeKongRoutingEngine(node);
+      return;
+    }
+
+    const config = (node.data.config || {}) as any;
+    
+    // Update configuration without full reinitialization
+    routingEngine.updateConfig({
+      services: config.services || [],
+      routes: config.routes || [],
+      upstreams: config.upstreams || [],
+      consumers: config.consumers || [],
+      plugins: config.plugins || [],
+    });
+  }
+
+  /**
    * Initialize Cloud API Gateway emulation engine for a node
    */
   private initializeCloudAPIGatewayEngine(node: CanvasNode): void {
