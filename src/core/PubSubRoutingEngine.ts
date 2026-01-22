@@ -10,6 +10,10 @@ export interface PubSubTopic {
   labels?: Record<string, string>;
   messageCount?: number;
   byteCount?: number;
+  schema?: {
+    type: 'AVRO' | 'PROTOCOL_BUFFER' | 'JSON';
+    definition?: string; // Schema definition (Avro schema JSON, .proto file content, or JSON schema)
+  };
 }
 
 export interface PubSubSubscription {
@@ -21,8 +25,23 @@ export interface PubSubSubscription {
   enableMessageOrdering: boolean;
   pushEndpoint?: string; // URL for push subscriptions
   pushAttributes?: Record<string, string>;
+  payloadFormat?: 'WRAPPED' | 'UNWRAPPED'; // Payload format for push subscriptions (default: WRAPPED)
   messageCount?: number;
   unackedMessageCount?: number;
+  deadLetterTopic?: string; // Dead letter topic for failed deliveries
+  maxDeliveryAttempts?: number; // Max retry attempts before dead letter (default: 5)
+  retryPolicy?: {
+    minimumBackoff?: number; // seconds (default: 10)
+    maximumBackoff?: number; // seconds (default: 600)
+  };
+  enableExactlyOnceDelivery?: boolean; // Enable exactly-once delivery semantics
+  expirationPolicy?: {
+    ttl?: number; // Time-to-live in seconds (subscription expires if inactive for this duration)
+  };
+  flowControl?: {
+    maxOutstandingMessages?: number; // Max unacked messages (default: 1000, 0 = unlimited)
+    maxOutstandingBytes?: number; // Max unacked bytes (default: 0 = unlimited)
+  };
 }
 
 export interface PubSubMessage {
@@ -42,6 +61,8 @@ export interface UnackedMessage {
   ackDeadlineExpiresAt: number;
   deliveryAttempt: number;
   orderingKey?: string;
+  nextRetryAt?: number; // Timestamp for next retry (for push subscriptions)
+  lastPushResponse?: number; // HTTP status code from last push attempt
 }
 
 /**
@@ -61,6 +82,7 @@ export class PubSubRoutingEngine {
     messageCount: number;
     byteCount: number;
     publishedCount: number;
+    validationErrorCount: number; // Count of messages that failed schema validation
     lastUpdate: number;
   }> = new Map();
   
@@ -70,7 +92,15 @@ export class PubSubRoutingEngine {
     deliveredCount: number;
     acknowledgedCount: number;
     nackedCount: number;
+    deadLetterCount: number;
+    pushDeliverySuccessCount: number;
+    pushDeliveryFailureCount: number;
+    expiredAckDeadlines: number;
+    totalDeliveryAttempts: number;
+    messagesWithAttempts: number; // For calculating average
     lastUpdate: number;
+    lastActivity: number; // Last activity timestamp for expiration policy
+    deliveredMessageIds: Set<string>; // Track delivered message IDs for exactly-once delivery
   }> = new Map();
 
   /**
@@ -102,6 +132,7 @@ export class PubSubRoutingEngine {
           messageCount: topic.messageCount || 0,
           byteCount: topic.byteCount || 0,
           publishedCount: 0,
+          validationErrorCount: 0,
           lastUpdate: Date.now(),
         });
       }
@@ -127,9 +158,99 @@ export class PubSubRoutingEngine {
           deliveredCount: 0,
           acknowledgedCount: 0,
           nackedCount: 0,
+          deadLetterCount: 0,
+          pushDeliverySuccessCount: 0,
+          pushDeliveryFailureCount: 0,
+          expiredAckDeadlines: 0,
+          totalDeliveryAttempts: 0,
+          messagesWithAttempts: 0,
           lastUpdate: Date.now(),
+          lastActivity: Date.now(),
+          deliveredMessageIds: new Set<string>(),
         });
       }
+    }
+  }
+
+  /**
+   * Validate message data against topic schema
+   * Returns true if valid, false if invalid
+   */
+  private validateMessageAgainstSchema(topic: PubSubTopic, data: unknown): boolean {
+    if (!topic.schema || !topic.schema.definition) {
+      return true; // No schema defined, all messages are valid
+    }
+
+    const schemaType = topic.schema.type;
+    const schemaDefinition = topic.schema.definition;
+
+    try {
+      switch (schemaType) {
+        case 'JSON': {
+          // For JSON schema, validate data structure
+          // In real Pub/Sub, this uses JSON Schema validation
+          // For simulation, we do basic validation
+          if (typeof data !== 'object' || data === null) {
+            return false; // JSON schema expects object
+          }
+          
+          // Try to parse schema definition as JSON Schema
+          try {
+            const jsonSchema = JSON.parse(schemaDefinition);
+            // Basic validation: check if data matches schema structure
+            // In real implementation, would use a JSON Schema validator library
+            // For simulation, we do basic type checking
+            if (jsonSchema.type && typeof data !== jsonSchema.type) {
+              return false;
+            }
+            return true;
+          } catch {
+            // Schema definition is not valid JSON, skip validation
+            return true;
+          }
+        }
+        case 'AVRO': {
+          // For Avro, validate data structure against Avro schema
+          // In real Pub/Sub, this uses Avro schema validation
+          // For simulation, we do basic validation
+          if (typeof data !== 'object' || data === null) {
+            return false; // Avro typically expects objects
+          }
+          
+          // Try to parse Avro schema
+          try {
+            const avroSchema = JSON.parse(schemaDefinition);
+            // Basic validation: check if schema has fields
+            if (avroSchema.type === 'record' && Array.isArray(avroSchema.fields)) {
+              // In real implementation, would validate each field
+              // For simulation, we just check if data is an object
+              return typeof data === 'object' && data !== null;
+            }
+            return true;
+          } catch {
+            // Schema definition is not valid JSON, skip validation
+            return true;
+          }
+        }
+        case 'PROTOCOL_BUFFER': {
+          // For Protocol Buffers, validation is complex and requires .proto parsing
+          // In real Pub/Sub, this uses protobuf schema validation
+          // For simulation, we do basic validation
+          if (typeof data !== 'object' || data === null) {
+            return false; // Protobuf typically expects objects
+          }
+          
+          // Protocol Buffer schema is a .proto file content
+          // In real implementation, would parse .proto and validate
+          // For simulation, we just check if data is an object
+          return typeof data === 'object' && data !== null;
+        }
+        default:
+          return true; // Unknown schema type, allow all messages
+      }
+    } catch (error) {
+      // Validation error occurred, reject message
+      return false;
     }
   }
 
@@ -146,6 +267,19 @@ export class PubSubRoutingEngine {
     const topic = this.topics.get(topicName);
     if (!topic) {
       return null; // Topic not found
+    }
+
+    // Validate message against schema if schema is defined
+    const isValid = this.validateMessageAgainstSchema(topic, data);
+    const state = this.topicState.get(topicName);
+    
+    if (!isValid) {
+      // Message failed validation - reject it
+      if (state) {
+        state.validationErrorCount = (state.validationErrorCount || 0) + 1;
+        state.lastUpdate = Date.now();
+      }
+      return null; // Return null to indicate failure
     }
 
     const now = Date.now();
@@ -203,19 +337,20 @@ export class PubSubRoutingEngine {
       this.subscriptionMessages.set(subName, subMessages);
     }
 
-    // Update topic state
-    const state = this.topicState.get(topicName) || {
+    // Update topic state (state already retrieved for validation)
+    const finalState = state || {
       messageCount: 0,
       byteCount: 0,
       publishedCount: 0,
+      validationErrorCount: 0,
       lastUpdate: now,
     };
-    state.messageCount = topicMessages.length + 
+    finalState.messageCount = topicMessages.length + 
       (orderingKey ? (this.orderingKeyQueues.get(topicName)?.get(orderingKey)?.length || 0) : 0);
-    state.byteCount = (state.byteCount || 0) + size;
-    state.publishedCount = (state.publishedCount || 0) + 1;
-    state.lastUpdate = now;
-    this.topicState.set(topicName, state);
+    finalState.byteCount = (finalState.byteCount || 0) + size;
+    finalState.publishedCount = (finalState.publishedCount || 0) + 1;
+    finalState.lastUpdate = now;
+    this.topicState.set(topicName, finalState);
 
     return messageId;
   }
@@ -237,10 +372,37 @@ export class PubSubRoutingEngine {
       return [];
     }
 
+    // Check flow control limits
+    const unacked = this.unackedMessages.get(subscriptionName) || [];
+    const flowControl = subscription.flowControl || {};
+    const maxOutstandingMessages = flowControl.maxOutstandingMessages ?? 1000; // Default 1000, 0 = unlimited
+    const maxOutstandingBytes = flowControl.maxOutstandingBytes ?? 0; // Default 0 = unlimited
+    
+    // Calculate current outstanding messages and bytes
+    const currentOutstandingMessages = unacked.length;
+    let currentOutstandingBytes = 0;
+    for (const unackedMsg of unacked) {
+      currentOutstandingBytes += unackedMsg.message.size || 0;
+    }
+    
+    // If flow control limits are reached, don't pull more messages
+    if (maxOutstandingMessages > 0 && currentOutstandingMessages >= maxOutstandingMessages) {
+      return []; // Flow control limit reached for messages
+    }
+    
+    if (maxOutstandingBytes > 0 && currentOutstandingBytes >= maxOutstandingBytes) {
+      return []; // Flow control limit reached for bytes
+    }
+
     const now = Date.now();
     const ackDeadlineMs = subscription.ackDeadlineSeconds * 1000;
     const pulledMessages: PubSubMessage[] = [];
     const remainingMessages: PubSubMessage[] = [];
+    
+    // Get subscription state for exactly-once delivery tracking
+    const state = this.subscriptionState.get(subscriptionName);
+    const enableExactlyOnce = subscription.enableExactlyOnceDelivery || false;
+    const deliveredMessageIds = state?.deliveredMessageIds || new Set<string>();
 
     // Process messages respecting ordering if enabled
     if (subscription.enableMessageOrdering) {
@@ -259,8 +421,51 @@ export class PubSubRoutingEngine {
       for (const [key, keyMessages] of orderingGroups.entries()) {
         if (pulledMessages.length >= maxMessages) break;
         
-        const toPull = Math.min(keyMessages.length, maxMessages - pulledMessages.length);
-        const pulled = keyMessages.splice(0, toPull);
+        // Filter out already delivered messages if exactly-once is enabled
+        const filteredMessages = enableExactlyOnce
+          ? keyMessages.filter(msg => !deliveredMessageIds.has(msg.messageId))
+          : keyMessages;
+        
+        // Apply flow control limits when pulling
+        let toPull = Math.min(filteredMessages.length, maxMessages - pulledMessages.length);
+        
+        // Check message count limit
+        if (maxOutstandingMessages > 0) {
+          const availableMessageSlots = maxOutstandingMessages - currentOutstandingMessages;
+          toPull = Math.min(toPull, availableMessageSlots);
+        }
+        
+        // Check byte limit
+        if (maxOutstandingBytes > 0 && toPull > 0) {
+          let availableBytes = maxOutstandingBytes - currentOutstandingBytes;
+          let bytesToPull = 0;
+          let messagesToPull = 0;
+          
+          for (const msg of filteredMessages) {
+            const msgSize = msg.size || 0;
+            if (bytesToPull + msgSize <= availableBytes && messagesToPull < toPull) {
+              bytesToPull += msgSize;
+              messagesToPull++;
+            } else {
+              break;
+            }
+          }
+          
+          toPull = messagesToPull;
+        }
+        
+        if (toPull <= 0) break; // Flow control limit reached
+        
+        const pulled = filteredMessages.splice(0, toPull);
+        
+        // Remove pulled messages from original array
+        for (const pulledMsg of pulled) {
+          const index = keyMessages.indexOf(pulledMsg);
+          if (index !== -1) {
+            keyMessages.splice(index, 1);
+          }
+        }
+        
         pulledMessages.push(...pulled);
         remainingMessages.push(...keyMessages);
       }
@@ -273,8 +478,55 @@ export class PubSubRoutingEngine {
       }
     } else {
       // No ordering, just pull up to maxMessages
-      const toPull = Math.min(availableMessages.length, maxMessages);
-      pulledMessages.push(...availableMessages.splice(0, toPull));
+      // Filter out already delivered messages if exactly-once is enabled
+      const filteredMessages = enableExactlyOnce
+        ? availableMessages.filter(msg => !deliveredMessageIds.has(msg.messageId))
+        : availableMessages;
+      
+      // Apply flow control limits when pulling
+      let toPull = Math.min(filteredMessages.length, maxMessages);
+      
+      // Check message count limit
+      if (maxOutstandingMessages > 0) {
+        const availableMessageSlots = maxOutstandingMessages - currentOutstandingMessages;
+        toPull = Math.min(toPull, availableMessageSlots);
+      }
+      
+      // Check byte limit
+      if (maxOutstandingBytes > 0 && toPull > 0) {
+        let availableBytes = maxOutstandingBytes - currentOutstandingBytes;
+        let bytesToPull = 0;
+        let messagesToPull = 0;
+        
+        for (const msg of filteredMessages) {
+          const msgSize = msg.size || 0;
+          if (bytesToPull + msgSize <= availableBytes && messagesToPull < toPull) {
+            bytesToPull += msgSize;
+            messagesToPull++;
+          } else {
+            break;
+          }
+        }
+        
+        toPull = messagesToPull;
+      }
+      
+      if (toPull <= 0) {
+        // Flow control limit reached, return empty
+        return [];
+      }
+      
+      const pulled = filteredMessages.splice(0, toPull);
+      
+      // Remove pulled messages from original array
+      for (const pulledMsg of pulled) {
+        const index = availableMessages.indexOf(pulledMsg);
+        if (index !== -1) {
+          availableMessages.splice(index, 1);
+        }
+      }
+      
+      pulledMessages.push(...pulled);
       remainingMessages.push(...availableMessages);
     }
 
@@ -282,10 +534,17 @@ export class PubSubRoutingEngine {
     this.subscriptionMessages.set(subscriptionName, remainingMessages);
 
     // Move pulled messages to unacked with ack deadline
-    const unacked = this.unackedMessages.get(subscriptionName) || [];
+    // Reuse unacked variable that was already declared for flow control check
+    const subscriptionState = this.subscriptionState.get(subscriptionName);
+    
     for (const msg of pulledMessages) {
       const ackId = `ack_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       msg.ackId = ackId;
+      
+      // Track message as delivered for exactly-once delivery
+      if (enableExactlyOnce && subscriptionState) {
+        subscriptionState.deliveredMessageIds.add(msg.messageId);
+      }
       
       unacked.push({
         message: msg,
@@ -298,19 +557,22 @@ export class PubSubRoutingEngine {
     this.unackedMessages.set(subscriptionName, unacked);
 
     // Update subscription state
-    const state = this.subscriptionState.get(subscriptionName) || {
+    const finalState = subscriptionState || {
       messageCount: 0,
       unackedMessageCount: 0,
       deliveredCount: 0,
       acknowledgedCount: 0,
       nackedCount: 0,
       lastUpdate: now,
+      lastActivity: now,
+      deliveredMessageIds: new Set<string>(),
     };
-    state.messageCount = remainingMessages.length;
-    state.unackedMessageCount = unacked.length;
-    state.deliveredCount = (state.deliveredCount || 0) + pulledMessages.length;
-    state.lastUpdate = now;
-    this.subscriptionState.set(subscriptionName, state);
+    finalState.messageCount = remainingMessages.length;
+    finalState.unackedMessageCount = unacked.length;
+    finalState.deliveredCount = (finalState.deliveredCount || 0) + pulledMessages.length;
+    finalState.lastUpdate = now;
+    finalState.lastActivity = now; // Update last activity timestamp
+    this.subscriptionState.set(subscriptionName, finalState);
 
     return pulledMessages;
   }
@@ -327,17 +589,29 @@ export class PubSubRoutingEngine {
     const unacked = this.unackedMessages.get(subscriptionName) || [];
     const initialLength = unacked.length;
     
-    // Remove message with matching ackId
-    const filtered = unacked.filter(unackedMsg => unackedMsg.message.ackId !== ackId);
+    // Find and remove message with matching ackId
+    let ackedMessage: UnackedMessage | null = null;
+    const filtered = unacked.filter(unackedMsg => {
+      if (unackedMsg.message.ackId === ackId) {
+        ackedMessage = unackedMsg;
+        return false; // Remove this message
+      }
+      return true; // Keep this message
+    });
     this.unackedMessages.set(subscriptionName, filtered);
 
-    if (filtered.length < initialLength) {
+    if (filtered.length < initialLength && ackedMessage) {
       // Update subscription state
       const state = this.subscriptionState.get(subscriptionName);
       if (state) {
         state.unackedMessageCount = filtered.length;
         state.acknowledgedCount = (state.acknowledgedCount || 0) + 1;
         state.lastUpdate = Date.now();
+        state.lastActivity = Date.now();
+        
+        // For exactly-once delivery, we keep the messageId in deliveredMessageIds
+        // to prevent redelivery. It will be cleaned up after retention period.
+        // In real Pub/Sub, this is handled by the service itself.
       }
       return true;
     }
@@ -382,6 +656,7 @@ export class PubSubRoutingEngine {
       state.messageCount = subscriptionMessages.length;
       state.nackedCount = (state.nackedCount || 0) + 1;
       state.lastUpdate = Date.now();
+      state.lastActivity = Date.now();
     }
 
     return true;
@@ -420,20 +695,20 @@ export class PubSubRoutingEngine {
         }
         this.subscriptionMessages.set(subscriptionName, subscriptionMessages);
 
-        // Update state
+        // Update state - track expired ack deadlines
         const state = this.subscriptionState.get(subscriptionName);
         if (state) {
           state.unackedMessageCount = remainingUnacked.length;
           state.messageCount = subscriptionMessages.length;
+          state.expiredAckDeadlines = (state.expiredAckDeadlines || 0) + expiredMessages.length;
+          state.lastActivity = now; // Activity from processing expired messages
         }
       }
 
       this.unackedMessages.set(subscriptionName, remainingUnacked);
     }
 
-    // Process push subscriptions - simulate push delivery
-    // In a real implementation, this would make HTTP POST requests to push endpoints
-    // For simulation, we just mark messages as delivered if push endpoint exists
+    // Process push subscriptions - simulate push delivery with HTTP response handling
     for (const [subscriptionName, subscription] of this.subscriptions.entries()) {
       if (subscription.pushEndpoint) {
         const subscriptionMessages = this.subscriptionMessages.get(subscriptionName) || [];
@@ -447,28 +722,258 @@ export class PubSubRoutingEngine {
           const unacked = this.unackedMessages.get(subscriptionName) || [];
           const now = Date.now();
           const ackDeadlineMs = subscription.ackDeadlineSeconds * 1000;
+          const maxDeliveryAttempts = subscription.maxDeliveryAttempts || 5;
+          const minBackoff = (subscription.retryPolicy?.minimumBackoff || 10) * 1000; // ms
+          const maxBackoff = (subscription.retryPolicy?.maximumBackoff || 600) * 1000; // ms
+          const enableExactlyOnce = subscription.enableExactlyOnceDelivery || false;
+          const state = this.subscriptionState.get(subscriptionName);
+          const deliveredMessageIds = state?.deliveredMessageIds || new Set<string>();
 
           for (const msg of pushedMessages) {
+            // Check exactly-once delivery - skip if already delivered
+            if (enableExactlyOnce && deliveredMessageIds.has(msg.messageId)) {
+              // Message already delivered, skip it
+              continue;
+            }
+            // Simulate HTTP POST to push endpoint
+            // In simulation, we simulate different response codes based on probability
+            // 90% success (200-299), 5% client error (4xx), 5% server error (5xx)
+            const rand = Math.random();
+            let httpStatus: number;
+            if (rand < 0.9) {
+              httpStatus = 200; // Success
+            } else if (rand < 0.95) {
+              httpStatus = 400 + Math.floor(Math.random() * 100); // 4xx client error
+            } else {
+              httpStatus = 500 + Math.floor(Math.random() * 100); // 5xx server error
+            }
+            
             const ackId = `ack_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
             msg.ackId = ackId;
-            unacked.push({
-              message: msg,
-              subscriptionName,
-              ackDeadlineExpiresAt: now + ackDeadlineMs,
-              deliveryAttempt: 1,
-              orderingKey: msg.orderingKey,
-            });
+            
+            if (httpStatus >= 200 && httpStatus < 300) {
+              // Success - message is delivered, will be acked
+              // Track message as delivered for exactly-once delivery
+              if (enableExactlyOnce && state) {
+                state.deliveredMessageIds.add(msg.messageId);
+              }
+              
+              unacked.push({
+                message: msg,
+                subscriptionName,
+                ackDeadlineExpiresAt: now + ackDeadlineMs,
+                deliveryAttempt: 1,
+                orderingKey: msg.orderingKey,
+                lastPushResponse: httpStatus,
+              });
+              
+              // Track push delivery success
+              if (state) {
+                state.pushDeliverySuccessCount = (state.pushDeliverySuccessCount || 0) + 1;
+                state.totalDeliveryAttempts = (state.totalDeliveryAttempts || 0) + 1;
+                state.messagesWithAttempts = (state.messagesWithAttempts || 0) + 1;
+                state.lastActivity = now;
+              }
+            } else {
+              // Failure - calculate backoff and schedule retry
+              const deliveryAttempt = 1;
+              const backoffMs = Math.min(
+                minBackoff * Math.pow(2, deliveryAttempt - 1),
+                maxBackoff
+              );
+              const nextRetryAt = now + backoffMs;
+              
+              // If max attempts not reached, schedule retry
+              if (deliveryAttempt < maxDeliveryAttempts) {
+                unacked.push({
+                  message: msg,
+                  subscriptionName,
+                  ackDeadlineExpiresAt: now + ackDeadlineMs,
+                  deliveryAttempt,
+                  orderingKey: msg.orderingKey,
+                  nextRetryAt,
+                  lastPushResponse: httpStatus,
+                });
+              } else {
+                // Max attempts reached - send to dead letter topic if configured
+                if (subscription.deadLetterTopic) {
+                  const deadLetterTopic = this.topics.get(subscription.deadLetterTopic);
+                  if (deadLetterTopic) {
+                    // Publish to dead letter topic
+                    this.publishToTopic(
+                      subscription.deadLetterTopic,
+                      msg.data,
+                      msg.size,
+                      {
+                        ...msg.attributes,
+                        'original-subscription': subscriptionName,
+                        'delivery-attempts': deliveryAttempt.toString(),
+                        'last-error': `HTTP ${httpStatus}`,
+                      },
+                      msg.orderingKey
+                    );
+                    
+                    // Track dead letter message
+                    const state = this.subscriptionState.get(subscriptionName);
+                    if (state) {
+                      state.deadLetterCount = (state.deadLetterCount || 0) + 1;
+                    }
+                  }
+                } else {
+                  // No dead letter topic - return to subscription queue for manual handling
+                  subscriptionMessages.push(msg);
+                }
+                
+                // Track push delivery failure
+                const state = this.subscriptionState.get(subscriptionName);
+                if (state) {
+                  state.pushDeliveryFailureCount = (state.pushDeliveryFailureCount || 0) + 1;
+                  state.totalDeliveryAttempts = (state.totalDeliveryAttempts || 0) + deliveryAttempt;
+                  state.messagesWithAttempts = (state.messagesWithAttempts || 0) + 1;
+                }
+              }
+            }
           }
 
           this.subscriptionMessages.set(subscriptionName, subscriptionMessages);
           this.unackedMessages.set(subscriptionName, unacked);
 
           // Update state
-          const state = this.subscriptionState.get(subscriptionName);
-          if (state) {
-            state.messageCount = subscriptionMessages.length;
-            state.unackedMessageCount = unacked.length;
-            state.deliveredCount = (state.deliveredCount || 0) + pushedMessages.length;
+          const finalState = this.subscriptionState.get(subscriptionName);
+          if (finalState) {
+            finalState.messageCount = subscriptionMessages.length;
+            finalState.unackedMessageCount = unacked.length;
+            finalState.deliveredCount = (finalState.deliveredCount || 0) + pushedMessages.length;
+            finalState.lastActivity = now;
+          }
+        }
+        
+        // Process retries for failed push deliveries
+        const unacked = this.unackedMessages.get(subscriptionName) || [];
+        const retryableMessages: UnackedMessage[] = [];
+        const remainingUnacked: UnackedMessage[] = [];
+        
+        for (const unackedMsg of unacked) {
+          if (unackedMsg.nextRetryAt && now >= unackedMsg.nextRetryAt) {
+            // Retry time reached - simulate push again
+            const deliveryAttempt = unackedMsg.deliveryAttempt + 1;
+            const rand = Math.random();
+            let httpStatus: number;
+            
+            // Retry success probability increases slightly with attempt (simulating transient errors)
+            const successProbability = 0.85 + (deliveryAttempt * 0.02); // 85% -> 95%
+            if (rand < successProbability) {
+              httpStatus = 200; // Success
+              // Remove nextRetryAt, message will be acked normally
+              unackedMsg.nextRetryAt = undefined;
+              unackedMsg.lastPushResponse = httpStatus;
+              remainingUnacked.push(unackedMsg);
+            } else if (rand < successProbability + 0.1) {
+              httpStatus = 400 + Math.floor(Math.random() * 100); // 4xx
+            } else {
+              httpStatus = 500 + Math.floor(Math.random() * 100); // 5xx
+            }
+            
+            if (httpStatus >= 200 && httpStatus < 300) {
+              // Success on retry
+              unackedMsg.deliveryAttempt = deliveryAttempt;
+              remainingUnacked.push(unackedMsg);
+              
+              // Track push delivery success
+              const state = this.subscriptionState.get(subscriptionName);
+              if (state) {
+                state.pushDeliverySuccessCount = (state.pushDeliverySuccessCount || 0) + 1;
+                state.totalDeliveryAttempts = (state.totalDeliveryAttempts || 0) + deliveryAttempt;
+                if (!unackedMsg.nextRetryAt) {
+                  state.messagesWithAttempts = (state.messagesWithAttempts || 0) + 1;
+                }
+              }
+            } else {
+              // Still failed - check if max attempts reached
+              if (deliveryAttempt >= maxDeliveryAttempts) {
+                // Send to dead letter topic
+                if (subscription.deadLetterTopic) {
+                  const deadLetterTopic = this.topics.get(subscription.deadLetterTopic);
+                  if (deadLetterTopic) {
+                    this.publishToTopic(
+                      subscription.deadLetterTopic,
+                      unackedMsg.message.data,
+                      unackedMsg.message.size,
+                      {
+                        ...unackedMsg.message.attributes,
+                        'original-subscription': subscriptionName,
+                        'delivery-attempts': deliveryAttempt.toString(),
+                        'last-error': `HTTP ${httpStatus}`,
+                      },
+                      unackedMsg.message.orderingKey
+                    );
+                    
+                    // Track dead letter message
+                    const state = this.subscriptionState.get(subscriptionName);
+                    if (state) {
+                      state.deadLetterCount = (state.deadLetterCount || 0) + 1;
+                    }
+                  }
+                } else {
+                  // No dead letter topic - return to subscription queue
+                  const subscriptionMessages = this.subscriptionMessages.get(subscriptionName) || [];
+                  unackedMsg.message.ackId = undefined;
+                  subscriptionMessages.push(unackedMsg.message);
+                  this.subscriptionMessages.set(subscriptionName, subscriptionMessages);
+                }
+                
+                // Track push delivery failure
+                const state = this.subscriptionState.get(subscriptionName);
+                if (state) {
+                  state.pushDeliveryFailureCount = (state.pushDeliveryFailureCount || 0) + 1;
+                  state.totalDeliveryAttempts = (state.totalDeliveryAttempts || 0) + deliveryAttempt;
+                  state.messagesWithAttempts = (state.messagesWithAttempts || 0) + 1;
+                }
+              } else {
+                // Schedule next retry with exponential backoff
+                const backoffMs = Math.min(
+                  minBackoff * Math.pow(2, deliveryAttempt - 1),
+                  maxBackoff
+                );
+                unackedMsg.deliveryAttempt = deliveryAttempt;
+                unackedMsg.nextRetryAt = now + backoffMs;
+                unackedMsg.lastPushResponse = httpStatus;
+                remainingUnacked.push(unackedMsg);
+                
+                // Track push delivery failure (will retry)
+                const state = this.subscriptionState.get(subscriptionName);
+                if (state) {
+                  state.pushDeliveryFailureCount = (state.pushDeliveryFailureCount || 0) + 1;
+                  state.totalDeliveryAttempts = (state.totalDeliveryAttempts || 0) + deliveryAttempt;
+                }
+              }
+            }
+          } else {
+            remainingUnacked.push(unackedMsg);
+          }
+        }
+        
+        this.unackedMessages.set(subscriptionName, remainingUnacked);
+      }
+    }
+
+    // Apply expiration policies for subscriptions
+    // Use 'now' variable already declared at the start of processConsumption
+    for (const [subscriptionName, subscription] of this.subscriptions.entries()) {
+      if (subscription.expirationPolicy?.ttl) {
+        const state = this.subscriptionState.get(subscriptionName);
+        if (state && state.lastActivity) {
+          const inactiveDuration = now - state.lastActivity;
+          const ttlMs = subscription.expirationPolicy.ttl * 1000;
+          
+          // If subscription has been inactive longer than TTL, mark it as expired
+          // In real Pub/Sub, expired subscriptions are automatically deleted
+          // In simulation, we can mark them or remove them
+          if (inactiveDuration > ttlMs) {
+            // Subscription expired - in real Pub/Sub this would delete it
+            // For simulation, we can optionally remove it or just mark it
+            // For now, we'll leave it but could add an expired flag if needed
+            // This is a simulation, so we track it but don't auto-delete
           }
         }
       }
@@ -480,7 +985,7 @@ export class PubSubRoutingEngine {
       const retentionMs = retentionSeconds * 1000;
       
       const topicMessages = this.topicMessages.get(topicName) || [];
-      const now = Date.now();
+      // Use 'now' variable already declared at the start of processConsumption
       
       // Remove messages older than retention period
       const validMessages = topicMessages.filter(msg => {
@@ -502,12 +1007,77 @@ export class PubSubRoutingEngine {
   }
 
   /**
+   * Format message payload for push delivery based on payload format
+   * WRAPPED: Google Pub/Sub format with message wrapper
+   * UNWRAPPED: Only the message data
+   */
+  public formatPushPayload(
+    message: PubSubMessage,
+    subscription: PubSubSubscription
+  ): unknown {
+    const payloadFormat = subscription.payloadFormat || 'WRAPPED';
+    
+    if (payloadFormat === 'UNWRAPPED') {
+      // Unwrapped format: return only the message data
+      return message.data;
+    }
+    
+    // Wrapped format: Google Pub/Sub standard format
+    // In real Pub/Sub, data is base64 encoded, but in simulation we keep it as-is
+    const wrappedMessage: {
+      message: {
+        data: string; // Base64 encoded in real Pub/Sub, but we use JSON string in simulation
+        messageId: string;
+        publishTime: string; // RFC3339 format
+        attributes?: Record<string, string>;
+        orderingKey?: string;
+      };
+      subscription: string;
+    } = {
+      message: {
+        data: typeof message.data === 'string' 
+          ? message.data 
+          : JSON.stringify(message.data),
+        messageId: message.messageId,
+        publishTime: new Date(message.publishTime).toISOString(),
+      },
+      subscription: `projects/${subscription.projectId}/subscriptions/${subscription.name}`,
+    };
+    
+    // Add attributes if present
+    if (message.attributes && Object.keys(message.attributes).length > 0) {
+      wrappedMessage.message.attributes = message.attributes;
+    }
+    
+    // Add ordering key if present
+    if (message.orderingKey) {
+      wrappedMessage.message.orderingKey = message.orderingKey;
+    }
+    
+    return wrappedMessage;
+  }
+
+  /**
+   * Get formatted push payload for a message by subscription name
+   * Returns the payload formatted according to subscription's payload format setting
+   */
+  public getFormattedPushPayload(subscriptionName: string, message: PubSubMessage): unknown | null {
+    const subscription = this.subscriptions.get(subscriptionName);
+    if (!subscription) {
+      return null;
+    }
+    
+    return this.formatPushPayload(message, subscription);
+  }
+
+  /**
    * Get topic metrics
    */
   public getTopicMetrics(topicName: string): {
     messageCount: number;
     byteCount: number;
     publishedCount: number;
+    validationErrorCount: number;
   } | null {
     const topic = this.topics.get(topicName);
     if (!topic) return null;
@@ -519,6 +1089,7 @@ export class PubSubRoutingEngine {
       messageCount: state.messageCount,
       byteCount: state.byteCount,
       publishedCount: state.publishedCount,
+      validationErrorCount: state.validationErrorCount || 0,
     };
   }
 
@@ -531,6 +1102,10 @@ export class PubSubRoutingEngine {
     deliveredCount: number;
     acknowledgedCount: number;
     nackedCount: number;
+    deadLetterCount: number;
+    pushDeliverySuccessRate: number;
+    expiredAckDeadlines: number;
+    avgDeliveryAttempts: number;
   } | null {
     const subscription = this.subscriptions.get(subscriptionName);
     if (!subscription) return null;
@@ -538,12 +1113,27 @@ export class PubSubRoutingEngine {
     const state = this.subscriptionState.get(subscriptionName);
     if (!state) return null;
 
+    // Calculate push delivery success rate
+    const totalPushDeliveries = (state.pushDeliverySuccessCount || 0) + (state.pushDeliveryFailureCount || 0);
+    const pushDeliverySuccessRate = totalPushDeliveries > 0
+      ? (state.pushDeliverySuccessCount || 0) / totalPushDeliveries
+      : 0;
+
+    // Calculate average delivery attempts
+    const avgDeliveryAttempts = (state.messagesWithAttempts || 0) > 0
+      ? (state.totalDeliveryAttempts || 0) / (state.messagesWithAttempts || 1)
+      : 0;
+
     return {
       messageCount: state.messageCount,
       unackedMessageCount: state.unackedMessageCount,
       deliveredCount: state.deliveredCount,
       acknowledgedCount: state.acknowledgedCount,
       nackedCount: state.nackedCount,
+      deadLetterCount: state.deadLetterCount || 0,
+      pushDeliverySuccessRate,
+      expiredAckDeadlines: state.expiredAckDeadlines || 0,
+      avgDeliveryAttempts,
     };
   }
 
@@ -554,6 +1144,7 @@ export class PubSubRoutingEngine {
     messageCount: number;
     byteCount: number;
     publishedCount: number;
+    validationErrorCount: number;
   }> {
     const metrics = new Map();
     for (const topicName of this.topics.keys()) {
@@ -574,6 +1165,10 @@ export class PubSubRoutingEngine {
     deliveredCount: number;
     acknowledgedCount: number;
     nackedCount: number;
+    deadLetterCount: number;
+    pushDeliverySuccessRate: number;
+    expiredAckDeadlines: number;
+    avgDeliveryAttempts: number;
   }> {
     const metrics = new Map();
     for (const subscriptionName of this.subscriptions.keys()) {

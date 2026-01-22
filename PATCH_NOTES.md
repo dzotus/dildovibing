@@ -1,5 +1,419 @@
 # Patch Notes
 
+## Версия 0.1.8d - GCP Pub/Sub: Flow Control, Labels Editor, Schema Configuration, Payload Format и синхронизация метрик
+
+### Обзор изменений
+**GCP Pub/Sub: Flow Control, Labels Editor, Schema Configuration, Payload Format и синхронизация метрик**: Реализован Flow Control для pull subscriptions с настройками maxOutstandingMessages и maxOutstandingBytes, что позволяет ограничивать количество необработанных сообщений и предотвращать перегрузку подписчиков. Добавлен Labels Editor для topics с возможностью добавления, редактирования и удаления key-value пар. Реализована Schema Configuration для валидации сообщений при публикации в topics с поддержкой трех типов схем (AVRO, PROTOCOL_BUFFER, JSON). Добавлен Payload Format для push subscriptions с выбором между WRAPPED (полный Pub/Sub формат) и UNWRAPPED (только данные сообщения) форматами. Добавлена синхронизация метрик в реальном времени между PubSubRoutingEngine и UI компонентом через useEffect с интервалом обновления. Все изменения направлены на повышение симулятивности и соответствия реальному поведению Google Cloud Pub/Sub.
+
+**Ключевые достижения**: Реализован Flow Control в PubSubRoutingEngine.pullFromSubscription с проверкой лимитов перед pull операциями. Добавлены настройки flowControl в интерфейс PubSubSubscription с дефолтными значениями (maxOutstandingMessages: 1000, maxOutstandingBytes: 0 = unlimited). Добавлен UI для настройки flow control в GCPPubSubConfigAdvanced с двумя полями ввода. Реализован Labels Editor для topics с полным CRUD функционалом. Реализована Schema Configuration с валидацией сообщений и метриками validationErrorCount. Реализован Payload Format с функциями formatPushPayload() и getFormattedPushPayload() для форматирования payload в зависимости от выбранного формата. Реализована синхронизация метрик через useEffect с интервалом 500ms, обновляющая topics и subscriptions метрики из routing engine в реальном времени.
+
+### Ключевые изменения
+
+#### Flow Control для Pull Subscriptions ✅
+- ✅ **Flow Control Implementation**:
+  - Добавлено поле `flowControl` в интерфейс PubSubSubscription
+  - Настройка `maxOutstandingMessages` (по умолчанию 1000, 0 = unlimited)
+  - Настройка `maxOutstandingBytes` (по умолчанию 0 = unlimited)
+  - Проверка лимитов перед pull операциями в `pullFromSubscription()`
+  - Учет текущих unacked messages и bytes при определении доступных слотов
+  - Ограничение количества pulled messages на основе доступных слотов
+  - Ограничение размера pulled messages на основе доступных bytes
+  - Поддержка flow control для subscriptions с ordering keys
+
+#### Flow Control в UI ✅
+- ✅ **Flow Control Settings**:
+  - Добавлена секция "Flow Control (Pull Subscriptions)" в настройках subscription
+  - Поле "Max Outstanding Messages" с валидацией (min: 0, default: 1000)
+  - Поле "Max Outstanding Bytes" с валидацией (min: 0, default: 0 = unlimited)
+  - Описания полей с пояснениями о назначении flow control
+  - Синхронизация настроек с симуляцией через updateConfig
+
+#### Синхронизация метрик в реальном времени ✅
+- ✅ **Real-time Metrics Sync**:
+  - Добавлен useEffect с интервалом 500ms для синхронизации метрик
+  - Получение метрик из PubSubRoutingEngine через `getAllTopicMetrics()` и `getAllSubscriptionMetrics()`
+  - Обновление метрик topics: messageCount, byteCount
+  - Обновление метрик subscriptions: messageCount, unackedMessageCount, deliveredCount, acknowledgedCount, nackedCount, deadLetterCount, pushDeliverySuccessRate, expiredAckDeadlines, avgDeliveryAttempts
+  - Проверка изменений метрик перед обновлением (оптимизация производительности)
+  - Использование useRef для хранения актуальной ссылки на node
+  - Условная синхронизация только при запущенной симуляции (isRunning)
+  - Автоматическая очистка интервала при размонтировании компонента
+
+#### Labels Editor для Topics ✅
+- ✅ **Labels Editor Implementation**:
+  - Добавлен UI для редактирования labels в карточке topic
+  - Функции для работы с labels: `updateTopicLabel()`, `removeTopicLabel()`, `addTopicLabel()`
+  - Полный CRUD функционал (создание, чтение, обновление, удаление)
+  - Отображение существующих labels в виде key-value пар
+  - Добавление новых labels через форму с двумя полями (key и value)
+  - Редактирование значений существующих labels
+  - Удаление labels через кнопку с иконкой Trash2
+  - Поддержка клавиатурных сокращений (Enter для сохранения, Escape для отмены)
+  - Валидация: проверка наличия key и value перед добавлением
+  - Отображение сообщения "No labels" когда labels отсутствуют
+
+#### Schema Configuration для Topics ✅
+- ✅ **Schema Validation Implementation**:
+  - Добавлено поле `schema` в интерфейс PubSubTopic
+  - Поддержка трех типов схем: AVRO, PROTOCOL_BUFFER, JSON
+  - Функция `validateMessageAgainstSchema()` для валидации сообщений
+  - Валидация выполняется при публикации сообщений в topic через `publishToTopic()`
+  - Сообщения, не прошедшие валидацию, отклоняются (return null)
+  - Метрика `validationErrorCount` для отслеживания ошибок валидации
+  - Обновление validationErrorCount в topicState при каждой ошибке валидации
+  - Базовая валидация для каждого типа схемы (JSON Schema, Avro schema, Protocol Buffer)
+
+#### Schema Configuration в UI ✅
+- ✅ **Schema Settings UI**:
+  - Добавлена секция "Schema Configuration (optional)" в настройках topic
+  - Select для выбора типа схемы (No schema, Avro, Protocol Buffer, JSON Schema)
+  - Textarea для ввода определения схемы с placeholder'ами для каждого типа
+  - Отображение validationErrorCount в метриках topic (красным цветом при наличии ошибок)
+  - Синхронизация validationErrorCount в реальном времени через useEffect
+  - Адаптивный grid для метрик (grid-cols-2 md:grid-cols-4)
+
+#### Payload Format для Push Subscriptions ✅
+- ✅ **Payload Format Implementation**:
+  - Добавлено поле `payloadFormat` в интерфейс PubSubSubscription (WRAPPED/UNWRAPPED)
+  - Реализована функция `formatPushPayload()` в PubSubRoutingEngine для форматирования payload
+  - WRAPPED формат: полный Pub/Sub формат с оберткой message (data, messageId, publishTime, attributes, orderingKey) и subscription
+  - UNWRAPPED формат: только данные сообщения без обертки
+  - Добавлен метод `getFormattedPushPayload()` для получения отформатированного payload по subscription name
+  - Обновлен DataFlowEngine для использования formatted payload при генерации сообщений из push subscriptions
+  - Payload format учитывается при симуляции push delivery и генерации сообщений для downstream компонентов
+  - Дефолтное значение: WRAPPED (соответствует реальному Google Cloud Pub/Sub)
+
+#### Payload Format в UI ✅
+- ✅ **Payload Format Settings**:
+  - Добавлен Select для выбора payload format в настройках subscription
+  - Отображается только для push subscriptions (когда указан pushEndpoint)
+  - Два варианта: "Wrapped (Pub/Sub format)" и "Unwrapped (message data only)"
+  - Описание форматов с пояснениями о различиях
+  - Синхронизация настроек с симуляцией через updateConfig
+
+#### Интеграция с EmulationEngine ✅
+- ✅ **EmulationEngine Integration**:
+  - Передача flowControl настроек при инициализации PubSubRoutingEngine
+  - Поддержка flowControl в маппинге subscriptions из UI формата в routing engine формат
+  - Сохранение flowControl настроек при обновлении конфигурации
+  - Передача labels из UI в PubSubRoutingEngine при инициализации topics
+  - Передача schema из UI в PubSubRoutingEngine при инициализации topics
+  - Передача payloadFormat из UI в PubSubRoutingEngine при инициализации subscriptions
+
+### Технические детали
+
+#### Изменения в PubSubRoutingEngine
+- Добавлена проверка flow control лимитов в начале `pullFromSubscription()`
+- Расчет текущих outstanding messages и bytes из unacked messages
+- Применение лимитов при определении количества сообщений для pull
+- Учет лимитов для subscriptions с ordering keys (группировка по ключам)
+- Учет лимитов для subscriptions без ordering (простой pull)
+- Добавлено поле `schema` в интерфейс PubSubTopic
+- Добавлена функция `validateMessageAgainstSchema()` для валидации сообщений
+- Валидация выполняется в `publishToTopic()` перед публикацией сообщения
+- Добавлено поле `validationErrorCount` в topicState
+- Обновлен `getTopicMetrics()` для возврата validationErrorCount
+- Обновлен `getAllTopicMetrics()` для включения validationErrorCount
+- Добавлено поле `payloadFormat` в интерфейс PubSubSubscription
+- Реализована функция `formatPushPayload()` для форматирования payload в зависимости от формата
+- Добавлен метод `getFormattedPushPayload()` для получения отформатированного payload
+
+#### Изменения в GCPPubSubConfigAdvanced
+- Добавлены импорты: `useEmulationStore`, `emulationEngine`, `useEffect`, `useRef`
+- Добавлен `nodeRef` для хранения актуальной ссылки на node
+- Добавлен useEffect для синхронизации метрик с интервалом 500ms
+- Добавлена секция Flow Control в UI с двумя полями ввода
+- Добавлена секция Labels Editor в UI для topics
+- Добавлена секция Schema Configuration в UI для topics
+- Добавлена секция Payload Format в UI для push subscriptions
+- Добавлены функции для работы с labels: `updateTopicLabel`, `removeTopicLabel`, `addTopicLabel`
+- Добавлен state `newLabelKey` для управления добавлением новых labels
+- Обновлен интерфейс Subscription для поддержки flowControl и payloadFormat
+- Обновлен интерфейс Topic для поддержки schema и validationErrorCount
+- Обновлена синхронизация метрик для включения validationErrorCount
+- Адаптивный grid для метрик topics (grid-cols-2 md:grid-cols-4)
+
+#### Изменения в EmulationEngine
+- Обновлен маппинг subscriptions для передачи flowControl настроек
+- Поддержка flowControl при инициализации PubSubRoutingEngine
+- Обновлен маппинг topics для передачи schema настроек
+- Поддержка schema при инициализации PubSubRoutingEngine
+- Обновлен маппинг subscriptions для передачи payloadFormat настроек
+- Поддержка payloadFormat при инициализации PubSubRoutingEngine (дефолт: WRAPPED)
+
+#### Изменения в DataFlowEngine
+- Обновлен generateData для push subscriptions для использования formatted payload
+- Использование `getFormattedPushPayload()` для получения правильно отформатированного payload
+- Добавление payloadFormat в metadata сообщений для downstream компонентов
+
+### Улучшения симулятивности
+- ✅ Flow Control предотвращает перегрузку подписчиков необработанными сообщениями
+- ✅ Реалистичное поведение pull subscriptions с ограничениями на outstanding messages/bytes
+- ✅ Labels Editor позволяет настраивать метаданные topics для организации и фильтрации
+- ✅ Schema Configuration обеспечивает валидацию сообщений при публикации, предотвращая публикацию невалидных данных
+- ✅ Метрики validationErrorCount позволяют отслеживать ошибки валидации в реальном времени
+- ✅ Синхронизация метрик в реальном времени обеспечивает актуальное отображение состояния
+- ✅ Payload Format позволяет выбирать формат доставки сообщений для push subscriptions (wrapped/unwrapped)
+- ✅ Соответствие реальному поведению Google Cloud Pub/Sub Flow Control, Labels, Schema Validation и Payload Format
+
+---
+
+## Версия 0.1.8c - GCP Pub/Sub: Exactly-once Delivery и Expiration Policy
+
+### Обзор изменений
+**GCP Pub/Sub: Exactly-once Delivery и Expiration Policy**: Реализованы критичные функции Google Cloud Pub/Sub: Exactly-once delivery для предотвращения дубликатов сообщений и Expiration policy для автоматического управления жизненным циклом subscriptions. Добавлены UI настройки для обеих функций с валидацией. Исправлена синтаксическая ошибка в PubSubRoutingEngine. Все изменения направлены на повышение соответствия реальному поведению Google Cloud Pub/Sub и улучшение симулятивности.
+
+**Ключевые достижения**: Реализован Exactly-once delivery с трекингом delivered message IDs для предотвращения дубликатов при pull и push delivery. Добавлена Expiration policy с трекингом lastActivity timestamp и автоматической проверкой TTL. Расширены интерфейсы PubSubSubscription и subscriptionState для поддержки новых функций. Добавлены UI элементы: переключатель для exactly-once delivery и поле для expiration policy TTL. Исправлена синтаксическая ошибка (лишний else блок) в processConsumption. Обновлен lastActivity при всех операциях (pull, push, ack, nack, expired ack deadlines).
+
+### Ключевые изменения
+
+#### Генерация сообщений из subscriptions ✅
+- ✅ **generateData для Pub/Sub**:
+  - Добавлен `generateData` handler в DataFlowEngine для `gcp-pubsub`
+  - Реализовано автоматическое потребление из subscriptions в исходящие соединения
+  - Поддержка pull subscriptions: вызов `pullFromSubscription()` для каждой outgoing connection
+  - Поддержка push subscriptions: симуляция доставки через HTTP POST
+  - Извлечение subscription name из connection metadata или использование первой subscription из config
+  - Учет maxMessages из конфигурации connection
+  - Создание DataMessage для каждого pulled message с полными метаданными
+
+#### Улучшение симуляции push delivery ✅
+- ✅ **Push Delivery Simulation**:
+  - Симуляция HTTP POST запросов к push endpoints
+  - Обработка различных HTTP статусов: 200-299 (success), 4xx (client error), 5xx (server error)
+  - Retry logic с exponential backoff при ошибках
+  - Максимальное количество попыток доставки (maxDeliveryAttempts, по умолчанию 5)
+  - Автоматическая отправка в dead letter topic после max delivery attempts
+  - Увеличение вероятности успеха при retry (симуляция transient errors)
+  - Хранение информации о последнем HTTP ответе и следующем retry времени
+
+#### Dead Letter Topics ✅
+- ✅ **Dead Letter Topic Support**:
+  - Добавлено поле `deadLetterTopic` в интерфейс PubSubSubscription
+  - Автоматическая отправка сообщений в dead letter topic после max delivery attempts
+  - Сохранение метаданных о причинах неудачи (delivery attempts, last error)
+  - Поддержка в симуляции и routing engine
+
+#### Retry Policy ✅
+- ✅ **Retry Policy Support**:
+  - Добавлено поле `retryPolicy` в интерфейс PubSubSubscription
+  - Настройка minimumBackoff (по умолчанию 10 секунд)
+  - Настройка maximumBackoff (по умолчанию 600 секунд)
+  - Exponential backoff: `minBackoff * 2^(attempt-1)`, ограниченный maxBackoff
+  - Интеграция с push delivery симуляцией
+
+#### Валидация полей в UI ✅
+- ✅ **Field Validation**:
+  - Валидация topic names: `[a-z][a-z0-9-]*[a-z0-9]`, длина 3-255 символов, не может начинаться с "goog"
+  - Валидация subscription names: те же правила что и для topics
+  - Валидация push endpoint: должен быть HTTPS URL, валидация формата URL
+  - Валидация ack deadline: минимум 10 секунд, максимум 600 секунд
+  - Валидация message retention: минимум 600 секунд (10 минут), максимум 2678400 секунд (31 день)
+  - Отображение ошибок валидации под полями ввода с красным цветом
+  - Визуальная индикация ошибок через красную рамку полей ввода
+
+#### Адаптивность UI ✅
+- ✅ **Responsive Tabs**:
+  - Табы переносятся на новую строку при узком экране (flex-wrap)
+  - Подложка расширяется при переносе табов
+  - Использование flex-shrink-0 для предотвращения сжатия табов
+
+#### Dead Letter Topic в UI ✅
+- ✅ **Dead Letter Topic Selector**:
+  - Добавлен Select для выбора dead letter topic в настройках subscription
+  - Поддержка выбора из существующих topics или отключения (None)
+  - Визуальная индикация наличия dead letter topic
+  - Отображение количества dead letter messages в badge
+
+#### Retry Policy в UI ✅
+- ✅ **Retry Policy Settings**:
+  - Добавлено поле Max Delivery Attempts (1-100, по умолчанию 5)
+  - Добавлено поле Min Backoff (1-600 секунд, по умолчанию 10)
+  - Добавлено поле Max Backoff (10-3600 секунд, по умолчанию 600)
+  - Все настройки синхронизируются с симуляцией
+  - Валидация диапазонов значений
+
+#### Детальные метрики ✅
+- ✅ **Extended Metrics in PubSubRoutingEngine**:
+  - `deadLetterCount`: количество сообщений отправленных в dead letter topic
+  - `pushDeliverySuccessCount`: количество успешных push deliveries
+  - `pushDeliveryFailureCount`: количество неудачных push deliveries
+  - `expiredAckDeadlines`: количество истекших ack deadlines
+  - `totalDeliveryAttempts`: общее количество попыток доставки
+  - `messagesWithAttempts`: количество сообщений с попытками доставки
+  - Расчет `pushDeliverySuccessRate`: success / (success + failure)
+  - Расчет `avgDeliveryAttempts`: totalDeliveryAttempts / messagesWithAttempts
+
+#### Индикаторы состояния в UI ✅
+- ✅ **Status Badges**:
+  - Badge для типа subscription: Push (с иконкой Send) или Pull (с иконкой Activity)
+  - Badge для состояния: Active (зеленый, с иконкой CheckCircle2) или Inactive (серый, с иконкой Clock)
+  - Badge для unacked messages (желтый, с иконкой AlertCircle и количеством)
+  - Badge для dead letter messages (красный, с иконкой AlertCircle и количеством)
+
+#### Визуализация метрик в UI ✅
+- ✅ **Metrics Display**:
+  - Расширенная сетка метрик: Available, Unacked, Delivered, Acknowledged
+  - Progress bar для push delivery success rate (для push subscriptions)
+  - Отображение среднего количества delivery attempts
+  - Отображение количества expired ack deadlines с цветовой индикацией (желтый)
+  - Адаптивная сетка (grid-cols-2 md:grid-cols-4 для основных метрик)
+
+#### Синхронизация метрик ✅
+- ✅ **Real-time Metrics Sync**:
+  - Обновлен `updatePubSubMetricsInConfig()` для синхронизации всех расширенных метрик
+  - Метрики обновляются в реальном времени из симуляции в UI
+  - Поддержка всех новых метрик: deliveredCount, acknowledgedCount, nackedCount, deadLetterCount, pushDeliverySuccessRate, expiredAckDeadlines, avgDeliveryAttempts
+
+### Изменённые файлы:
+
+#### `src/core/DataFlowEngine.ts`
+- ✅ Добавлен `generateData` handler для `gcp-pubsub`
+- ✅ Реализовано потребление из pull subscriptions через `pullFromSubscription()`
+- ✅ Реализована симуляция push delivery для push subscriptions
+- ✅ Извлечение subscription name из connection metadata
+- ✅ Создание DataMessage с полными метаданными (topic, subscription, messageId, ackId, orderingKey, attributes)
+
+#### `src/core/PubSubRoutingEngine.ts`
+- ✅ Расширен интерфейс `PubSubSubscription`: добавлены поля `deadLetterTopic`, `maxDeliveryAttempts`, `retryPolicy`
+- ✅ Расширен интерфейс `UnackedMessage`: добавлены поля `nextRetryAt`, `lastPushResponse`
+- ✅ Расширен `subscriptionState`: добавлены поля для детальных метрик (deadLetterCount, pushDeliverySuccessCount, pushDeliveryFailureCount, expiredAckDeadlines, totalDeliveryAttempts, messagesWithAttempts)
+- ✅ Улучшен `processConsumption()` для push subscriptions:
+  - Симуляция HTTP POST запросов с различными статусами (200/4xx/5xx)
+  - Retry logic с exponential backoff
+  - Обработка max delivery attempts и отправка в dead letter topic
+  - Увеличение вероятности успеха при retry
+  - Отслеживание push delivery success/failure
+  - Отслеживание expired ack deadlines
+  - Отслеживание delivery attempts для расчета среднего
+- ✅ Добавлена обработка retry для failed push deliveries
+- ✅ Расширен `getSubscriptionMetrics()`: возвращает deadLetterCount, pushDeliverySuccessRate, expiredAckDeadlines, avgDeliveryAttempts
+- ✅ Обновлен `getAllSubscriptionMetrics()`: возвращает все расширенные метрики
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Обновлена инициализация subscriptions: добавлена поддержка `deadLetterTopic`, `maxDeliveryAttempts`, `retryPolicy`
+- ✅ Обновлен `updatePubSubMetricsInConfig()`: синхронизирует все расширенные метрики (deliveredCount, acknowledgedCount, nackedCount, deadLetterCount, pushDeliverySuccessRate, expiredAckDeadlines, avgDeliveryAttempts)
+
+#### `src/components/config/messaging/GCPPubSubConfigAdvanced.tsx`
+- ✅ Добавлены функции валидации: `validateTopicName()`, `validateSubscriptionName()`, `validatePushEndpoint()`, `validateAckDeadline()`, `validateMessageRetention()`
+- ✅ Добавлено состояние `validationErrors` для хранения ошибок валидации
+- ✅ Интеграция валидации в `updateTopic()` и `updateSubscription()`
+- ✅ Отображение ошибок валидации под полями ввода
+- ✅ Визуальная индикация ошибок через красную рамку
+- ✅ Адаптивность табов: добавлен `flex-wrap` и `flex-shrink-0` для переноса на новую строку
+- ✅ Расширен интерфейс `Subscription`: добавлены поля `deadLetterTopic`, `maxDeliveryAttempts`, `retryPolicy`, и расширенные метрики
+- ✅ Добавлен Dead Letter Topic selector в настройках subscription
+- ✅ Добавлены настройки Retry Policy (maxDeliveryAttempts, minimumBackoff, maximumBackoff)
+- ✅ Добавлены индикаторы состояния: Push/Pull badges, Active/Inactive badges, Unacked/Dead Letter badges
+- ✅ Расширена сетка метрик: Available, Unacked, Delivered, Acknowledged
+- ✅ Добавлена визуализация push delivery success rate с progress bar
+- ✅ Добавлено отображение avgDeliveryAttempts и expiredAckDeadlines
+- ✅ Импортированы новые иконки: AlertCircle, CheckCircle2, Clock, TrendingUp
+
+### Технические детали
+
+#### Генерация сообщений
+- Throttling: потребление каждые 500ms для предотвращения перегрузки
+- Поддержка maxMessages из connection config (по умолчанию 100)
+- Сохранение всех метаданных Pub/Sub в DataMessage metadata
+
+#### Push Delivery Simulation
+- Вероятность успеха: 90% для первой попытки, увеличивается до 95% при retry
+- Exponential backoff: `minBackoff * 2^(attempt-1)`, ограниченный maxBackoff
+- Автоматическая отправка в dead letter topic после max delivery attempts
+- Сохранение информации о delivery attempts и последнем HTTP ответе
+
+#### Валидация
+- Все правила валидации соответствуют официальной документации Google Cloud Pub/Sub
+- Валидация выполняется при изменении полей в реальном времени
+- Ошибки отображаются немедленно под полями ввода
+
+#### Exactly-once Delivery ✅
+- ✅ **Exactly-once Delivery Support**:
+  - Добавлено поле `enableExactlyOnceDelivery` в интерфейс `PubSubSubscription`
+  - Реализован трекинг delivered message IDs через `deliveredMessageIds` Set в `subscriptionState`
+  - Предотвращение дубликатов при pull delivery: фильтрация уже доставленных сообщений по messageId
+  - Предотвращение дубликатов при push delivery: проверка перед отправкой
+  - Интеграция с `pullFromSubscription()`: пропуск сообщений с уже доставленными messageId
+  - Интеграция с push delivery в `processConsumption()`: пропуск уже доставленных сообщений
+  - Сохранение messageId в `deliveredMessageIds` при успешной доставке
+  - Поддержка в UI: переключатель для включения/выключения exactly-once delivery
+
+#### Expiration Policy ✅
+- ✅ **Expiration Policy Support**:
+  - Добавлено поле `expirationPolicy` с `ttl` (time-to-live в секундах) в интерфейс `PubSubSubscription`
+  - Реализован трекинг `lastActivity` timestamp в `subscriptionState` для каждой subscription
+  - Автоматическая проверка expiration в `processConsumption()`: сравнение inactive duration с TTL
+  - Обновление `lastActivity` при всех операциях:
+    - Pull из subscription
+    - Push delivery
+    - Acknowledge message
+    - Nack message
+    - Обработка expired ack deadlines
+  - Поддержка в UI: поле для настройки TTL (опционально, без значения = без expiration)
+  - В реальном Pub/Sub expired subscriptions автоматически удаляются (в симуляции отслеживается для будущей реализации)
+
+#### Исправления багов ✅
+- ✅ **Синтаксическая ошибка в PubSubRoutingEngine.ts**:
+  - Исправлен лишний else блок в `processConsumption()` (строка 680)
+  - Удален некорректный блок кода, который вызывал логическую ошибку
+
+### Изменённые файлы:
+
+#### `src/core/PubSubRoutingEngine.ts`
+- ✅ Расширен интерфейс `PubSubSubscription`: добавлены поля `enableExactlyOnceDelivery`, `expirationPolicy`
+- ✅ Расширен `subscriptionState`: добавлены поля `lastActivity` (timestamp), `deliveredMessageIds` (Set<string>)
+- ✅ Обновлен `initialize()`: инициализация `lastActivity` и `deliveredMessageIds` для новых subscriptions
+- ✅ Обновлен `pullFromSubscription()`:
+  - Проверка `enableExactlyOnceDelivery` и фильтрация уже доставленных сообщений
+  - Добавление messageId в `deliveredMessageIds` при успешной доставке
+  - Обновление `lastActivity` при pull
+- ✅ Обновлен `ackMessage()`: обновление `lastActivity` при acknowledge
+- ✅ Обновлен `nackMessage()`: обновление `lastActivity` при nack
+- ✅ Обновлен `processConsumption()`:
+  - Проверка expiration policy для каждой subscription
+  - Проверка exactly-once delivery при push delivery
+  - Обновление `lastActivity` при обработке expired ack deadlines
+  - Обновление `lastActivity` при push delivery
+  - Исправлена синтаксическая ошибка (удален лишний else блок)
+
+#### `src/components/config/messaging/GCPPubSubConfigAdvanced.tsx`
+- ✅ Расширен интерфейс `Subscription`: добавлены поля `enableExactlyOnceDelivery`, `expirationPolicy`
+- ✅ Обновлен `addSubscription()`: инициализация новых полей с дефолтными значениями
+- ✅ Добавлен UI элемент для exactly-once delivery:
+  - Switch переключатель с описанием функции
+  - Интеграция с `updateSubscription()`
+- ✅ Добавлен UI элемент для expiration policy:
+  - Input поле для TTL в секундах (опционально)
+  - Описание функции и подсказка о том, что пустое значение = без expiration
+  - Валидация минимального значения (1 секунда)
+
+### Технические детали
+
+#### Exactly-once Delivery
+- Трекинг delivered message IDs через Set для быстрого поиска (O(1))
+- Проверка выполняется перед pull и push delivery
+- MessageId сохраняется в Set при успешной доставке
+- В реальном Pub/Sub это гарантирует, что сообщение будет доставлено ровно один раз
+- В симуляции это предотвращает дубликаты при повторных pull/push операциях
+
+#### Expiration Policy
+- TTL измеряется в секундах (как в реальном Pub/Sub)
+- LastActivity обновляется при любой активности subscription
+- Проверка выполняется в каждом цикле `processConsumption()`
+- В реальном Pub/Sub expired subscriptions автоматически удаляются
+- В симуляции отслеживается для будущей реализации автоматического удаления
+
+### Следующие шаги (из плана разработки)
+- ✅ Реализовать Exactly-once delivery - ВЫПОЛНЕНО
+- ✅ Реализовать Expiration policy - ВЫПОЛНЕНО
+- Реализовать Schemas для topics
+- Реализовать Export subscriptions
+- Реализовать Flow control settings
+- Реализовать Push authentication (JWT)
+
+---
+
 ## Версия 0.1.8c - Azure Service Bus: Расширение функциональности до уровня 10/10
 
 ### Обзор изменений

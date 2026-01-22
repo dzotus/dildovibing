@@ -4232,6 +4232,7 @@ export class EmulationEngine {
       labels: t.labels || {},
       messageCount: t.messageCount || 0,
       byteCount: t.byteCount || 0,
+      schema: t.schema || undefined,
     }));
     
     const subscriptions = (config.subscriptions || []).map((sub: any) => ({
@@ -4243,8 +4244,18 @@ export class EmulationEngine {
       enableMessageOrdering: sub.enableMessageOrdering || false,
       pushEndpoint: sub.pushEndpoint,
       pushAttributes: sub.pushAttributes || {},
+      payloadFormat: sub.payloadFormat || 'WRAPPED', // Default to WRAPPED format
       messageCount: sub.messageCount || 0,
       unackedMessageCount: sub.unackedMessageCount || 0,
+      deadLetterTopic: sub.deadLetterTopic,
+      maxDeliveryAttempts: sub.maxDeliveryAttempts || 5,
+      retryPolicy: sub.retryPolicy || {
+        minimumBackoff: 10,
+        maximumBackoff: 600,
+      },
+      enableExactlyOnceDelivery: sub.enableExactlyOnceDelivery || false,
+      expirationPolicy: sub.expirationPolicy || undefined,
+      flowControl: sub.flowControl || undefined,
     }));
     
     routingEngine.initialize({
@@ -4306,6 +4317,10 @@ export class EmulationEngine {
       deliveredCount: number;
       acknowledgedCount: number;
       nackedCount: number;
+      deadLetterCount: number;
+      pushDeliverySuccessRate: number;
+      expiredAckDeadlines: number;
+      avgDeliveryAttempts: number;
     }>
   ): void {
     const config = (node.data.config as any) || {};
@@ -4325,7 +4340,7 @@ export class EmulationEngine {
     }
     config.topics = topics;
     
-    // Update subscription metrics
+    // Update subscription metrics with all extended metrics
     const subscriptions = config.subscriptions || [];
     for (let i = 0; i < subscriptions.length; i++) {
       const subscription = subscriptions[i];
@@ -4335,6 +4350,13 @@ export class EmulationEngine {
           ...subscription,
           messageCount: metrics.messageCount,
           unackedMessageCount: metrics.unackedMessageCount,
+          deliveredCount: metrics.deliveredCount,
+          acknowledgedCount: metrics.acknowledgedCount,
+          nackedCount: metrics.nackedCount,
+          deadLetterCount: metrics.deadLetterCount,
+          pushDeliverySuccessRate: metrics.pushDeliverySuccessRate,
+          expiredAckDeadlines: metrics.expiredAckDeadlines,
+          avgDeliveryAttempts: metrics.avgDeliveryAttempts,
         };
       }
     }

@@ -2358,6 +2358,134 @@ export class DataFlowEngine {
     
     if (type === 'gcp-pubsub') {
       return {
+        generateData: (node, config) => {
+          // Get routing engine from emulation engine
+          const routingEngine = emulationEngine.getPubSubRoutingEngine(node.id);
+          
+          if (!routingEngine) {
+            return null;
+          }
+          
+          const pubSubConfig = (node.data.config as any) || {};
+          const subscriptions = pubSubConfig.subscriptions || [];
+          
+          // Get outgoing connections from this Pub/Sub node
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          
+          if (outgoingConnections.length === 0) {
+            return null; // No outgoing connections, nothing to consume
+          }
+          
+          const messages: DataMessage[] = [];
+          const now = Date.now();
+          
+          // Track last consumption time per connection to throttle consumption
+          const lastConsumeKey = `_lastPubSubConsume_${node.id}`;
+          const lastConsume = (node as any)[lastConsumeKey] || 0;
+          const consumeInterval = 500; // Consume every 500ms
+          
+          if (now - lastConsume < consumeInterval) {
+            return null; // Throttle consumption
+          }
+          
+          (node as any)[lastConsumeKey] = now;
+          
+          // Process each outgoing connection
+          for (const connection of outgoingConnections) {
+            // Extract subscription from connection metadata or config
+            const connectionConfig = (connection.data as any) || {};
+            const messagingConfig = connectionConfig.messaging || config.messaging || {};
+            const subscriptionName = messagingConfig.subscription || connectionConfig.subscription;
+            
+            // If not specified, try to use first subscription from config
+            let finalSubscriptionName = subscriptionName;
+            if (!finalSubscriptionName && subscriptions.length > 0) {
+              finalSubscriptionName = subscriptions[0].name;
+            }
+            
+            if (!finalSubscriptionName) {
+              continue; // Skip if no subscription available
+            }
+            
+            // Find subscription in config
+            const subscription = subscriptions.find((s: any) => s.name === finalSubscriptionName);
+            if (!subscription) {
+              continue; // Subscription not found
+            }
+            
+            // For pull subscriptions: pull messages from subscription
+            if (!subscription.pushEndpoint) {
+              // Pull subscription - extract maxMessages from connection config
+              const maxMessages = messagingConfig.maxMessages || connectionConfig.maxMessages || 100;
+              
+              try {
+                const pulledMessages = routingEngine.pullFromSubscription(finalSubscriptionName, maxMessages);
+                
+                for (const pubSubMsg of pulledMessages) {
+                  messages.push({
+                    id: `pubsub-msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                    timestamp: pubSubMsg.publishTime,
+                    source: node.id,
+                    target: connection.target,
+                    connectionId: connection.id,
+                    format: 'json',
+                    payload: pubSubMsg.data,
+                    size: pubSubMsg.size,
+                    metadata: {
+                      topic: subscription.topic,
+                      subscription: finalSubscriptionName,
+                      messageId: pubSubMsg.messageId,
+                      ackId: pubSubMsg.ackId,
+                      orderingKey: pubSubMsg.orderingKey,
+                      attributes: pubSubMsg.attributes,
+                    },
+                    status: 'pending',
+                  });
+                }
+              } catch (error) {
+                // Log error but continue processing other connections
+                console.error(`Error pulling from subscription ${finalSubscriptionName}:`, error);
+              }
+            } else {
+              // Push subscription - messages are delivered via HTTP POST
+              // In simulation, we still need to generate messages for downstream components
+              // Format payload according to subscription's payload format setting
+              const subscriptionMessages = routingEngine.pullFromSubscription(finalSubscriptionName, 10);
+              
+              for (const pubSubMsg of subscriptionMessages) {
+                // Get formatted payload based on subscription's payload format (WRAPPED/UNWRAPPED)
+                const formattedPayload = routingEngine.getFormattedPushPayload(finalSubscriptionName, pubSubMsg);
+                const payload = formattedPayload !== null ? formattedPayload : pubSubMsg.data;
+                
+                messages.push({
+                  id: `pubsub-push-msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                  timestamp: pubSubMsg.publishTime,
+                  source: node.id,
+                  target: connection.target,
+                  connectionId: connection.id,
+                  format: 'json',
+                  payload: payload,
+                  size: pubSubMsg.size,
+                  metadata: {
+                    topic: subscription.topic,
+                    subscription: finalSubscriptionName,
+                    messageId: pubSubMsg.messageId,
+                    ackId: pubSubMsg.ackId,
+                    orderingKey: pubSubMsg.orderingKey,
+                    attributes: pubSubMsg.attributes,
+                    pushEndpoint: subscription.pushEndpoint,
+                    deliveryMethod: 'push',
+                    payloadFormat: subscription.payloadFormat || 'WRAPPED',
+                  },
+                  status: 'delivered', // Push delivery is simulated as successful
+                });
+              }
+            }
+          }
+          
+          return messages.length > 0 ? messages : null;
+        },
+        
         processData: (node, message, config) => {
           // Get routing engine from emulation engine
           const routingEngine = emulationEngine.getPubSubRoutingEngine(node.id);
