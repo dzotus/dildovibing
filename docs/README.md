@@ -39,6 +39,14 @@
   - Exactly-once delivery, schemas, flow control
   - Retry policy, expiration policy, полный набор метрик
 
+### Компоненты интеграции (Integration)
+
+- **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
+  - Services, Routes, Upstreams, Consumers, Plugins
+  - Load balancing, health checks, circuit breakers
+  - Retry logic, timeout handling, аутентификация
+  - Rate limiting, CORS, IP restriction, полный набор метрик
+
 ## Формат документации
 
 Каждый документ компонента содержит следующие разделы:
@@ -112,6 +120,7 @@
 - **AWS SQS:** [Документация AWS SQS](./messaging/aws-sqs.md)
 - **Azure Service Bus:** [Документация Azure Service Bus](./messaging/azure-service-bus.md)
 - **Google Cloud Pub/Sub:** [Документация Google Cloud Pub/Sub](./messaging/gcp-pubsub.md)
+- **Kong Gateway:** [Документация Kong Gateway](./integration/kong-gateway.md)
 
 ## Обновления
 
@@ -133,3 +142,4 @@
 - [Официальная документация AWS SQS](https://docs.aws.amazon.com/sqs/)
 - [Официальная документация Azure Service Bus](https://docs.microsoft.com/azure/service-bus-messaging/)
 - [Официальная документация Google Cloud Pub/Sub](https://cloud.google.com/pubsub/docs)
+- [Официальная документация Kong Gateway](https://docs.konghq.com/gateway/)
