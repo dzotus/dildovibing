@@ -1,5 +1,84 @@
 # Patch Notes
 
+## Версия 0.1.8i - BFF Service: реальная связь с бэкендами через DataFlowEngine + расширенный UI/UX
+
+### BFF Service: устранение хардкода и реализация реальной симуляции
+
+**Критическое улучшение симулятивности**: BFF Service теперь отправляет реальные запросы к бэкендам через DataFlowEngine вместо использования хардкода. Это обеспечивает полную симулятивность компонента и корректное влияние на метрики системы.
+
+### BFF Service: расширенный UI/UX и функциональность
+
+**Улучшение пользовательского интерфейса**: Реализовано inline редактирование endpoint'ов и backend'ов прямо в карточках (без модальных окон), добавлена валидация полей, toast-уведомления, подтверждения для критичных действий, поддержка audience и fallback в настройках, а также адаптивность табов.
+
+**Ключевые изменения**:
+- ✅ Создана функция `sendMessageToBackend` в `EmulationEngine` для отправки запросов к реальным бэкендам через DataFlowEngine
+- ✅ Обновлены `initializeBFFRoutingEngine` и `updateBFFRoutingEngine` для передачи функции `sendMessageToBackend`
+- ✅ Заменен хардкод в `executeBackend` на использование реальных запросов через `sendMessageToBackend`
+- ✅ Удален метод `generateMockResponse` - больше не используется хардкод генерации данных
+- ✅ Обновлен `updateConfig` в `BFFRoutingEngine` для сохранения `sendMessageToBackend` и `bffNodeId`
+- ✅ Методы `routeRequest`, `aggregateBackends`, `executeBackendsParallel`, `executeBackendsSequential` и `executeBackend` теперь асинхронные для поддержки реальных запросов
+- ✅ Обновлен интерфейс `ComponentDataHandler` для поддержки асинхронного `processData`
+- ✅ Обновлен `DataFlowEngine` для обработки асинхронных результатов `processData`
+- ✅ Добавлен публичный метод `getHandler` в `DataFlowEngine` для получения handlers компонентов
+
+**Технические детали**:
+- Функция `sendMessageToBackend` находит целевой компонент по `backendId`, находит соединение между BFF и бэкендом, создает сообщение с запросом и обрабатывает его через DataFlowEngine handler
+- Запросы к бэкендам теперь проходят через реальную обработку компонентов, что обеспечивает корректные метрики latency, error rate и другие показатели
+- Circuit breaker и retry логика работают с реальными запросами, что делает симуляцию более точной
+- Кэширование работает с реальными ответами от бэкендов
+
+**Улучшения симулятивности**:
+- BFF теперь реально влияет на метрики бэкендов через реальные запросы
+- Метрики latency отражают реальное время обработки запросов бэкендами
+- Error rate рассчитывается на основе реальных ошибок от бэкендов
+- Circuit breaker открывается/закрывается на основе реальных ответов бэкендов
+
+### Изменённые файлы
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Добавлен метод `createSendMessageToBackendFunction` для создания функции отправки запросов к бэкендам
+- ✅ Обновлен `initializeBFFRoutingEngine` для передачи `sendMessageToBackend` и `bffNodeId`
+- ✅ Обновлен `updateBFFRoutingEngine` для передачи `sendMessageToBackend` и `bffNodeId`
+
+#### `src/core/BFFRoutingEngine.ts`
+- ✅ Метод `routeRequest` теперь асинхронный (`async`)
+- ✅ Метод `aggregateBackends` теперь асинхронный (`async`)
+- ✅ Метод `executeBackendsParallel` теперь асинхронный (`async`)
+- ✅ Метод `executeBackendsSequential` теперь асинхронный (`async`)
+- ✅ Метод `executeBackend` теперь асинхронный (`async`) и использует `sendMessageToBackend` вместо хардкода
+- ✅ Удален метод `generateMockResponse` - больше не используется
+- ✅ Обновлен `updateConfig` для сохранения `sendMessageToBackend` и `bffNodeId`
+
+#### `src/core/DataFlowEngine.ts`
+- ✅ Добавлен публичный метод `getHandler` для получения handlers компонентов
+- ✅ Обновлен интерфейс `ComponentDataHandler` - `processData` теперь может возвращать `Promise<DataMessage | null>`
+- ✅ Обновлен метод `deliverMessages` для обработки асинхронных результатов `processData`
+- ✅ Обновлен handler для `bff-service` - `routeRequest` теперь вызывается с `await`
+
+#### `src/components/config/integration/BFFServiceConfigAdvanced.tsx`
+- ✅ Добавлен `useEffect` для автоматической синхронизации конфигурации с routing engine при изменениях
+- ✅ Реализовано **inline редактирование endpoint'ов** прямо в карточках (без модальных окон) с полями: path, method, aggregator, cacheTtl, timeout, выбор бэкендов через чекбоксы
+- ✅ Реализовано **inline редактирование backend'ов** прямо в карточках (без модальных окон) с полями: name, endpoint, protocol, timeout, retries, retryBackoff, настройка circuit breaker
+- ✅ Добавлена валидация полей: path (должен начинаться с /), endpoint (валидный URL), timeout (положительное число), retries (0-10)
+- ✅ Добавлены toast-уведомления для всех операций (создание, редактирование, удаление, ошибки валидации)
+- ✅ Добавлены диалоги подтверждения для удаления endpoint'ов и backend'ов
+- ✅ Добавлена поддержка audience в Settings таб (mobile/web/partner) с влиянием на симуляцию
+- ✅ Добавлена поддержка fallback в Settings таб (enableFallback, fallbackComponent)
+- ✅ Добавлена адаптивность табов (flex-wrap) - табы переносятся на новую строку при узком экране
+- ✅ Добавлены кнопки редактирования для endpoint'ов и backend'ов
+- ✅ Улучшена обработка ошибок валидации с отображением сообщений под полями
+- ✅ Убраны модальные окна Dialog для редактирования - редактирование происходит inline в карточках
+
+**Улучшения UX**:
+- Все операции теперь имеют обратную связь через toast-уведомления
+- Критичные действия (удаление) требуют подтверждения
+- Валидация полей происходит в реальном времени с понятными сообщениями об ошибках
+- **Inline редактирование** обеспечивает быстрый доступ к настройкам без открытия модальных окон - форма редактирования появляется прямо в карточке
+- Кнопки Save/Cancel внизу формы для сохранения или отмены изменений
+- Адаптивный дизайн табов улучшает работу на узких экранах
+
+---
+
 ## Версия 0.1.8h - GraphQL Gateway: расширенный контракт, симуляция, интеграция и UI (Этапы 1–4) + Protocols Repositioning (Этапы 1–8)
 
 ### Protocols Repositioning: протоколы как атрибуты соединений (Фазы 1–4)

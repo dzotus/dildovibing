@@ -41,8 +41,9 @@ export interface ComponentDataHandler {
   
   /**
    * Process incoming data (for targets)
+   * Can return Promise for async processing
    */
-  processData?(node: CanvasNode, message: DataMessage, config: ComponentConfig): DataMessage | null;
+  processData?(node: CanvasNode, message: DataMessage, config: ComponentConfig): DataMessage | null | Promise<DataMessage | null>;
   
   /**
    * Transform data format if needed
@@ -158,6 +159,13 @@ export class DataFlowEngine {
    */
   public registerHandler(type: string, handler: ComponentDataHandler) {
     this.handlers.set(type, handler);
+  }
+
+  /**
+   * Get handler for a component type
+   */
+  public getHandler(type: string): ComponentDataHandler | undefined {
+    return this.handlers.get(type);
   }
 
   /**
@@ -329,15 +337,55 @@ export class DataFlowEngine {
           const sourceNode = this.nodes.find(n => n.id === connection.source);
           
           const result = handler.processData(targetNode, message, config);
-          if (result) {
-            // Generate trace for this message
-            if (sourceNode) {
-              this.generateTraceForMessage(message, sourceNode, targetNode, connection, result);
+          
+          // Handle both sync and async results
+          if (result instanceof Promise) {
+            // Async result - handle with promise
+            result.then(processedResult => {
+              if (processedResult) {
+                // Generate trace for this message
+                if (sourceNode) {
+                  this.generateTraceForMessage(message, sourceNode, targetNode, connection, processedResult);
+                }
+                
+                // Message was processed, add to history and remove from queue
+                this.addToHistory(message);
+                const index = messages.indexOf(message);
+                if (index > -1) {
+                  messages.splice(index, 1);
+                }
+              }
+            }).catch(error => {
+              message.status = 'failed';
+              message.error = error instanceof Error ? error.message : 'Unknown error';
+              
+              // Generate trace for failed message
+              const sourceNode = this.nodes.find(n => n.id === connection.source);
+              if (sourceNode) {
+                this.generateTraceForMessage(message, sourceNode, targetNode, connection, message);
+              }
+              
+              this.addToHistory(message);
+              const index = messages.indexOf(message);
+              if (index > -1) {
+                messages.splice(index, 1);
+              }
+            });
+          } else {
+            // Sync result - handle immediately
+            if (result) {
+              // Generate trace for this message
+              if (sourceNode) {
+                this.generateTraceForMessage(message, sourceNode, targetNode, connection, result);
+              }
+              
+              // Message was processed, add to history and remove from queue
+              this.addToHistory(message);
+              const index = messages.indexOf(message);
+              if (index > -1) {
+                messages.splice(index, 1);
+              }
             }
-            
-            // Message was processed, add to history and remove from queue
-            this.addToHistory(message);
-            messages.splice(messages.indexOf(message), 1);
           }
         } catch (error) {
           message.status = 'failed';
@@ -4429,7 +4477,7 @@ export class DataFlowEngine {
 
     if (type === 'bff-service') {
       return {
-        processData: (node, message, config) => {
+        processData: async (node, message, config) => {
           // Get BFF routing engine from emulation engine
           const routingEngine = emulationEngine.getBFFRoutingEngine(node.id);
           
@@ -4447,8 +4495,8 @@ export class DataFlowEngine {
           const query = payload?.query || message.metadata?.query || {};
           const body = payload?.body || payload || message.payload;
 
-          // Route request through BFF
-          const routeResult = routingEngine.routeRequest({
+          // Route request through BFF (async)
+          const routeResult = await routingEngine.routeRequest({
             path,
             method,
             headers,

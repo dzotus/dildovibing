@@ -71,6 +71,8 @@ export interface BFFConfig {
   fallbackComponent?: string;
   redisEngine?: any; // RedisRoutingEngine - optional, used when cacheMode === 'redis'
   redisNodeId?: string; // Redis node ID for cache key prefix
+  sendMessageToBackend?: (backendId: string, request: BFFRequest) => Promise<{ data?: unknown; error?: string; latency: number; status: number }>; // Function to send requests to real backends
+  bffNodeId?: string; // BFF node ID for finding connections
 }
 
 /**
@@ -139,6 +141,9 @@ export class BFFRoutingEngine {
   private batchSize: number = 10;
   private batchTimeout: number = 50; // ms
   
+  // Function to send messages to real backends
+  private sendMessageToBackend?: (backendId: string, request: BFFRequest) => Promise<{ data?: unknown; error?: string; latency: number; status: number }>;
+  
   /**
    * Initialize BFF with configuration
    */
@@ -156,6 +161,9 @@ export class BFFRoutingEngine {
     this.redisEngine = config.redisEngine || null;
     this.redisNodeId = config.redisNodeId || '';
     
+    // Store function to send messages to backends
+    this.sendMessageToBackend = config.sendMessageToBackend;
+    
     // Initialize backends
     if (config.backends) {
       for (const backend of config.backends) {
@@ -170,6 +178,125 @@ export class BFFRoutingEngine {
       for (const endpoint of config.endpoints) {
         this.endpoints.set(endpoint.id, { ...endpoint });
       }
+    }
+  }
+
+  /**
+   * Update configuration without losing state (metrics, circuit breakers, cache)
+   */
+  public updateConfig(config: Partial<BFFConfig>): void {
+    // Update cache mode and Redis connection if changed
+    if (config.cacheMode !== undefined && config.cacheMode !== this.cacheMode) {
+      // If switching from redis to memory or off, clear redis cache references
+      if (this.cacheMode === 'redis' && config.cacheMode !== 'redis') {
+        // Keep in-memory cache entries
+      }
+      // If switching to redis, update redis engine
+      if (config.cacheMode === 'redis' && config.redisEngine) {
+        this.redisEngine = config.redisEngine;
+        this.redisNodeId = config.redisNodeId || '';
+      }
+      this.cacheMode = config.cacheMode;
+    }
+    
+    if (config.cacheTtl !== undefined) {
+      this.defaultCacheTtl = config.cacheTtl;
+    }
+    
+    if (config.redisEngine !== undefined) {
+      this.redisEngine = config.redisEngine;
+    }
+    
+    if (config.redisNodeId !== undefined) {
+      this.redisNodeId = config.redisNodeId;
+    }
+
+    // Update backends - preserve metrics and circuit breakers
+    if (config.backends !== undefined) {
+      // Remove backends that are no longer in config
+      const newBackendIds = new Set(config.backends.map(b => b.id));
+      for (const [id] of this.backends) {
+        if (!newBackendIds.has(id)) {
+          this.backends.delete(id);
+          this.circuitBreakers.delete(id);
+          this.backendMetrics.delete(id);
+        }
+      }
+      
+      // Add or update backends
+      for (const backend of config.backends) {
+        const existing = this.backends.get(backend.id);
+        this.backends.set(backend.id, { ...backend });
+        
+        // Preserve circuit breaker state if backend already exists
+        if (existing) {
+          const existingCircuitBreaker = this.circuitBreakers.get(backend.id);
+          if (existingCircuitBreaker && backend.circuitBreaker?.enabled) {
+            // Update circuit breaker config but preserve state
+            // State will be updated by the circuit breaker logic itself
+          } else if (backend.circuitBreaker?.enabled) {
+            // Initialize new circuit breaker
+            this.initializeCircuitBreaker(backend.id, backend.circuitBreaker);
+          } else {
+            // Remove circuit breaker if disabled
+            this.circuitBreakers.delete(backend.id);
+          }
+        } else {
+          // New backend - initialize circuit breaker and metrics
+          this.initializeCircuitBreaker(backend.id, backend.circuitBreaker);
+          this.initializeBackendMetrics(backend.id);
+        }
+      }
+    }
+
+    // Update endpoints - preserve cache entries
+    if (config.endpoints !== undefined) {
+      // Remove endpoints that are no longer in config
+      const newEndpointIds = new Set(config.endpoints.map(e => e.id));
+      for (const [id] of this.endpoints) {
+        if (!newEndpointIds.has(id)) {
+          this.endpoints.delete(id);
+          // Note: We don't clear cache entries here as they might still be valid
+          // Cache cleanup happens automatically on expiration
+        }
+      }
+      
+      // Add or update endpoints
+      for (const endpoint of config.endpoints) {
+        this.endpoints.set(endpoint.id, { ...endpoint });
+      }
+    }
+
+    // Update sendMessageToBackend function if provided
+    if (config.sendMessageToBackend !== undefined) {
+      this.sendMessageToBackend = config.sendMessageToBackend;
+    }
+    
+    if (config.bffNodeId !== undefined) {
+      this.config.bffNodeId = config.bffNodeId;
+    }
+
+    // Update other config options
+    if (config.enableCaching !== undefined) {
+      this.config.enableCaching = config.enableCaching;
+    }
+    if (config.enableRequestBatching !== undefined) {
+      this.config.enableRequestBatching = config.enableRequestBatching;
+    }
+    if (config.enableResponseCompression !== undefined) {
+      this.config.enableResponseCompression = config.enableResponseCompression;
+    }
+    if (config.defaultTimeout !== undefined) {
+      this.config.defaultTimeout = config.defaultTimeout;
+    }
+    if (config.maxConcurrentRequests !== undefined) {
+      this.config.maxConcurrentRequests = config.maxConcurrentRequests;
+    }
+    if (config.fallbackEnabled !== undefined) {
+      this.config.fallbackEnabled = config.fallbackEnabled;
+    }
+    if (config.fallbackComponent !== undefined) {
+      this.config.fallbackComponent = config.fallbackComponent;
     }
   }
   
@@ -206,7 +333,7 @@ export class BFFRoutingEngine {
   /**
    * Route a request through BFF
    */
-  public routeRequest(request: BFFRequest): BFFResponse {
+  public async routeRequest(request: BFFRequest): Promise<BFFResponse> {
     const startTime = Date.now();
     
     // 1. Match endpoint
@@ -241,7 +368,7 @@ export class BFFRoutingEngine {
     }
     
     // 3. Get backend responses based on aggregation strategy
-    const backendResponses = this.aggregateBackends(endpoint, request);
+    const backendResponses = await this.aggregateBackends(endpoint, request);
     
     // 4. Aggregate responses
     const aggregated = this.aggregateResponses(endpoint, backendResponses);
@@ -293,52 +420,47 @@ export class BFFRoutingEngine {
   /**
    * Aggregate responses from multiple backends
    */
-  private aggregateBackends(endpoint: BFFEndpoint, request: BFFRequest): BFFBackendResponse[] {
+  private async aggregateBackends(endpoint: BFFEndpoint, request: BFFRequest): Promise<BFFBackendResponse[]> {
     const backendIds = endpoint.backends;
-    const responses: BFFBackendResponse[] = [];
     
     switch (endpoint.aggregator) {
       case 'parallel':
         // Execute all backends in parallel
-        return this.executeBackendsParallel(backendIds, request, endpoint);
+        return await this.executeBackendsParallel(backendIds, request, endpoint);
         
       case 'sequential':
         // Execute backends sequentially (each can depend on previous)
-        return this.executeBackendsSequential(backendIds, request, endpoint);
+        return await this.executeBackendsSequential(backendIds, request, endpoint);
         
       case 'merge':
       default:
         // Execute all backends in parallel and merge results
-        return this.executeBackendsParallel(backendIds, request, endpoint);
+        return await this.executeBackendsParallel(backendIds, request, endpoint);
     }
   }
   
   /**
    * Execute backends in parallel
    */
-  private executeBackendsParallel(
+  private async executeBackendsParallel(
     backendIds: string[],
     request: BFFRequest,
     endpoint: BFFEndpoint
-  ): BFFBackendResponse[] {
-    const responses: BFFBackendResponse[] = [];
-    
-    for (const backendId of backendIds) {
-      const response = this.executeBackend(backendId, request, endpoint);
-      responses.push(response);
-    }
-    
-    return responses;
+  ): Promise<BFFBackendResponse[]> {
+    const promises = backendIds.map(backendId => 
+      this.executeBackend(backendId, request, endpoint)
+    );
+    return Promise.all(promises);
   }
   
   /**
    * Execute backends sequentially
    */
-  private executeBackendsSequential(
+  private async executeBackendsSequential(
     backendIds: string[],
     request: BFFRequest,
     endpoint: BFFEndpoint
-  ): BFFBackendResponse[] {
+  ): Promise<BFFBackendResponse[]> {
     const responses: BFFBackendResponse[] = [];
     let accumulatedData: Record<string, unknown> = {};
     
@@ -352,7 +474,7 @@ export class BFFRoutingEngine {
         } as Record<string, unknown>,
       };
       
-      const response = this.executeBackend(backendId, enrichedRequest, endpoint);
+      const response = await this.executeBackend(backendId, enrichedRequest, endpoint);
       responses.push(response);
       
       // If successful, accumulate data for next backend
@@ -372,11 +494,11 @@ export class BFFRoutingEngine {
   /**
    * Execute a single backend request
    */
-  private executeBackend(
+  private async executeBackend(
     backendId: string,
     request: BFFRequest,
     endpoint: BFFEndpoint
-  ): BFFBackendResponse {
+  ): Promise<BFFBackendResponse> {
     const backend = this.backends.get(backendId);
     if (!backend) {
       return {
@@ -423,82 +545,129 @@ export class BFFRoutingEngine {
       }
     }
     
-    // Simulate backend call with retry logic
-    const timeout = endpoint.timeout || backend.timeout || this.config.defaultTimeout || 5000;
-    const retries = backend.retries || 0;
-    const retryBackoff = backend.retryBackoff || 'exponential';
-    
-    let lastError: string | undefined;
-    let lastLatency = 0;
-    
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      if (attempt > 0) {
-        // Wait before retry
-        const backoff = this.calculateBackoff(attempt, retryBackoff);
-        // In real implementation, we would wait here
-        // For simulation, we just add to latency
-        lastLatency += backoff;
-      }
+    // Use real backend connection if available
+    if (this.sendMessageToBackend) {
+      const timeout = endpoint.timeout || backend.timeout || this.config.defaultTimeout || 5000;
+      const retries = backend.retries || 0;
+      const retryBackoff = backend.retryBackoff || 'exponential';
       
-      // Simulate backend latency (50-200ms base + jitter)
-      const baseLatency = 50 + Math.random() * 150;
-      const jitter = (Math.random() - 0.5) * 20;
-      const latency = baseLatency + jitter;
-      lastLatency += latency;
+      let lastError: string | undefined;
+      let lastLatency = 0;
       
-      // Simulate success/failure (90% success rate by default)
-      const successRate = backend.status === 'connected' ? 0.95 : 0.5;
-      const isSuccess = Math.random() < successRate;
-      
-      if (isSuccess) {
-        // Update circuit breaker on success
-        if (circuitBreaker) {
-          if (circuitBreaker.state === 'half-open') {
-            circuitBreaker.successes++;
-            if (circuitBreaker.successes >= (backend.circuitBreaker?.successThreshold || 2)) {
-              circuitBreaker.state = 'closed';
-              circuitBreaker.failures = 0;
-              circuitBreaker.successes = 0;
-            }
-          } else {
-            circuitBreaker.failures = Math.max(0, circuitBreaker.failures - 1);
-          }
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        if (attempt > 0) {
+          // Wait before retry
+          const backoff = this.calculateBackoff(attempt, retryBackoff);
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          lastLatency += backoff;
         }
         
-        // Generate mock response data
-        const mockData = this.generateMockResponse(backend, request);
-        
-        return {
-          backendId,
-          status: 200,
-          data: mockData,
-          latency: lastLatency,
-          cached: false,
-        };
-      } else {
-        lastError = `Backend error (attempt ${attempt + 1}/${retries + 1})`;
-        
-        // Update circuit breaker on failure
-        if (circuitBreaker) {
-          circuitBreaker.failures++;
-          circuitBreaker.lastFailureTime = Date.now();
+        try {
+          const startTime = Date.now();
+          const response = await Promise.race([
+            this.sendMessageToBackend(backendId, request),
+            new Promise<{ data?: unknown; error?: string; latency: number; status: number }>((_, reject) =>
+              setTimeout(() => reject(new Error('Request timeout')), timeout)
+            ),
+          ]);
           
-          if (circuitBreaker.failures >= (backend.circuitBreaker?.failureThreshold || 5)) {
-            circuitBreaker.state = 'open';
-            circuitBreaker.nextAttemptTime = Date.now() + (backend.circuitBreaker?.timeout || 60000);
+          const requestLatency = Date.now() - startTime;
+          lastLatency += requestLatency;
+          
+          // Update circuit breaker on success
+          if (response.status >= 200 && response.status < 300) {
+            if (circuitBreaker) {
+              if (circuitBreaker.state === 'half-open') {
+                circuitBreaker.successes++;
+                if (circuitBreaker.successes >= (backend.circuitBreaker?.successThreshold || 2)) {
+                  circuitBreaker.state = 'closed';
+                  circuitBreaker.failures = 0;
+                  circuitBreaker.successes = 0;
+                }
+              } else {
+                circuitBreaker.failures = Math.max(0, circuitBreaker.failures - 1);
+              }
+            }
+            
+            return {
+              backendId,
+              status: response.status,
+              data: response.data,
+              latency: lastLatency,
+              cached: false,
+            };
+          } else {
+            // Request failed
+            lastError = response.error || `Backend returned status ${response.status}`;
+            
+            // Update circuit breaker on failure
+            if (circuitBreaker) {
+              circuitBreaker.failures++;
+              circuitBreaker.lastFailureTime = Date.now();
+              
+              if (circuitBreaker.failures >= (backend.circuitBreaker?.failureThreshold || 5)) {
+                circuitBreaker.state = 'open';
+                circuitBreaker.nextAttemptTime = Date.now() + (backend.circuitBreaker?.timeout || 60000);
+              }
+            }
+            
+            // If this was the last attempt, return error
+            if (attempt === retries) {
+              return {
+                backendId,
+                status: response.status,
+                error: lastError,
+                latency: lastLatency,
+                cached: false,
+              };
+            }
+          }
+        } catch (error) {
+          lastError = error instanceof Error ? error.message : 'Unknown error';
+          lastLatency += timeout; // Add timeout to latency
+          
+          // Update circuit breaker on error
+          if (circuitBreaker) {
+            circuitBreaker.failures++;
+            circuitBreaker.lastFailureTime = Date.now();
+            
+            if (circuitBreaker.failures >= (backend.circuitBreaker?.failureThreshold || 5)) {
+              circuitBreaker.state = 'open';
+              circuitBreaker.nextAttemptTime = Date.now() + (backend.circuitBreaker?.timeout || 60000);
+            }
+          }
+          
+          // If this was the last attempt, return error
+          if (attempt === retries) {
+            return {
+              backendId,
+              status: 503,
+              error: lastError,
+              latency: lastLatency,
+              cached: false,
+            };
           }
         }
       }
+      
+      // All retries failed
+      return {
+        backendId,
+        status: 503,
+        error: lastError || 'Backend request failed',
+        latency: lastLatency,
+        cached: false,
+      };
+    } else {
+      // No sendMessageToBackend function - return error
+      return {
+        backendId,
+        status: 503,
+        error: 'Backend connection not configured',
+        latency: 0,
+        cached: false,
+      };
     }
-    
-    // All retries failed
-    return {
-      backendId,
-      status: 503,
-      error: lastError || 'Backend request failed',
-      latency: lastLatency,
-      cached: false,
-    };
   }
   
   /**
@@ -513,45 +682,6 @@ export class BFFRoutingEngine {
       case 'constant':
       default:
         return 100;
-    }
-  }
-  
-  /**
-   * Generate mock response data for simulation
-   */
-  private generateMockResponse(backend: BFFBackend, request: BFFRequest): unknown {
-    // Generate realistic mock data based on backend name
-    const backendName = backend.name.toLowerCase();
-    
-    if (backendName.includes('user') || backendName.includes('profile')) {
-      return {
-        id: Math.floor(Math.random() * 1000),
-        name: 'John Doe',
-        email: 'john.doe@example.com',
-        avatar: 'https://example.com/avatar.jpg',
-      };
-    } else if (backendName.includes('order') || backendName.includes('cart')) {
-      return {
-        id: Math.floor(Math.random() * 1000),
-        items: [
-          { id: 1, name: 'Product 1', price: 29.99, quantity: 2 },
-          { id: 2, name: 'Product 2', price: 49.99, quantity: 1 },
-        ],
-        total: 109.97,
-      };
-    } else if (backendName.includes('product') || backendName.includes('catalog')) {
-      return {
-        products: [
-          { id: 1, name: 'Product 1', price: 29.99, inStock: true },
-          { id: 2, name: 'Product 2', price: 49.99, inStock: true },
-        ],
-        total: 2,
-      };
-    } else {
-      return {
-        data: 'Mock response',
-        timestamp: Date.now(),
-      };
     }
   }
   

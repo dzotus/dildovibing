@@ -8803,6 +8803,118 @@ export class EmulationEngine {
   }
 
   /**
+   * Create function to send messages to backend components through DataFlowEngine
+   */
+  private createSendMessageToBackendFunction(bffNodeId: string): (backendId: string, request: any) => Promise<{ data?: unknown; error?: string; latency: number; status: number }> {
+    return async (backendId: string, request: any): Promise<{ data?: unknown; error?: string; latency: number; status: number }> => {
+      try {
+        // Find backend component by ID
+        const backendNode = this.nodes.find(n => n.id === backendId);
+        if (!backendNode) {
+          return {
+            status: 503,
+            error: `Backend component not found: ${backendId}`,
+            latency: 0,
+          };
+        }
+
+        // Find connection between BFF and backend
+        const connection = this.connections.find(
+          conn => (conn.source === bffNodeId && conn.target === backendId) ||
+                  (conn.source === backendId && conn.target === bffNodeId)
+        );
+
+        if (!connection) {
+          return {
+            status: 503,
+            error: `No connection found between BFF and backend: ${backendId}`,
+            latency: 0,
+          };
+        }
+
+        // Get handler for backend component type
+        const handler = dataFlowEngine.getHandler(backendNode.type);
+        if (!handler || !handler.processData) {
+          // If no handler, return error
+          return {
+            status: 503,
+            error: `No handler found for backend type: ${backendNode.type}`,
+            latency: 0,
+          };
+        }
+
+        // Create message for backend request
+        const message: any = {
+          id: `bff-${Date.now()}-${Math.random()}`,
+          timestamp: Date.now(),
+          source: bffNodeId,
+          target: backendId,
+          connectionId: connection.id,
+          format: 'json',
+          payload: request.body || request,
+          size: JSON.stringify(request.body || request).length,
+          metadata: {
+            path: request.path,
+            method: request.method,
+            headers: request.headers || {},
+            query: request.query || {},
+            ...request.metadata,
+          },
+          status: 'pending',
+          latency: 0,
+        };
+
+        // Process message through backend handler
+        const startTime = Date.now();
+        const processResult = handler.processData(backendNode, message, backendNode.data.config || {});
+        
+        // Handle both sync and async results
+        const result = processResult instanceof Promise 
+          ? await processResult 
+          : processResult;
+        
+        const latency = Date.now() - startTime;
+
+        if (!result) {
+          return {
+            status: 503,
+            error: 'Backend handler returned no result',
+            latency,
+          };
+        }
+
+        // Extract response from result
+        if (result.status === 'delivered' || result.status === 'transformed') {
+          return {
+            status: 200,
+            data: result.payload,
+            latency: result.latency || latency,
+          };
+        } else if (result.status === 'failed') {
+          return {
+            status: 500,
+            error: result.error || 'Backend request failed',
+            latency: result.latency || latency,
+          };
+        } else {
+          // In-transit or pending - return timeout
+          return {
+            status: 504,
+            error: 'Backend request timeout',
+            latency: latency,
+          };
+        }
+      } catch (error) {
+        return {
+          status: 500,
+          error: error instanceof Error ? error.message : 'Unknown error',
+          latency: 0,
+        };
+      }
+    };
+  }
+
+  /**
    * Initialize BFF routing engine for a node
    */
   private initializeBFFRoutingEngine(node: CanvasNode): void {
@@ -8835,6 +8947,9 @@ export class EmulationEngine {
       }
     }
 
+    // Create function to send messages to backends
+    const sendMessageToBackend = this.createSendMessageToBackendFunction(node.id);
+
     routingEngine.initialize({
       backends: config.backends || [],
       endpoints: config.endpoints || [],
@@ -8849,9 +8964,78 @@ export class EmulationEngine {
       fallbackComponent: config.fallbackComponent,
       redisEngine: redisEngine || undefined,
       redisNodeId: redisNodeId || undefined,
+      sendMessageToBackend: sendMessageToBackend,
+      bffNodeId: node.id,
     });
 
     this.bffRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Update BFF routing engine configuration
+   */
+  public updateBFFRoutingEngine(nodeId: string): void {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'bff-service') {
+      return;
+    }
+
+    const routingEngine = this.bffRoutingEngines.get(nodeId);
+    if (!routingEngine) {
+      // If engine doesn't exist, initialize it
+      this.initializeBFFRoutingEngine(node);
+      return;
+    }
+
+    const config = (node.data.config || {}) as any;
+    
+    // Find Redis component if cacheMode is 'redis'
+    let redisEngine = null;
+    let redisNodeId = '';
+    if (config.cacheMode === 'redis') {
+      // Find Redis component connected to this BFF
+      const redisConnection = this.connections.find(
+        conn => (conn.source === node.id || conn.target === node.id) && 
+        (this.nodes.find(n => n.id === (conn.source === node.id ? conn.target : conn.source))?.type === 'redis')
+      );
+      
+      if (redisConnection) {
+        const redisNode = this.nodes.find(
+          n => n.id === (redisConnection.source === node.id ? redisConnection.target : redisConnection.source)
+        );
+        
+        if (redisNode && redisNode.type === 'redis') {
+          // Initialize Redis engine if not already initialized
+          if (!this.redisRoutingEngines.has(redisNode.id)) {
+            this.initializeRedisRoutingEngine(redisNode);
+          }
+          redisEngine = this.redisRoutingEngines.get(redisNode.id);
+          redisNodeId = redisNode.id;
+        }
+      }
+    }
+    
+    // Create function to send messages to backends
+    const sendMessageToBackend = this.createSendMessageToBackendFunction(node.id);
+
+    // Update configuration without full reinitialization
+    routingEngine.updateConfig({
+      backends: config.backends || [],
+      endpoints: config.endpoints || [],
+      enableCaching: config.enableCaching ?? true,
+      enableRequestBatching: config.enableRequestBatching ?? false,
+      enableResponseCompression: config.enableResponseCompression ?? true,
+      defaultTimeout: config.defaultTimeout || 5000,
+      maxConcurrentRequests: config.maxConcurrentRequests || 100,
+      cacheMode: config.cacheMode || 'memory',
+      cacheTtl: config.cacheTtl || 5,
+      fallbackEnabled: config.fallbackEnabled ?? true,
+      fallbackComponent: config.fallbackComponent,
+      redisEngine: redisEngine || undefined,
+      redisNodeId: redisNodeId || undefined,
+      sendMessageToBackend: sendMessageToBackend,
+      bffNodeId: node.id,
+    });
   }
 
   /**
