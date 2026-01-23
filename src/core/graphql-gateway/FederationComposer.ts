@@ -1,13 +1,15 @@
-import { GraphQLGatewayFederationConfig, ServiceRuntimeState } from './types';
+import { GraphQLGatewayFederationConfig, GraphQLGatewayVariabilityConfig, ServiceRuntimeState } from './types';
 
 /**
  * FederationComposer - Handles GraphQL Federation composition
  */
 export class FederationComposer {
   private config?: GraphQLGatewayFederationConfig;
+  private variability?: GraphQLGatewayVariabilityConfig;
   
-  constructor(config?: GraphQLGatewayFederationConfig) {
+  constructor(config?: GraphQLGatewayFederationConfig, variability?: GraphQLGatewayVariabilityConfig) {
     this.config = config;
+    this.variability = variability;
   }
   
   /**
@@ -39,7 +41,9 @@ export class FederationComposer {
     
     // Federation v2 has less overhead than v1
     const baseOverhead = this.config?.version === '2' ? 2 : 4;
-    return baseOverhead + Math.random() * 3;
+    const variabilityOverhead = this.variability?.federationOverheadMs ?? 0;
+    // Жёстких рандомов не используем, итоговый overhead детерминирован
+    return baseOverhead + variabilityOverhead;
   }
   
   /**
@@ -59,6 +63,10 @@ export class FederationComposer {
   
   public updateConfig(config?: GraphQLGatewayFederationConfig): void {
     this.config = config;
+  }
+
+  public updateVariability(variability?: GraphQLGatewayVariabilityConfig): void {
+    this.variability = variability;
   }
 }
 

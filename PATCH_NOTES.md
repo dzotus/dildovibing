@@ -1,5 +1,368 @@
 # Patch Notes
 
+## Версия 0.1.8h - GraphQL Gateway: расширенный контракт, симуляция, интеграция и UI (Этапы 1–4) + Protocols Repositioning (Этапы 1–8)
+
+### Protocols Repositioning: протоколы как атрибуты соединений (Фазы 1–4)
+
+**Перепозиционирование протоколов**: Протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) больше не являются отдельными узлами на канвасе, а стали атрибутами соединений между компонентами. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
+
+**Ключевые достижения**: Протоколы удалены из библиотеки компонентов, создан `ProtocolTransformer` для обработки протоколов на уровне соединений, обновлены `DataFlowEngine` и `EmulationEngine` для учета протоколов в метриках соединений. Реализованы все 4 фазы плана перепозиционирования (Этапы 1–8). Протоколы теперь настраиваются на уровне соединений в UI. Добавлена автоматическая миграция существующих диаграмм с узлами протоколов. Обновлена документация с описанием новой концепции.
+
+#### Фаза 1: Подготовка (Этапы 1–2) ✅
+- **Расширение типов для поддержки протоколов в соединениях**:
+  - Расширен `CanvasConnection.type` - добавлены все протоколы: `'rest' | 'graphql' | 'soap' | 'grpc' | 'websocket' | 'webhook' | 'http'`
+  - Расширен `ConnectionMetadata.protocol` - добавлены все протоколы в метаданные соединения
+  - Добавлены `protocol` и `protocolConfig` в `ConnectionConfig` для протокол-специфичных настроек:
+    - REST: `httpMethod`, `contentType`, `headers`
+    - GraphQL: `query`, `operationName`, `variables`
+    - SOAP: `soapAction`, `wsdlUrl`, `namespace`
+    - gRPC: `serviceName`, `methodName`, `metadata`
+    - WebSocket: `wsProtocol`, `subprotocols`, `binaryType`
+    - Webhook: `webhookEvent`, `signatureHeader`, `secret`
+
+- **Удаление протоколов из библиотеки компонентов**:
+  - Удалены протоколы (rest, grpc, graphql, soap, websocket, webhook) из `COMPONENT_LIBRARY`
+  - Удалена категория 'api' из `COMPONENT_CATEGORIES`
+  - Удален тип 'api' из `ComponentCategory`
+  - Протоколы больше не отображаются как отдельные узлы в библиотеке компонентов
+
+#### Фаза 2: Ядро (Этапы 3–4) ✅
+- **Рефакторинг DataFlowEngine**:
+  - Создан `ProtocolTransformer` (`src/core/ProtocolTransformer.ts`) для обработки протоколов в соединениях
+  - Удалены handlers для протоколов из `registerDefaultHandlers` (протоколы больше не обрабатываются как узлы)
+  - Интегрирован `ProtocolTransformer` в `transformMessageIfNeeded` - протоколы применяются при трансформации сообщений
+  - Обновлен `calculateTransitTime` для учета протокол-специфичных latency multipliers
+  - Протоколы теперь обрабатываются на уровне соединений, а не узлов
+
+- **Рефакторинг EmulationEngine**:
+  - Удалены case'ы для протоколов (rest, grpc, graphql, soap, websocket, webhook) из `updateComponentMetrics`
+  - Добавлен `ProtocolTransformer` в `EmulationEngine` для расчета метрик соединений
+  - Обновлен `calculateConnectionLatency` для учета протоколов через multipliers:
+    - REST: 1.0x (базовый)
+    - GraphQL: 1.1x (немного медленнее из-за парсинга запросов)
+    - SOAP: 1.3x (медленнее из-за XML парсинга)
+    - gRPC: 0.7x (быстрее из-за бинарного протокола)
+    - WebSocket: 0.9x (быстрее для real-time)
+    - Webhook: 1.0x (базовый)
+  - Методы `simulateAPI`, `simulateSOAP`, `simulateWebhook` оставлены для обратной совместимости (используются другими компонентами)
+
+### Изменённые файлы
+
+#### `src/types/index.ts`
+- ✅ Расширен `CanvasConnection.type` - добавлены все протоколы
+- ✅ Добавлены `protocol` и `protocolConfig` в `ConnectionConfig`
+
+#### `src/services/connection/types.ts`
+- ✅ Расширен `ConnectionMetadata.protocol` - добавлены все протоколы
+
+#### `src/data/components.ts`
+- ✅ Удалены протоколы из `COMPONENT_LIBRARY`
+- ✅ Удалена категория 'api' из `COMPONENT_CATEGORIES`
+
+#### `src/core/ProtocolTransformer.ts` (новый файл)
+- ✅ Создан класс `ProtocolTransformer` для обработки протоколов в соединениях
+- ✅ Методы трансформации для каждого протокола (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook)
+- ✅ Метод `calculateProtocolLatencyMultiplier` для расчета протокол-специфичных multipliers
+
+#### `src/core/DataFlowEngine.ts`
+- ✅ Удалены handlers для протоколов из `registerDefaultHandlers`
+- ✅ Добавлен `ProtocolTransformer` в класс
+- ✅ Интегрирован в `transformMessageIfNeeded` для применения протокольной трансформации
+- ✅ Обновлен `calculateTransitTime` для учета протоколов
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Удалены case'ы для протоколов из `updateComponentMetrics`
+- ✅ Добавлен `ProtocolTransformer` в класс
+- ✅ Обновлен `calculateConnectionLatency` для учета протоколов через multipliers
+- ✅ Добавлен метод `getConnectionProtocol` для определения протокола соединения
+
+#### `src/services/connection/rules/bffRules.ts`
+- ✅ Убраны протоколы из `targetTypes`, изменено на `'*'`
+- ✅ Протокол определяется из `connection.type` или `connection.data.protocol`
+
+#### `src/services/connection/rules/kongRules.ts`
+- ✅ Убраны протоколы из `targetTypes`, изменено на `'*'`
+- ✅ Протокол определяется из соединения, а не из типа целевого компонента
+
+#### `src/services/connection/rules/apiGatewayRules.ts`
+- ✅ Убраны протоколы из `targetTypes`, изменено на `'*'`
+- ✅ Протокол определяется из соединения
+
+#### `src/services/connection/ServiceDiscovery.ts`
+- ✅ Обновлен `getConnectionMetadata()` для поддержки всех протоколов из соединения
+- ✅ Приоритет: `connection.type` > `connection.data.protocol` > тип целевого компонента
+
+#### `src/components/config/ConnectionPropertiesPanel.tsx`
+- ✅ Добавлена секция "Protocol" для настройки протоколов соединений
+- ✅ Реализован выбор протокола с протокол-специфичными настройками
+- ✅ Протоколы настраиваются в правом сайдбаре при выборе соединения
+
+#### `src/components/config/ComponentConfigRenderer.tsx`
+- ✅ Удалены case'ы для протоколов (протоколы больше не узлы)
+
+#### Фаза 3: Интеграция (Этапы 5–6) ✅
+- **Рефакторинг Connection Rules**:
+  - Обновлены `bffRules.ts`, `kongRules.ts`, `apiGatewayRules.ts` - убраны протоколы из `targetTypes`
+  - `targetTypes` изменены на `'*'` - компоненты могут подключаться к любым сервисам
+  - Протокол определяется из `connection.type` или `connection.data.protocol`, а не из типа целевого компонента
+  - Обновлен `ServiceDiscovery.getConnectionMetadata()` для поддержки всех протоколов из соединения
+
+- **Рефакторинг UI**:
+  - Добавлена секция "Protocol" в `ConnectionPropertiesPanel` для настройки протоколов соединений
+  - Реализован выбор протокола с протокол-специфичными настройками для каждого типа
+  - Удалены case'ы для протоколов из `ComponentConfigRenderer` (протоколы больше не узлы)
+  - Протоколы настраиваются в правом сайдбаре при выборе соединения
+
+#### Фаза 4: Миграция (Этапы 7–8) ✅
+- **Миграция существующих данных**:
+  - Создан `MigrationService` (`src/utils/migration.ts`) для автоматической миграции узлов протоколов в протоколы соединений
+  - Функция `migrateProtocolsToConnections()` преобразует узлы протоколов (rest, grpc, graphql, soap, websocket, webhook) в протоколы соединений
+  - Для каждого узла протокола:
+    - Находятся все входящие и исходящие соединения
+    - Создаются прямые соединения (source → target) с протоколом из типа узла
+    - Удаляются старые соединения через узел протокола
+    - Удаляется сам узел протокола
+  - Функция `needsProtocolMigration()` проверяет необходимость миграции
+  - Обработка ошибок и логирование процесса миграции
+
+- **Версионирование и автоматическая миграция**:
+  - Версия диаграммы увеличена до 2 в `persistence.ts`
+  - Добавлена функция `applyMigrations()` для применения миграций при загрузке
+  - Миграция автоматически применяется при загрузке диаграммы из localStorage
+  - Миграция применяется при импорте диаграммы из JSON файла
+  - Мигрированная версия автоматически сохраняется обратно в storage
+  - Обратная совместимость: старые диаграммы (версия 1) автоматически мигрируются
+
+- **Обновление документации**:
+  - Добавлен раздел "Протоколы и API" в `docs/README.md` с описанием новой концепции
+  - Документированы все поддерживаемые протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook)
+  - Описана настройка протоколов в UI (правый сайдбар при выборе соединения)
+  - Описана визуализация протоколов на канвасе (цвет линии, иконка, tooltip)
+  - Добавлена информация о миграции существующих диаграмм
+  - Примеры конфигураций (`enterprise_architecture_demo.json`) будут автоматически мигрированы при загрузке
+
+### Изменённые файлы (Фаза 4)
+
+#### `src/utils/migration.ts` (новый файл)
+- ✅ Создан `MigrationService` для миграции протоколов из узлов в соединения
+- ✅ Функция `migrateProtocolsToConnections()` - основная логика миграции
+- ✅ Функция `needsProtocolMigration()` - проверка необходимости миграции
+- ✅ Интерфейс `MigrationResult` - результат миграции с детальной информацией
+- ✅ Обработка edge cases (узлы без входящих/исходящих соединений, дубликаты соединений)
+
+#### `src/utils/persistence.ts`
+- ✅ Версия увеличена до 2 (`CURRENT_VERSION = 2`)
+- ✅ Добавлена функция `applyMigrations()` для применения миграций
+- ✅ Обновлен `loadDiagramFromStorage()` - автоматическое применение миграций при загрузке
+- ✅ Обновлен `importDiagramFromJSON()` - применение миграций при импорте
+- ✅ Автоматическое сохранение мигрированной версии обратно в storage
+
+#### `docs/README.md`
+- ✅ Добавлен раздел "Протоколы и API (Protocols & APIs)"
+- ✅ Описана концепция протоколов как атрибутов соединений
+- ✅ Документированы все поддерживаемые протоколы с их особенностями
+- ✅ Описана настройка протоколов в UI
+- ✅ Описана визуализация протоколов на канвасе
+- ✅ Добавлена информация о миграции существующих диаграмм
+
+---
+
+## Версия 0.1.8h - GraphQL Gateway: расширенный контракт, симуляция, интеграция и UI (Этапы 1–4)
+
+### Обзор изменений
+**GraphQL Gateway: полная реализация симуляции и UI**: Реализован GraphQL Gateway с реалистичной симуляцией федерации, кэширования, rate limiting и сложности запросов без хардкода. Интегрирован с `EmulationEngine` и `DataFlowEngine` для реального участия в симуляции. Перестроен UI `GraphQLGatewayConfigAdvanced` с табами Overview/Services/Federation/Performance & Cache/Security & Limits, привязан к реальным метрикам из эмуляции, добавлен CRUD для сервисов и федерации с выбором из GraphQL‑нод канваса.
+
+**Ключевые достижения**: Удалены все прямые `Math.random()` из ядра gateway, вариативность контролируется через `GraphQLGatewayVariabilityConfig`. Gateway реально участвует в симуляции через `DataFlowEngine`, метрики агрегируются в `EmulationEngine` и отображаются в UI в реальном времени. UI соответствует уровню облачных консолей управления (Apollo Studio), все элементы интерактивны и связаны с симуляцией.
+
+### Ключевые изменения
+
+#### Этап 1: Доменная модель и контракт ✅
+- **Доменная модель и контракт**:
+  - Добавлена конфигурация вариативности `GraphQLGatewayVariabilityConfig` и поле `variability` в `GraphQLGatewayConfig` для управления джиттером latency, базовым уровнем случайных ошибок и federation overhead через конфиг, а не через захардкоженные `Math.random()`.
+  - Расширена конфигурация rate limiting (`globalRateLimitPerMinute`) для централизованного контроля лимитов.
+  - Добавлен тип `GraphQLGatewayMetrics` для агрегированных метрик gateway (requestsTotal, errorsTotal, latency percentiles, cache hit/miss, federatedRequestCount, RPS) для использования в EmulationEngine и UI.
+
+- **Расширенный ответ GraphQL Gateway**:
+  - Обновлён `GraphQLGatewayResponse` с включением дополнительной информации о выполнении запроса: `cacheHit`, `rateLimited`, `complexityRejected`, `usedServices`, `plannedLatency`, `federated`.
+  - `GraphQLGatewayRoutingEngine.routeRequest` теперь возвращает обогащённый ответ, учитывающий результат rate limiting, кэширования, анализа сложности и планирования федерации, без падения симуляции при ошибках.
+
+- **Интеграция с EmulationEngine**:
+  - Обновлён метод `initializeGraphQLGatewayRoutingEngine` в `EmulationEngine`:
+    - Валидация и безопасная инициализация `node.data.config` (проверка типов, `Array.isArray` для массивов, защита от `null/undefined`).
+    - Проброс настроек кэша, сложностей, rate limiting и variability в `GraphQLGatewayConfig`.
+    - Синхронизация статусов сервисов (`connected`/`disconnected`/`error`) на основе текущих `connections` к GraphQL‑бэкендам.
+  - В местах вызова `initializeGraphQLGatewayRoutingEngine` добавлены `try/catch` с логированием ошибок через `errorCollector`, чтобы инициализация gateway никогда не роняла симуляцию.
+
+#### Этап 2: Углубление симулятивности ядра ✅
+- **Удаление "магического рандома"**:
+  - `QueryPlanner`: джиттер latency и federation overhead контролируются через `variability.latencyJitterMultiplier` и `variability.federationOverheadMs`, без прямых `Math.random()`.
+  - `FederationComposer`: `getPlanningOverhead()` учитывает версию федерации и `variability.federationOverheadMs`, полностью детерминирован.
+  - `QueryExecutor`: вероятность ошибок моделируется детерминированно на основе `service.errorRate`, `variability.baseRandomErrorRate` и отношения `rollingErrors/rollingLatency`.
+
+- **Реалистичное кэширование**:
+  - `CacheManager`: добавлены счётчики `hitCount`/`missCount`, учитываемые при каждом обращении к кэшу (включая истечение TTL).
+  - Добавлен метод `getMetrics()` с `cacheHitCount`, `cacheMissCount`, `cacheSize` для использования в EmulationEngine/UI.
+
+- **Rate limiting и сложность**:
+  - `RateLimiter` привязан к конфигу (`globalRateLimitPerMinute`), хранит счётчики по идентификаторам (ip/apiKey/user).
+  - `QueryComplexityAnalyzer` поддерживает разные лимиты для запросов/мутаций/сабскрипций, возвращает валидационный результат с типом ограничения.
+
+#### Этап 3: Интеграция с EmulationEngine и DataFlow ✅
+- **Цикл симуляции запросов**:
+  - Для `graphql-gateway` в `DataFlowEngine` обработчик после `routingEngine.routeRequest()` передаёт результат в `EmulationEngine.recordGraphQLGatewayRequest`, а также метрики кэша (`CacheManager.getMetrics()`).
+  - EmulationEngine накапливает агрегированные статистики (requests, errors, rateLimited, complexityRejected, federated, latency) в `graphQLGatewayStats`.
+  - Добавлен `simulateGraphQLGateway` в `EmulationEngine`, который на основе накопленных статистик рассчитывает `throughput`, среднюю latency, errorRate и `customMetrics` для `ComponentMetrics` узла gateway.
+
+- **Связь с другими узлами**:
+  - В `initializeGraphQLGatewayRoutingEngine` реализована синхронизация `services` с текущими `connections`: статусы сервисов пересчитываются и используются при инициализации `ServiceRegistry`.
+
+#### Этап 4: Расширение и выравнивание UI/UX ✅
+- **Перестройка структуры UI**:
+  - Реализованы табы: `Overview`, `Services`, `Federation`, `Performance & Cache`, `Security & Limits`.
+  - Табы адаптивны (`flex-wrap`), переносятся на новую строку при узком экране.
+  - `Overview` показывает ключевые метрики gateway (requests, errors, latency percentiles, error rate, RPS), статус федерации и количество подключённых сервисов.
+  - `Services` отображает список backend‑сервисов с runtime‑метриками (requests, errors, статус health).
+  - `Federation` поддерживает выбор версии (`v1`/`v2`), CRUD для списка federated‑сервисов, отображение суперграф‑схемы и статуса композиции.
+  - `Performance & Cache` показывает TTL, persist‑queries, cache hit/miss counts, hit rate и размер кэша.
+  - `Security & Limits` содержит настройки интроспекции, complexity analysis, rate limiting, лимиты depth/complexity и глобальный rate limit.
+
+- **Глубокий CRUD для сервисов и федерации**:
+  - Для `Services`: убран хардкод, добавлен диалог `Dialog` для создания сервиса с выбором из существующих GraphQL‑нод на канвасе (`Select` с `availableGraphQLNodes`) и возможностью ручного ввода имени/endpoint.
+  - Runtime‑метрики сервисов синхронизируются из `ServiceRegistry` через `useEffect` каждые 2 секунды во время симуляции.
+  - Для `Federation`: реализован CRUD для `federation.services` (добавление через `Select`, удаление через кнопку `X`), выбор версии federation, отображение суперграф‑схемы с обрезкой.
+
+- **Безопасность, валидация и UX‑feedback**:
+  - Убраны касты `as any` где возможно, использованы безопасные проверки типов.
+  - Добавлена валидация для числовых полей (`cacheTtl >= 0`, `maxQueryDepth` 1–50, `maxQueryComplexity > 0`, `globalRateLimitPerMinute > 0`) с toast‑уведомлениями при ошибках.
+  - Подключены toast‑уведомления через `useToast` для всех операций (создание/удаление сервиса, включение/выключение федерации, добавление/удаление federated‑сервисов).
+  - Используется только UI‑система (`Dialog` из shadcn/ui), нативные диалоги браузера не используются.
+
+- **Привязка UI к runtime‑метрикам**:
+  - Метрики gateway читаются из `useEmulationStore.getComponentMetrics(componentId).customMetrics`:
+    - `gatewayRequestsTotal`, `gatewayErrorsTotal`, `gatewayRateLimitedTotal`, `gatewayComplexityRejectedTotal`
+    - `gatewayFederatedRequests`, `gatewayCacheHitCount`, `gatewayCacheMissCount`, `gatewayCacheSize`
+    - `latencyP50`, `latencyP99`, `averageLatency`, `errorRate`, `throughput` (RPS)
+  - Метрики сервисов синхронизируются из `ServiceRegistry` через `useEffect` с интервалом 2 секунды во время симуляции.
+  - UI обновляется в реальном времени через `useMemo` для gateway‑метрик и `useEffect` для сервисных метрик, без лишних перерисовок.
+
+### Изменённые файлы
+
+#### `src/core/graphql-gateway/types.ts`
+- ✅ Добавлена `GraphQLGatewayVariabilityConfig` и поле `variability` в `GraphQLGatewayConfig`.
+- ✅ Расширен `GraphQLGatewayResponse` дополнительными полями (`cacheHit`, `rateLimited`, `complexityRejected`, `usedServices`, `plannedLatency`, `federated`).
+- ✅ Добавлен тип `GraphQLGatewayMetrics` для агрегированных метрик gateway.
+
+#### `src/core/GraphQLGatewayRoutingEngine.ts`
+- ✅ Инициализация ведётся из `GraphQLGatewayConfig` с безопасной обработкой массивов/объектов.
+- ✅ `routeRequest` возвращает расширенный `GraphQLGatewayResponse`.
+- ✅ При `initialize` пробрасывает `config.variability` в `FederationComposer`, `QueryPlanner` и `QueryExecutor`.
+
+#### `src/core/graphql-gateway/QueryPlanner.ts`
+- ✅ Подключена `GraphQLGatewayVariabilityConfig`, добавлен метод `updateVariability`.
+- ✅ Расчёт federation overhead переведён на детерминированный метод `getFederationOverhead()` без прямых `Math.random()`.
+- ✅ Джиттер latency контролируется через `latencyJitterMultiplier`.
+
+#### `src/core/graphql-gateway/FederationComposer.ts`
+- ✅ Поддержка `GraphQLGatewayVariabilityConfig` и метод `updateVariability`.
+- ✅ `getPlanningOverhead()` учитывает версию федерации и `variability.federationOverheadMs`, полностью без `Math.random()`.
+
+#### `src/core/graphql-gateway/CacheManager.ts`
+- ✅ Добавлены счётчики `hitCount`/`missCount`, учитываемые при каждом обращении к кэшу.
+- ✅ Добавлен метод `getMetrics()` с `cacheHitCount`, `cacheMissCount`, `cacheSize`.
+
+#### `src/core/graphql-gateway/QueryExecutor.ts`
+- ✅ Подключена `GraphQLGatewayVariabilityConfig`, добавлен `updateVariability`.
+- ✅ Вероятность ошибки моделируется детерминированно на основе `service.errorRate`, `variability.baseRandomErrorRate` и отношения `rollingErrors/rollingLatency`.
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Обновлён метод `initializeGraphQLGatewayRoutingEngine`:
+  - Валидация и безопасная инициализация `node.data.config`.
+  - Синхронизация статусов сервисов с текущими `connections`.
+- ✅ Добавлен метод `recordGraphQLGatewayRequest` для накопления агрегированных статистик gateway.
+- ✅ Добавлен `simulateGraphQLGateway` для расчёта метрик gateway на основе накопленных статистик.
+- ✅ Добавлено хранилище `graphQLGatewayStats` для метрик каждого gateway‑узла.
+
+#### `src/core/DataFlowEngine.ts`
+- ✅ Обработчик `graphql-gateway` после `routingEngine.routeRequest()` передаёт результат в `EmulationEngine.recordGraphQLGatewayRequest` и метрики кэша.
+
+#### `src/components/config/integration/GraphQLGatewayConfigAdvanced.tsx`
+- ✅ Полностью перестроен UI с табами: `Overview`, `Services`, `Federation`, `Performance & Cache`, `Security & Limits`.
+- ✅ Привязка к реальным метрикам из `useEmulationStore.getComponentMetrics(componentId).customMetrics`.
+- ✅ Синхронизация метрик сервисов из `ServiceRegistry` через `useEffect` каждые 2 секунды во время симуляции.
+- ✅ Диалог `Dialog` для создания сервиса с выбором из существующих GraphQL‑нод на канвасе.
+- ✅ CRUD для `federation.services` с выбором версии federation (`v1`/`v2`).
+- ✅ Валидация для числовых полей с toast‑уведомлениями при ошибках.
+- ✅ Toast‑уведомления для всех операций (создание/удаление сервиса, включение/выключение федерации).
+- ✅ Убран хардкод (`setShowCreateService` больше не используется, выбор из GraphQL‑нод вместо фиксированных значений).
+
+### Технические детали
+
+#### Реализация симуляции
+- **Вариативность**: Все `Math.random()` удалены из ядра gateway, вариативность контролируется через `GraphQLGatewayVariabilityConfig` и состояние сервисов.
+- **Кэширование**: `CacheManager` ведёт счётчики hit/miss и предоставляет метрики через `getMetrics()` для использования в EmulationEngine/UI.
+- **Метрики**: Gateway реально участвует в симуляции через `DataFlowEngine`, метрики агрегируются в `EmulationEngine` и отображаются в UI в реальном времени.
+
+#### Реализация UI
+- **Метрики**: Gateway‑метрики читаются из `ComponentMetrics.customMetrics`, сервисные метрики синхронизируются из `ServiceRegistry` через `useEffect`.
+- **CRUD**: Диалог для создания сервиса с выбором из GraphQL‑нод канваса, валидация и toast‑уведомления для всех операций.
+- **Адаптивность**: Табы адаптивны (`flex-wrap`), переносятся на новую строку при узком экране.
+
+#### Этап 5: Параметризация и сценарии ✅
+- **Параметризация констант**: Основные константы параметризованы через `GraphQLGatewayVariabilityConfig` и `GraphQLGatewayConfig` (джиттер latency, базовый уровень ошибок, federation overhead, rate limiting, лимиты complexity/depth, cache TTL). Оставшиеся константы являются обоснованными эвристиками для оценки сложности запросов.
+- **Пресеты сценариев**: Создан файл `GRAPHQL_GATEWAY_SCENARIOS.md` с готовыми пресетами конфигурации:
+  - Single‑service monolith (без федерации, базовые лимиты).
+  - Multi‑service без федерации (несколько backend‑GraphQL сервисов).
+  - Federated v1 и v2 конфигурации.
+  - High‑load API (жёсткие лимиты complexity, агрессивный кэш).
+  - Development/Staging (мягкие настройки для разработки).
+
+#### Этап 6: Финальная шлифовка ✅
+- **Проверка кода**: Все файлы проверены линтером, ошибок нет. Убраны касты `as any` где возможно, использованы безопасные проверки типов. Удалены все неконтролируемые `Math.random()` из ядра gateway.
+- **UI/UX**: Все табы интерактивны, все настройки влияют на симуляцию, табы адаптивны. Диалог создания сервиса работает с выбором из GraphQL‑нод канваса и валидацией.
+- **Документация**: План в `GRAPHQL_GATEWAY_DEVELOPMENT_PLAN.md` обновлён с отметками о выполнении всех этапов. Создан `GRAPHQL_GATEWAY_SCENARIOS.md` с пресетами для типичных сценариев.
+
+> Примечание: Все этапы плана GraphQL Gateway (1–6) полностью реализованы. Gateway функционально ведёт себя как реальный gateway, UI соответствует ожиданиям от облачной консоли управления, симуляция даёт правдоподобные результаты без хардкода.
+
+## Версия 0.1.8h - GraphQL Gateway как полноценный federated‑шлюз, а не backend‑сервис
+
+### Обзор изменений
+**GraphQL Gateway как коннектор между сервисами**: переработан компонент конфигурации GraphQL Gateway так, чтобы он моделировал реальный federated‑шлюз: стоит между клиентами и GraphQL backend‑сервисами и автоматически привязывает сервисы по соединениям на канвасе, а не ведёт себя как самостоятельный backend.
+
+### Ключевые изменения
+
+- **Исправление критической ошибки Select в конфиге Gateway**:
+  - Устранён краш `A <Select.Item /> must have a value prop that is not an empty string` в селектах GraphQL Gateway.
+  - Все `SelectItem` теперь имеют валидные `value`, даже для disabled‑опций, что совместимо с Radix Select и placeholder‑логикой.
+
+- **GraphQL Gateway = коннектор между GraphQL сервисами**:
+  - Таб `Services` перепроектирован: больше нет ручного "создания" backend‑сервисов внутри Gateway.
+  - Сервисы появляются автоматически из конфигурации, которую формируют правила подключений (`graphql-gateway` → `graphql`) и `graphqlGatewayRules.ts`.
+  - Логика статуса `connected/disconnected/error` привязана к реальным `CanvasConnection`:
+    - `connected` — есть исходящее соединение от GraphQL Gateway к `graphql`‑ноде на канвасе, имя/endpoint сервиса мапится на ноду.
+    - `disconnected` — сервис есть в конфиге, но реальной связи на канвасе нет.
+    - `error` — статус, идущий из эмуляции/ServiceRegistry, сохраняется и не затирается.
+
+- **Новый UX таба `Services`**:
+  - Убрана кнопка `Add Service` и модальное окно ручного добавления — источник правды теперь только соединения на канвасе и connection‑rules.
+  - Секция подключённых сервисов:
+    - Карточка сервиса показывает статус, endpoint, базовые метрики (requests, errors) и, если возможно, связанную `graphql`‑ноду (label/id).
+    - Для `disconnected` сервисов отображается подсказка, что нужно создать соединение на канвасе, чтобы активировать сервис.
+  - Секция "Available GraphQL Nodes":
+    - Показывает все `graphql`‑ноды на канвасе, к которым ещё нет исходящих соединений от GraphQL Gateway.
+    - Подсказка: чтобы добавить сервис, нужно протянуть connection от GraphQL Gateway к этой ноде — gateway сам зарегистрирует backend.
+
+- **Синхронизация с EmulationEngine и ServiceRegistry**:
+  - Перед инициализацией `GraphQLGatewayRoutingEngine` статус сервисов пересчитывается на основе `nodes` и `connections`.
+  - `ServiceRegistry` остаётся источником runtime‑состояния (latency, errorRate, rolling‑метрики); UI аккуратно считывает эти метрики и не ломает симуляцию.
+  - Метрики в табе `Services` обновляются по таймеру и отражают реальные данные, с которыми работает планировщик и исполнитель запросов gateway.
+
+- **UI/UX выравнивание под реальный Cloud GraphQL Gateway**:
+  - GraphQL Gateway остаётся интеграционным элементом (`type: 'graphql-gateway'`), но его конфигурация теперь явно отражает роль API‑шлюза, а не backend‑узла.
+  - В конфиге разделены:
+    - параметры самого шлюза (federation, cache, rate limiting, complexity limits);
+    - backend‑сервисы, которые подтягиваются по связям.
+  - Конфиг‑панель выступает как "панель наблюдения и тонкой настройки", а не источник правды о топологии.
+
 ## Версия 0.1.8g - MuleSoft Anypoint Platform: Connectors Management, Enrich Processor и Health Monitoring
 
 ### Обзор изменений

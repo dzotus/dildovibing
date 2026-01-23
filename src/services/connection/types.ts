@@ -4,7 +4,7 @@ import { CanvasNode, CanvasConnection, ComponentConfig } from '@/types';
  * Метаданные для связи между компонентами
  */
 export interface ConnectionMetadata {
-  protocol?: 'http' | 'grpc' | 'tcp' | 'udp' | 'websocket' | 'kafka' | 'rabbitmq' | 'async' | 'sync';
+  protocol?: 'rest' | 'graphql' | 'soap' | 'grpc' | 'websocket' | 'webhook' | 'http' | 'tcp' | 'udp' | 'kafka' | 'rabbitmq' | 'async' | 'sync';
   sourcePort?: number;
   targetPort?: number;
   sourceHost?: string;

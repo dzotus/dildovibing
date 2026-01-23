@@ -7,7 +7,6 @@ export type ComponentCategory =
   | 'devops'
   | 'infrastructure'
   | 'edge'
-  | 'api'
   | 'ml'
   | 'business';
 
@@ -75,7 +74,7 @@ export interface CanvasConnection {
   id: string;
   source: string;
   target: string;
-  type: 'sync' | 'async' | 'http' | 'grpc' | 'websocket';
+  type: 'sync' | 'async' | 'rest' | 'graphql' | 'soap' | 'grpc' | 'websocket' | 'webhook' | 'http';
   label?: string;
   data?: ConnectionConfig;
   selected?: boolean;
@@ -97,6 +96,40 @@ export interface ConnectionConfig {
   
   // Monitoring
   enableMonitoring?: boolean;
+  
+  // Protocol-specific settings
+  protocol?: 'rest' | 'graphql' | 'soap' | 'grpc' | 'websocket' | 'webhook';
+  protocolConfig?: {
+    // REST-specific
+    httpMethod?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+    contentType?: 'json' | 'xml' | 'form-data';
+    headers?: Record<string, string>;
+    
+    // GraphQL-specific
+    query?: string;
+    operationName?: string;
+    variables?: Record<string, any>;
+    
+    // SOAP-specific
+    soapAction?: string;
+    wsdlUrl?: string;
+    namespace?: string;
+    
+    // gRPC-specific
+    serviceName?: string;
+    methodName?: string;
+    metadata?: Record<string, string>;
+    
+    // WebSocket-specific
+    wsProtocol?: string;
+    subprotocols?: string[];
+    binaryType?: 'blob' | 'arraybuffer';
+    
+    // Webhook-specific
+    webhookEvent?: string;
+    signatureHeader?: string;
+    secret?: string;
+  };
   
   // Custom - используем unknown для безопасности типов
   [key: string]: unknown;

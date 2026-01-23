@@ -9,10 +9,10 @@ import { ServiceDiscovery } from '../ServiceDiscovery';
 export function createBFFRule(discovery: ServiceDiscovery): ConnectionRule {
   return {
     sourceType: 'bff-service',
-    targetTypes: ['rest', 'grpc', 'graphql', 'websocket', 'soap', 'webhook'],
+    targetTypes: '*', // BFF can connect to any service, protocol is determined from connection
     priority: 10,
 
-    updateSourceConfig: (bff: CanvasNode, target: CanvasNode, _connection: CanvasConnection, metadata: ConnectionMetadata) => {
+    updateSourceConfig: (bff: CanvasNode, target: CanvasNode, connection: CanvasConnection, metadata: ConnectionMetadata) => {
       if (!metadata.targetHost || !metadata.targetPort) return null;
 
       const config = bff.data.config || {};
@@ -28,12 +28,17 @@ export function createBFFRule(discovery: ServiceDiscovery): ConnectionRule {
       
       if (existing) return null;
 
-      // Determine protocol based on target type
+      // Determine protocol from connection (not from target type)
+      // Priority: connection.type > connection.data.protocol > metadata.protocol > 'http'
       let protocol: 'http' | 'grpc' | 'graphql' = 'http';
-      if (target.type === 'grpc') {
+      const connectionProtocol = connection.type || connection.data?.protocol || metadata.protocol;
+      
+      if (connectionProtocol === 'grpc' || connectionProtocol === 'gRPC') {
         protocol = 'grpc';
-      } else if (target.type === 'graphql') {
+      } else if (connectionProtocol === 'graphql' || connectionProtocol === 'GraphQL') {
         protocol = 'graphql';
+      } else if (connectionProtocol === 'rest' || connectionProtocol === 'http') {
+        protocol = 'http';
       }
 
       // Create new backend

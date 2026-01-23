@@ -10,7 +10,7 @@ import type { API } from '@/core/api-gateway/types';
 export function createAPIGatewayRule(discovery: ServiceDiscovery): ConnectionRule {
   return {
     sourceType: 'api-gateway',
-    targetTypes: ['rest', 'grpc', 'graphql', 'websocket', 'soap', 'webhook'],
+    targetTypes: '*', // API Gateway can connect to any service, protocol is determined from connection
     priority: 10,
     
     updateSourceConfig: (gateway, target, connection, metadata) => {
@@ -21,33 +21,34 @@ export function createAPIGatewayRule(discovery: ServiceDiscovery): ConnectionRul
       const config = gateway.data.config || {};
       const apis: API[] = (config.apis || []) as API[];
       
-      // Определяем протокол и backend URL
-      const protocol = metadata.protocol === 'grpc' ? 'http' : 'http';
+      // Determine protocol from connection (not from target type)
+      const connectionProtocol = connection.type || connection.data?.protocol || metadata.protocol || 'http';
+      const protocol = (connectionProtocol === 'grpc' || connectionProtocol === 'gRPC') ? 'http' : 'http';
       const backendUrl = `${protocol}://${metadata.targetHost}:${metadata.targetPort}`;
       const backendUrlHttps = `https://${metadata.targetHost}:${metadata.targetPort}`;
       
-      // Проверяем, есть ли уже API для этого компонента (поддерживаем оба формата: backendUrl и backend)
+      // Check if API already exists for this component (support both formats: backendUrl and backend)
       const existingAPI = apis.find((api: any) => 
         api.backendUrl === backendUrl ||
         api.backendUrl === backendUrlHttps ||
-        api.backend === backendUrl || // Обратная совместимость
+        api.backend === backendUrl || // Backward compatibility
         api.backend === backendUrlHttps
       );
 
       if (existingAPI) {
-        return null; // API уже существует
+        return null; // API already exists
       }
 
-      // Создаем новый API endpoint
+      // Create new API endpoint
       const targetLabel = target.data.label || target.type;
       const apiName = `${targetLabel}-api`;
       const apiPath = `/api/${target.type}`;
       
-      // Определяем метод на основе типа компонента
+      // Determine method based on connection protocol (not target type)
       let method: API['method'] = 'GET';
-      if (target.type === 'grpc') {
-        method = 'POST'; // gRPC обычно через POST
-      } else if (target.type === 'websocket') {
+      if (connectionProtocol === 'grpc' || connectionProtocol === 'gRPC') {
+        method = 'POST'; // gRPC usually via POST
+      } else if (connectionProtocol === 'websocket' || connectionProtocol === 'WebSocket') {
         method = 'GET'; // WebSocket upgrade
       }
 

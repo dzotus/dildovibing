@@ -53,6 +53,96 @@
   - Quota, Spike Arrest, OAuth, JWT, API Keys
   - CORS, XML to JSON transformation, полный набор метрик
 
+- **[MuleSoft Integration](./integration/mulesoft.md)** - Интеграционная платформа MuleSoft Anypoint
+  - Applications, Flows, Processors, Error Handling
+  - Connectors к БД, API, файловым системам и брокерам сообщений
+  - DataWeave‑трансформации, стратегии реконнекта, audit logging
+  - Полноценная эмуляция runtime‑поведения и метрик
+
+- **[GraphQL Gateway](./integration/graphql-gateway.md)** - Федеративный GraphQL API Gateway
+  - Federation (v1/v2), Service Registry, Query Planning & Execution
+  - Caching с TTL и persisted queries, Rate Limiting
+  - Query Complexity Analysis, Introspection, Subscriptions
+  - Полный набор метрик производительности и cache statistics
+
+### Протоколы и API (Protocols & APIs)
+
+В системе симуляции протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) реализованы как **атрибуты соединений**, а не как отдельные узлы на канвасе. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
+
+#### Концепция протоколов
+
+**Протоколы - это атрибуты соединений:**
+- Соединение `CRM → Payment Gateway` может использовать протокол REST
+- Соединение `Mobile App → BFF` может использовать протокол GraphQL
+- Соединение `Notification Service → Client` может использовать WebSocket
+
+**Преимущества:**
+- ✅ Реалистичность: Соответствует реальной архитектуре
+- ✅ Простота: Меньше узлов на канвасе = проще понимать архитектуру
+- ✅ Гибкость: Один сервис может общаться с разными сервисами через разные протоколы
+- ✅ Метрики: Метрики протоколов (latency, error rate) учитываются в метриках соединений
+
+#### Поддерживаемые протоколы
+
+- **REST** - Representational State Transfer
+  - HTTP методы (GET, POST, PUT, DELETE, PATCH)
+  - Content types (JSON, XML, form-data)
+  - Настраиваемые заголовки
+
+- **GraphQL** - Query language для API
+  - Операции (query, mutation, subscription)
+  - Variables и operation names
+  - Оптимизация запросов
+
+- **SOAP** - Simple Object Access Protocol
+  - SOAP Actions
+  - WSDL URL
+  - Namespace поддержка
+
+- **gRPC** - High-performance RPC framework
+  - Service и method names
+  - Binary protocol
+  - Metadata support
+
+- **WebSocket** - Full-duplex communication
+  - Subprotocols
+  - Binary/Text message types
+  - Real-time bidirectional communication
+
+- **Webhook** - HTTP callbacks
+  - Event types
+  - Signature headers
+  - Secret validation
+
+#### Настройка протоколов
+
+Протоколы настраиваются в правом сайдбаре при выборе соединения:
+
+1. Выберите соединение на канвасе
+2. В правом сайдбаре откройте секцию "Protocol"
+3. Выберите протокол из списка
+4. Настройте протокол-специфичные параметры
+
+#### Визуализация протоколов
+
+- **Цвет линии соединения** зависит от протокола:
+  - REST → синий
+  - GraphQL → фиолетовый
+  - gRPC → зеленый
+  - SOAP → оранжевый
+  - WebSocket → желтый
+  - Webhook → красный
+
+- **Иконка протокола** отображается на линии соединения
+- **Tooltip** при наведении показывает протокол и его настройки
+
+#### Миграция существующих диаграмм
+
+Если у вас есть старые диаграммы с узлами протоколов, они автоматически мигрируются при загрузке:
+- Узлы протоколов преобразуются в протоколы соединений
+- Соединения обновляются с правильными протоколами
+- Версия диаграммы обновляется до текущей
+
 ## Формат документации
 
 Каждый документ компонента содержит следующие разделы:
@@ -128,6 +218,8 @@
 - **Google Cloud Pub/Sub:** [Документация Google Cloud Pub/Sub](./messaging/gcp-pubsub.md)
 - **Kong Gateway:** [Документация Kong Gateway](./integration/kong-gateway.md)
 - **Apigee API Gateway:** [Документация Apigee API Gateway](./integration/apigee.md)
+- **MuleSoft Integration:** [Документация MuleSoft Integration](./integration/mulesoft.md)
+- **GraphQL Gateway:** [Документация GraphQL Gateway](./integration/graphql-gateway.md)
 
 ## Обновления
 
@@ -151,3 +243,6 @@
 - [Официальная документация Google Cloud Pub/Sub](https://cloud.google.com/pubsub/docs)
 - [Официальная документация Kong Gateway](https://docs.konghq.com/gateway/)
 - [Официальная документация Apigee API Gateway](https://cloud.google.com/apigee/docs)
+- [Официальная документация MuleSoft Anypoint Platform](https://docs.mulesoft.com/)
+- [GraphQL Specification](https://graphql.org/learn/)
+- [Apollo Federation Documentation](https://www.apollographql.com/docs/federation/)

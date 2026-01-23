@@ -14,6 +14,8 @@ export class CacheManager {
   private cache: Map<string, CacheEntry> = new Map();
   private ttl: number;
   private persistQueries: boolean;
+  private hitCount = 0;
+  private missCount = 0;
   
   constructor(cacheTtl: number = 0, persistQueries: boolean = false) {
     this.ttl = cacheTtl;
@@ -36,6 +38,7 @@ export class CacheManager {
     latencyReduction: number;
   } {
     if (this.ttl <= 0 || !this.persistQueries) {
+      this.missCount++;
       return { hit: false, latencyReduction: 0 };
     }
     
@@ -43,6 +46,7 @@ export class CacheManager {
     const entry = this.cache.get(key);
     
     if (!entry) {
+      this.missCount++;
       return { hit: false, latencyReduction: 0 };
     }
     
@@ -50,11 +54,13 @@ export class CacheManager {
     const age = Date.now() - entry.timestamp;
     if (age > entry.ttl * 1000) {
       this.cache.delete(key);
+      this.missCount++;
       return { hit: false, latencyReduction: 0 };
     }
     
     // Cache hit - return latency reduction factor
     // Cache hits are much faster (70% reduction)
+    this.hitCount++;
     return { hit: true, latencyReduction: 0.7 };
   }
   
@@ -107,6 +113,8 @@ export class CacheManager {
   
   public clearCache(): void {
     this.cache.clear();
+    this.hitCount = 0;
+    this.missCount = 0;
   }
   
   private hashString(str: string): string {
@@ -117,6 +125,17 @@ export class CacheManager {
       hash |= 0;
     }
     return Math.abs(hash).toString(16);
+  }
+
+  /**
+   * Текущие метрики кэша для использования EmulationEngine/UI.
+   */
+  public getMetrics(): { cacheHitCount: number; cacheMissCount: number; cacheSize: number } {
+    return {
+      cacheHitCount: this.hitCount,
+      cacheMissCount: this.missCount,
+      cacheSize: this.cache.size,
+    };
   }
 }
 

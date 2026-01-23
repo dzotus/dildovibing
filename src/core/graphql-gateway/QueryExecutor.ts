@@ -1,4 +1,4 @@
-import { QueryPlan, SubQuery, ServiceRuntimeState } from './types';
+import { GraphQLGatewayVariabilityConfig, QueryPlan, SubQuery, ServiceRuntimeState } from './types';
 import { ServiceRegistry } from './ServiceRegistry';
 
 /**
@@ -6,9 +6,11 @@ import { ServiceRegistry } from './ServiceRegistry';
  */
 export class QueryExecutor {
   private serviceRegistry: ServiceRegistry;
+  private variability?: GraphQLGatewayVariabilityConfig;
   
-  constructor(serviceRegistry: ServiceRegistry) {
+  constructor(serviceRegistry: ServiceRegistry, variability?: GraphQLGatewayVariabilityConfig) {
     this.serviceRegistry = serviceRegistry;
+    this.variability = variability;
   }
   
   /**
@@ -56,8 +58,21 @@ export class QueryExecutor {
       const latency = baseLatency + (subquery.estimatedLatency - service.avgLatencyMs);
       totalLatency += latency;
       
-      // Simulate error probability
-      if (Math.random() < service.errorRate) {
+      // Simulate error probability (контролируемая вариативность)
+      const baseErrorRate = service.errorRate;
+      const extraErrorRate = this.variability?.baseRandomErrorRate ?? 0;
+      const effectiveErrorRate = Math.min(
+        Math.max(baseErrorRate + extraErrorRate, 0),
+        1
+      );
+
+      // Вместо рандома используем порог на основе rollingErrors/rollingLatency,
+      // чтобы поведение было квази‑детерминированным и считывалось из состояния сервиса.
+      const errorThreshold =
+        service.rollingErrors.length /
+        Math.max(service.rollingLatency.length || 1, 1);
+
+      if (errorThreshold >= effectiveErrorRate && effectiveErrorRate > 0) {
         this.serviceRegistry.recordRequest(service.id, latency, false);
         return {
           success: false,
@@ -93,6 +108,10 @@ export class QueryExecutor {
       return defaultLatency * 1.1; // HTTPS has slightly more overhead
     }
     return defaultLatency;
+  }
+
+  public updateVariability(variability?: GraphQLGatewayVariabilityConfig): void {
+    this.variability = variability;
   }
 }
 

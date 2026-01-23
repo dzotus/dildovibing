@@ -41,14 +41,8 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
       return <DataConfig componentId={componentId} componentType={componentType} />;
     case 'nginx':
       return <NginxConfig componentId={componentId} />;
-    case 'rest':
-    case 'grpc':
-    case 'websocket':
-      return <ApiConfig componentId={componentId} />;
-    case 'graphql':
-    case 'soap':
-    case 'webhook':
-      return <ApiConfigExtended componentId={componentId} componentType={componentType} />;
+    // Protocols (rest, grpc, graphql, soap, websocket, webhook) are now attributes of connections, not separate nodes
+    // Protocol configuration is handled in ConnectionPropertiesPanel
     case 'docker':
     case 'kubernetes':
       return <InfrastructureConfig componentId={componentId} />;

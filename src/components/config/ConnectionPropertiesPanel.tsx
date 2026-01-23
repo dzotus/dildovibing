@@ -73,6 +73,31 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
     updateConfig({ timeoutMs: Math.max(1000, value) });
   };
 
+  // Protocol handling
+  const currentProtocol = connection.type || config.protocol || 'http';
+  const protocolConfig = config.protocolConfig || {};
+
+  const handleProtocolChange = (protocol: string) => {
+    // Update both connection.type and config.protocol
+    const updates: Partial<CanvasConnection> = {
+      type: protocol as any,
+      data: {
+        ...config,
+        protocol: protocol as any,
+      },
+    };
+    onUpdate(connection.id, updates);
+  };
+
+  const handleProtocolConfigChange = (updates: Partial<typeof protocolConfig>) => {
+    updateConfig({
+      protocolConfig: {
+        ...protocolConfig,
+        ...updates,
+      },
+    });
+  };
+
   return (
     <div className="space-y-2">
       <div className="space-y-1">
@@ -181,6 +206,187 @@ export function ConnectionPropertiesPanel({ connection, onUpdate }: ConnectionPr
               className="h-7 text-xs"
             />
           </div>
+        </div>
+
+        {/* Protocol Section */}
+        <div className="border-t border-border pt-2">
+          <Heading level={5} className="mb-1.5 opacity-70">Protocol</Heading>
+
+          {/* Protocol Selection */}
+          <div className="space-y-1 mb-2">
+            <Label className="text-xs">Protocol</Label>
+            <Select
+              value={currentProtocol}
+              onValueChange={handleProtocolChange}
+            >
+              <SelectTrigger className="h-7 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rest">REST</SelectItem>
+                <SelectItem value="graphql">GraphQL</SelectItem>
+                <SelectItem value="soap">SOAP</SelectItem>
+                <SelectItem value="grpc">gRPC</SelectItem>
+                <SelectItem value="websocket">WebSocket</SelectItem>
+                <SelectItem value="webhook">Webhook</SelectItem>
+                <SelectItem value="http">HTTP (legacy)</SelectItem>
+                <SelectItem value="sync">Sync</SelectItem>
+                <SelectItem value="async">Async</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Protocol-specific settings */}
+          {currentProtocol === 'rest' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">HTTP Method</Label>
+                <Select
+                  value={protocolConfig.httpMethod || 'POST'}
+                  onValueChange={(value) => handleProtocolConfigChange({ httpMethod: value as any })}
+                >
+                  <SelectTrigger className="h-7 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="GET">GET</SelectItem>
+                    <SelectItem value="POST">POST</SelectItem>
+                    <SelectItem value="PUT">PUT</SelectItem>
+                    <SelectItem value="DELETE">DELETE</SelectItem>
+                    <SelectItem value="PATCH">PATCH</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Content Type</Label>
+                <Select
+                  value={protocolConfig.contentType || 'json'}
+                  onValueChange={(value) => handleProtocolConfigChange({ contentType: value as any })}
+                >
+                  <SelectTrigger className="h-7 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="json">JSON</SelectItem>
+                    <SelectItem value="xml">XML</SelectItem>
+                    <SelectItem value="form-data">Form Data</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          {currentProtocol === 'graphql' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Operation Name</Label>
+                <Input
+                  value={protocolConfig.operationName || ''}
+                  onChange={(e) => handleProtocolConfigChange({ operationName: e.target.value })}
+                  placeholder="query/mutation name"
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {currentProtocol === 'soap' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">SOAP Action</Label>
+                <Input
+                  value={protocolConfig.soapAction || ''}
+                  onChange={(e) => handleProtocolConfigChange({ soapAction: e.target.value })}
+                  placeholder="SOAP action URI"
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">WSDL URL</Label>
+                <Input
+                  value={protocolConfig.wsdlUrl || ''}
+                  onChange={(e) => handleProtocolConfigChange({ wsdlUrl: e.target.value })}
+                  placeholder="http://example.com/service.wsdl"
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {currentProtocol === 'grpc' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Service Name</Label>
+                <Input
+                  value={protocolConfig.serviceName || ''}
+                  onChange={(e) => handleProtocolConfigChange({ serviceName: e.target.value })}
+                  placeholder="com.example.Service"
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Method Name</Label>
+                <Input
+                  value={protocolConfig.methodName || ''}
+                  onChange={(e) => handleProtocolConfigChange({ methodName: e.target.value })}
+                  placeholder="GetUser"
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {currentProtocol === 'websocket' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Subprotocol</Label>
+                <Input
+                  value={protocolConfig.wsProtocol || ''}
+                  onChange={(e) => handleProtocolConfigChange({ wsProtocol: e.target.value })}
+                  placeholder="chat, echo, etc."
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Binary Type</Label>
+                <Select
+                  value={protocolConfig.binaryType || 'blob'}
+                  onValueChange={(value) => handleProtocolConfigChange({ binaryType: value as any })}
+                >
+                  <SelectTrigger className="h-7 text-[11px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="blob">Blob</SelectItem>
+                    <SelectItem value="arraybuffer">ArrayBuffer</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
+          {currentProtocol === 'webhook' && (
+            <div className="space-y-2 mt-2">
+              <div className="space-y-1">
+                <Label className="text-xs">Event Type</Label>
+                <Input
+                  value={protocolConfig.webhookEvent || ''}
+                  onChange={(e) => handleProtocolConfigChange({ webhookEvent: e.target.value })}
+                  placeholder="push, pull_request, etc."
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Signature Header</Label>
+                <Input
+                  value={protocolConfig.signatureHeader || 'X-Signature'}
+                  onChange={(e) => handleProtocolConfigChange({ signatureHeader: e.target.value })}
+                  placeholder="X-Signature"
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Traffic Characteristics Section */}

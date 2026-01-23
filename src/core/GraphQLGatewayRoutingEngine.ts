@@ -50,11 +50,18 @@ export class GraphQLGatewayRoutingEngine {
   private rateLimiter: RateLimiter;
   private complexityAnalyzer: QueryComplexityAnalyzer;
   private federationComposer: FederationComposer;
+  /**
+   * Последняя применённая конфигурация gateway.
+   * Хранится для того, чтобы EmulationEngine и UI могли
+   * при необходимости читать её через внешний API (в будущем).
+   */
+  private config: GraphQLGatewayConfig | null = null;
 
   constructor() {
     // Initialize modules
     this.serviceRegistry = new ServiceRegistry();
     this.queryParser = new QueryParser();
+    // Variability будет проброшена при initialize через config.variability
     this.queryPlanner = new QueryPlanner();
     this.queryExecutor = new QueryExecutor(this.serviceRegistry);
     this.cacheManager = new CacheManager();
@@ -67,14 +74,18 @@ export class GraphQLGatewayRoutingEngine {
    * Initialize the gateway with configuration
    */
   public initialize(config: GraphQLGatewayConfig): void {
+    this.config = config;
+
     // Initialize service registry
-    if (config.services) {
+    if (Array.isArray(config.services)) {
       this.serviceRegistry.initialize(config.services);
     }
 
     // Initialize federation composer
     this.federationComposer.updateConfig(config.federation);
+    this.federationComposer.updateVariability(config.variability);
     this.queryPlanner.updateFederationConfig(config.federation);
+    this.queryPlanner.updateVariability(config.variability);
 
     // Initialize cache manager
     this.cacheManager.updateConfig(
@@ -84,6 +95,9 @@ export class GraphQLGatewayRoutingEngine {
 
     // Initialize rate limiter
     this.rateLimiter.setEnabled(config.enableRateLimiting ?? false);
+    if (typeof config.globalRateLimitPerMinute === 'number') {
+      this.rateLimiter.updateDefaultLimit(config.globalRateLimitPerMinute);
+    }
 
     // Initialize complexity analyzer
     this.complexityAnalyzer.updateLimits(
@@ -91,6 +105,9 @@ export class GraphQLGatewayRoutingEngine {
       config.maxQueryComplexity ?? 1000
     );
     this.complexityAnalyzer.setEnabled(config.enableQueryComplexityAnalysis ?? true);
+
+    // Update variability for executor as well
+    this.queryExecutor.updateVariability(config.variability);
   }
 
   /**
@@ -104,6 +121,11 @@ export class GraphQLGatewayRoutingEngine {
       return {
         status: 400,
         latency: Date.now() - start,
+        complexityRejected: false,
+        cacheHit: false,
+        rateLimited: false,
+        federated: false,
+        usedServices: [],
         error: 'Empty query',
       };
     }
@@ -115,6 +137,11 @@ export class GraphQLGatewayRoutingEngine {
       return {
         status: 429,
         latency: Date.now() - start,
+        cacheHit: false,
+        rateLimited: true,
+        complexityRejected: false,
+        federated: false,
+        usedServices: [],
         error: 'Rate limit exceeded',
       };
     }
@@ -129,6 +156,12 @@ export class GraphQLGatewayRoutingEngine {
       return {
         status: 200,
         latency: (Date.now() - start) * (1 - cacheResult.latencyReduction),
+        cacheHit: true,
+        rateLimited: false,
+        complexityRejected: false,
+        federated: false,
+        usedServices: [],
+        plannedLatency: (Date.now() - start) * (1 - cacheResult.latencyReduction),
       };
     }
 
@@ -138,6 +171,11 @@ export class GraphQLGatewayRoutingEngine {
       return {
         status: 413,
         latency: Date.now() - start,
+        cacheHit: false,
+        rateLimited: false,
+        complexityRejected: true,
+        federated: false,
+        usedServices: [],
         error: complexityValidation.error,
       };
     }
@@ -148,6 +186,11 @@ export class GraphQLGatewayRoutingEngine {
       return {
         status: 503,
         latency: Date.now() - start,
+        cacheHit: false,
+        rateLimited: false,
+        complexityRejected: false,
+        federated: false,
+        usedServices: [],
         error: 'No connected services',
       };
     }
@@ -159,9 +202,16 @@ export class GraphQLGatewayRoutingEngine {
     const executionResult = this.queryExecutor.executePlan(queryPlan);
     
     if (!executionResult.success) {
+      const elapsed = Date.now() - start;
       return {
         status: 502,
-        latency: executionResult.totalLatency + (Date.now() - start),
+        latency: executionResult.totalLatency + elapsed,
+        plannedLatency: queryPlan.estimatedLatency,
+        cacheHit: false,
+        rateLimited: false,
+        complexityRejected: false,
+        federated: queryPlan.requiresFederation,
+        usedServices: queryPlan.subqueries.map((s) => s.serviceName),
         error: executionResult.error,
       };
     }
@@ -173,9 +223,17 @@ export class GraphQLGatewayRoutingEngine {
     this.cacheManager.setCached(request.query, { success: true }, request.variables);
 
     // 10. Return success response
+    const elapsed = Date.now() - start;
+
     return {
       status: 200,
-      latency: executionResult.totalLatency + (Date.now() - start),
+      latency: executionResult.totalLatency + elapsed,
+      plannedLatency: queryPlan.estimatedLatency,
+      cacheHit: false,
+      rateLimited: false,
+      complexityRejected: false,
+      federated: queryPlan.requiresFederation,
+      usedServices: queryPlan.subqueries.map((s) => s.serviceName),
     };
   }
 

@@ -1,6 +1,7 @@
 import { CanvasNode, CanvasConnection } from '@/types';
 import { dataFlowEngine } from './DataFlowEngine';
 import { componentStateEngine } from './ComponentStateEngine';
+import { ProtocolTransformer } from './ProtocolTransformer';
 import { RabbitMQRoutingEngine } from './RabbitMQRoutingEngine';
 import { ActiveMQRoutingEngine } from './ActiveMQRoutingEngine';
 import { SQSRoutingEngine } from './SQSRoutingEngine';
@@ -14,6 +15,7 @@ import { NginxRoutingEngine } from './NginxRoutingEngine';
 import { HAProxyRoutingEngine } from './HAProxyRoutingEngine';
 import { EnvoyRoutingEngine } from './EnvoyRoutingEngine';
 import { GraphQLGatewayRoutingEngine } from './GraphQLGatewayRoutingEngine';
+import type { GraphQLGatewayResponse } from './graphql-gateway/types';
 import { BFFRoutingEngine } from './BFFRoutingEngine';
 import { RestApiRoutingEngine } from './RestApiRoutingEngine';
 import { GRPCRoutingEngine } from './GRPCRoutingEngine';
@@ -151,6 +153,9 @@ export class EmulationEngine {
   private connectionLatencyHistory: Map<string, number[]> = new Map(); // connection latencies
   private readonly HISTORY_SIZE = 500; // Keep last 500 samples for percentile calculation
   
+  // Protocol transformer for connection-level protocol handling
+  private protocolTransformer: ProtocolTransformer = new ProtocolTransformer();
+  
   // RabbitMQ routing engines per node
   private rabbitMQRoutingEngines: Map<string, RabbitMQRoutingEngine> = new Map();
   private lastRabbitMQUpdate: Map<string, number> = new Map();
@@ -206,6 +211,17 @@ export class EmulationEngine {
   // GraphQL Gateway routing engines per node
   private graphQLGatewayRoutingEngines: Map<string, GraphQLGatewayRoutingEngine> = new Map();
   private lastGraphQLGatewayUpdate: Map<string, number> = new Map();
+  private graphQLGatewayStats: Map<string, {
+    requestsTotal: number;
+    errorsTotal: number;
+    rateLimitedTotal: number;
+    complexityRejectedTotal: number;
+    federatedRequestCount: number;
+    latencies: number[];
+    cacheHitCount: number;
+    cacheMissCount: number;
+    cacheSize: number;
+  }> = new Map();
 
   // BFF Service routing engines per node
   private bffRoutingEngines: Map<string, BFFRoutingEngine> = new Map();
@@ -344,6 +360,56 @@ export class EmulationEngine {
   constructor() {
     this.initializeMetrics();
   }
+
+  /**
+   * Запись результата запроса GraphQL Gateway для агрегированных метрик.
+   * Вызывается из DataFlowEngine после обработки сообщения gateway.
+   */
+  public recordGraphQLGatewayRequest(
+    nodeId: string,
+    response: GraphQLGatewayResponse,
+    cacheMetrics?: { cacheHitCount: number; cacheMissCount: number; cacheSize: number }
+  ): void {
+    const existing =
+      this.graphQLGatewayStats.get(nodeId) || {
+        requestsTotal: 0,
+        errorsTotal: 0,
+        rateLimitedTotal: 0,
+        complexityRejectedTotal: 0,
+        federatedRequestCount: 0,
+        latencies: [],
+        cacheHitCount: 0,
+        cacheMissCount: 0,
+        cacheSize: 0,
+      };
+
+    existing.requestsTotal += 1;
+    if (response.status >= 400) {
+      existing.errorsTotal += 1;
+    }
+    if (response.rateLimited) {
+      existing.rateLimitedTotal += 1;
+    }
+    if (response.complexityRejected) {
+      existing.complexityRejectedTotal += 1;
+    }
+    if (response.federated) {
+      existing.federatedRequestCount += 1;
+    }
+
+    existing.latencies.push(response.latency);
+    if (existing.latencies.length > this.HISTORY_SIZE) {
+      existing.latencies.shift();
+    }
+
+    if (cacheMetrics) {
+      existing.cacheHitCount = cacheMetrics.cacheHitCount;
+      existing.cacheMissCount = cacheMetrics.cacheMissCount;
+      existing.cacheSize = cacheMetrics.cacheSize;
+    }
+
+    this.graphQLGatewayStats.set(nodeId, existing);
+  }
   
   /**
    * Calculate percentiles from a sorted array of numbers
@@ -418,12 +484,78 @@ export class EmulationEngine {
   }
 
   /**
+   * Симуляция метрик GraphQL Gateway на основе агрегированных статистик
+   * и внутренних метрик кэша/сервисов.
+   */
+  private simulateGraphQLGateway(
+    node: CanvasNode,
+    _config: ComponentConfig,
+    metrics: ComponentMetrics,
+    hasIncomingConnections: boolean
+  ) {
+    const stats = this.graphQLGatewayStats.get(node.id);
+    const routingEngine = this.graphQLGatewayRoutingEngines.get(node.id);
+
+    // Если нет движка или нет активности, метрики обнуляем
+    if (!routingEngine || !hasIncomingConnections || !stats) {
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0;
+      metrics.customMetrics = {
+        gatewayRequestsTotal: 0,
+        gatewayErrorsTotal: 0,
+        gatewayRateLimitedTotal: 0,
+        gatewayComplexityRejectedTotal: 0,
+        gatewayFederatedRequests: 0,
+        gatewayCacheHitCount: 0,
+        gatewayCacheMissCount: 0,
+        gatewayCacheSize: 0,
+      };
+      return;
+    }
+
+    const totalRequests = stats.requestsTotal;
+    const errorsTotal = stats.errorsTotal;
+
+    const avgLatency =
+      stats.latencies.length > 0
+        ? stats.latencies.reduce((sum, v) => sum + v, 0) / stats.latencies.length
+        : 0;
+
+    // Для оценки throughput используем requestsTotal в окне HISTORY_SIZE,
+    // здесь считаем условный RPS как requestsTotal / 10 (эмуляционный масштаб).
+    const estimatedThroughput = totalRequests / 10;
+
+    metrics.throughput = estimatedThroughput;
+    metrics.latency = avgLatency;
+    metrics.errorRate = totalRequests > 0 ? errorsTotal / totalRequests : 0;
+    metrics.utilization = Math.min(estimatedThroughput / 1000, 1);
+
+    // Метрики кэша из CacheManager
+    const cacheMetrics = routingEngine.getCacheManager().getMetrics();
+
+    metrics.customMetrics = {
+      ...(metrics.customMetrics || {}),
+      gatewayRequestsTotal: totalRequests,
+      gatewayErrorsTotal: errorsTotal,
+      gatewayRateLimitedTotal: stats.rateLimitedTotal,
+      gatewayComplexityRejectedTotal: stats.complexityRejectedTotal,
+      gatewayFederatedRequests: stats.federatedRequestCount,
+      gatewayCacheHitCount: cacheMetrics.cacheHitCount,
+      gatewayCacheMissCount: cacheMetrics.cacheMissCount,
+      gatewayCacheSize: cacheMetrics.cacheSize,
+    };
+  }
+
+  /**
    * Initialize emulation engine with diagram nodes and connections
    */
   public initialize(nodes: CanvasNode[], connections: CanvasConnection[]) {
     this.nodes = nodes;
     this.connections = connections;
     this.initializeMetrics();
+    this.graphQLGatewayStats.clear();
     
       // Initialize routing engines for messaging components
       for (const node of nodes) {
@@ -470,7 +602,18 @@ export class EmulationEngine {
           this.initializeMuleSoftRoutingEngine(node);
         }
         if (node.type === 'graphql-gateway') {
-          this.initializeGraphQLGatewayRoutingEngine(node);
+          try {
+            this.initializeGraphQLGatewayRoutingEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeGraphQLGatewayRoutingEngine' },
+            });
+          }
         }
         if (node.type === 'bff-service') {
           this.initializeBFFRoutingEngine(node);
@@ -750,7 +893,18 @@ export class EmulationEngine {
 
       // Initialize GraphQL Gateway routing engine for GraphQL Gateway nodes
       if (node.type === 'graphql-gateway') {
-        this.initializeGraphQLGatewayRoutingEngine(node);
+        try {
+          this.initializeGraphQLGatewayRoutingEngine(node);
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeGraphQLGatewayRoutingEngine' },
+          });
+        }
       }
 
       // Initialize BFF routing engine for BFF Service nodes
@@ -1847,18 +2001,8 @@ export class EmulationEngine {
         case 'kubernetes':
           this.simulateKubernetes(node, config, metrics, hasIncomingConnections);
           break;
-        case 'rest':
-        case 'grpc':
-        case 'graphql':
-        case 'websocket':
-          this.simulateAPI(node, config, metrics, hasIncomingConnections);
-          break;
-        case 'webhook':
-          this.simulateWebhook(node, config, metrics, hasIncomingConnections);
-          break;
-        case 'soap':
-          this.simulateSOAP(node, config, metrics, hasIncomingConnections);
-          break;
+        // Protocols (rest, grpc, graphql, soap, websocket, webhook) are now attributes of connections, not separate nodes
+        // They are handled in updateConnectionMetrics via protocol-specific latency multipliers
         case 'kong':
           this.simulateKong(node, config, metrics, hasIncomingConnections);
           break;
@@ -1942,6 +2086,9 @@ export class EmulationEngine {
           break;
       case 'payment-gateway':
           this.simulatePaymentGateway(node, config, metrics, hasIncomingConnections);
+          break;
+      case 'graphql-gateway':
+          this.simulateGraphQLGateway(node, config, metrics, hasIncomingConnections);
           break;
       }
     }
@@ -8571,21 +8718,84 @@ export class EmulationEngine {
    * Initialize GraphQL Gateway routing engine for a node
    */
   private initializeGraphQLGatewayRoutingEngine(node: CanvasNode): void {
-    const config = (node.data.config || {}) as any;
+    const rawConfig = node?.data?.config || {};
+    const config = rawConfig as any;
     const routingEngine = new GraphQLGatewayRoutingEngine();
 
+    // Безопасная инициализация массивов и вложенных объектов
+    const rawServices = Array.isArray(config.services) ? config.services : [];
+    const federation = config.federation && typeof config.federation === 'object'
+      ? config.federation
+      : undefined;
+
+    // Синхронизация статуса сервисов с текущими connections:
+    // если есть исходящее соединение на GraphQL‑бэкенд, считаем сервис connected,
+    // иначе (если не error) помечаем disconnected.
+    const services = rawServices.map((svc: any) => {
+      const currentStatus: string = svc.status || 'disconnected';
+
+      // Узлы, к которым есть исходящие соединения от gateway
+      const hasConnection = this.connections.some((conn) => {
+        if (conn.source !== node.id) return false;
+        const targetNode = this.nodes.find((n) => n.id === conn.target);
+        if (!targetNode || targetNode.type !== 'graphql') return false;
+
+        const targetLabel = (targetNode.data as any)?.label || targetNode.type;
+        const nameMatches =
+          svc.name === targetLabel ||
+          svc.name === targetNode.id;
+
+        const endpoint: string | undefined = svc.endpoint;
+        const endpointMatch =
+          endpoint && targetNode.id
+            ? endpoint.includes(targetNode.id) || svc.name === targetLabel
+            : false;
+
+        return nameMatches || endpointMatch;
+      });
+
+      let derivedStatus: 'connected' | 'disconnected' | 'error' = currentStatus as any;
+
+      if (svc.status === 'error') {
+        derivedStatus = 'error';
+      } else if (hasConnection) {
+        derivedStatus = 'connected';
+      } else {
+        derivedStatus = 'disconnected';
+      }
+
+      return {
+        ...svc,
+        status: derivedStatus,
+      };
+    });
+
     routingEngine.initialize({
-      services: config.services || [],
-      federation: config.federation,
-      cacheTtl: config.cacheTtl,
-      persistQueries: config.persistQueries,
-      subscriptions: config.subscriptions,
-      enableIntrospection: config.enableIntrospection,
-      enableQueryComplexityAnalysis: config.enableQueryComplexityAnalysis,
-      enableRateLimiting: config.enableRateLimiting,
-      maxQueryDepth: config.maxQueryDepth,
-      maxQueryComplexity: config.maxQueryComplexity,
-      endpoint: config.endpoint,
+      services,
+      federation,
+      cacheTtl: typeof config.cacheTtl === 'number' ? config.cacheTtl : undefined,
+      persistQueries: typeof config.persistQueries === 'boolean' ? config.persistQueries : undefined,
+      subscriptions: typeof config.subscriptions === 'boolean' ? config.subscriptions : undefined,
+      enableIntrospection: typeof config.enableIntrospection === 'boolean'
+        ? config.enableIntrospection
+        : undefined,
+      enableQueryComplexityAnalysis: typeof config.enableQueryComplexityAnalysis === 'boolean'
+        ? config.enableQueryComplexityAnalysis
+        : undefined,
+      enableRateLimiting: typeof config.enableRateLimiting === 'boolean'
+        ? config.enableRateLimiting
+        : undefined,
+      maxQueryDepth: typeof config.maxQueryDepth === 'number' ? config.maxQueryDepth : undefined,
+      maxQueryComplexity: typeof config.maxQueryComplexity === 'number'
+        ? config.maxQueryComplexity
+        : undefined,
+      endpoint: typeof config.endpoint === 'string' ? config.endpoint : undefined,
+      globalRateLimitPerMinute: typeof config.globalRateLimitPerMinute === 'number'
+        ? config.globalRateLimitPerMinute
+        : undefined,
+      variability: config.variability && typeof config.variability === 'object'
+        ? config.variability
+        : undefined,
     });
 
     this.graphQLGatewayRoutingEngines.set(node.id, routingEngine);
@@ -9376,6 +9586,10 @@ export class EmulationEngine {
     sourceMetrics: ComponentMetrics,
     targetMetrics: ComponentMetrics
   ): number {
+    // Get protocol from connection
+    const protocol = this.getConnectionProtocol(conn);
+    
+    // Base latency by connection type (for backward compatibility)
     const baseLatency: Record<string, number> = {
       'sync': 5,
       'async': 2,
@@ -9384,7 +9598,22 @@ export class EmulationEngine {
       'websocket': 3,
     };
     
-    const connLatency = baseLatency[conn.type] || 10;
+    // If protocol is set, use protocol-specific base latency
+    let connLatency = 10; // default
+    if (protocol) {
+      const protocolBaseLatency: Record<string, number> = {
+        'rest': 10,
+        'graphql': 12,  // Slightly slower due to query parsing
+        'soap': 15,     // Slower due to XML parsing
+        'grpc': 5,      // Faster due to binary protocol
+        'websocket': 3, // Faster for real-time
+        'webhook': 10,
+      };
+      connLatency = protocolBaseLatency[protocol] || 10;
+    } else {
+      connLatency = baseLatency[conn.type] || 10;
+    }
+    
     const sourceLatency = sourceMetrics.latency || 0;
     const targetLatency = targetMetrics.latency || 0;
     
@@ -9396,7 +9625,31 @@ export class EmulationEngine {
     // Network latency (2-10ms base)
     const networkLatency = 2 + Math.random() * 8 + configuredLatency + jitter;
     
-    return connLatency + (sourceLatency + targetLatency) / 2 + networkLatency;
+    // Apply protocol-specific latency multiplier
+    let protocolMultiplier = 1.0;
+    if (protocol) {
+      protocolMultiplier = this.protocolTransformer.calculateProtocolLatencyMultiplier(protocol);
+    }
+    
+    return (connLatency + (sourceLatency + targetLatency) / 2 + networkLatency) * protocolMultiplier;
+  }
+  
+  /**
+   * Get protocol from connection
+   */
+  private getConnectionProtocol(connection: CanvasConnection): string | null {
+    // Priority: connection.type > connection.data.protocol > 'http' as default
+    if (connection.type && ['rest', 'graphql', 'soap', 'grpc', 'websocket', 'webhook'].includes(connection.type)) {
+      return connection.type;
+    }
+    if (connection.data?.protocol) {
+      return connection.data.protocol as string;
+    }
+    // 'http' is synonym for 'rest'
+    if (connection.type === 'http') {
+      return 'rest';
+    }
+    return null;
   }
 
   /**

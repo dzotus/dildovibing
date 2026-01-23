@@ -1,13 +1,15 @@
-import { ParsedQuery, QueryPlan, SubQuery, ServiceRuntimeState, GraphQLGatewayFederationConfig } from './types';
+import { ParsedQuery, QueryPlan, SubQuery, ServiceRuntimeState, GraphQLGatewayFederationConfig, GraphQLGatewayVariabilityConfig } from './types';
 
 /**
  * QueryPlanner - Plans query execution across services
  */
 export class QueryPlanner {
   private federationConfig?: GraphQLGatewayFederationConfig;
+  private variability?: GraphQLGatewayVariabilityConfig;
   
-  constructor(federationConfig?: GraphQLGatewayFederationConfig) {
+  constructor(federationConfig?: GraphQLGatewayFederationConfig, variability?: GraphQLGatewayVariabilityConfig) {
     this.federationConfig = federationConfig;
+    this.variability = variability;
   }
   
   /**
@@ -43,8 +45,10 @@ export class QueryPlanner {
     // Calculate total estimated latency
     const estimatedLatency = subqueries.reduce((sum, sq) => sum + sq.estimatedLatency, 0);
     
-    // Add federation overhead if needed
-    const federationOverhead = requiresFederation ? 3 + Math.random() * 5 : 0;
+    // Add federation overhead if needed (контролируемая вариативность)
+    const federationOverhead = requiresFederation
+      ? this.getFederationOverhead()
+      : 0;
     
     return {
       subqueries,
@@ -80,7 +84,10 @@ export class QueryPlanner {
     const base = service.avgLatencyMs;
     const complexityCost = Math.sqrt(parsedQuery.complexity) * 0.8;
     const depthCost = parsedQuery.depth * 1.5;
-    const jitter = Math.random() * 5;
+    // Контролируемый джиттер: если вариативность не задана, используем мягкое значение
+    const jitterMultiplier = this.variability?.latencyJitterMultiplier ?? 1;
+    const maxJitterMs = 5 * Math.max(jitterMultiplier, 0);
+    const jitter = maxJitterMs > 0 ? (maxJitterMs / 2) : 0;
     return base + complexityCost + depthCost + jitter;
   }
   
@@ -96,6 +103,19 @@ export class QueryPlanner {
   
   public updateFederationConfig(config?: GraphQLGatewayFederationConfig): void {
     this.federationConfig = config;
+  }
+
+  public updateVariability(variability?: GraphQLGatewayVariabilityConfig): void {
+    this.variability = variability;
+  }
+
+  private getFederationOverhead(): number {
+    const explicit = this.variability?.federationOverheadMs;
+    if (typeof explicit === 'number') {
+      return explicit;
+    }
+    // По умолчанию небольшой фиксированный overhead без рандома
+    return 5;
   }
 }
 

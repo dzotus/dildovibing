@@ -3,6 +3,7 @@ import { emulationEngine } from './EmulationEngine';
 import { PostgreSQLQueryEngine } from './postgresql/QueryEngine';
 import { PostgreSQLTable, PostgreSQLIndex } from './postgresql/types';
 import { JaegerSpan, TraceContext } from './JaegerEmulationEngine';
+import { ProtocolTransformer } from './ProtocolTransformer';
 
 /**
  * Data message format for transmission between components
@@ -73,6 +74,9 @@ export class DataFlowEngine {
   // Trace context tracking (traceId -> context)
   private traceContexts: Map<string, TraceContext> = new Map();
   private traceIdCounter: number = 0;
+  
+  // Protocol transformer for connection-level protocol handling
+  private protocolTransformer: ProtocolTransformer = new ProtocolTransformer();
 
   constructor() {
     this.registerDefaultHandlers();
@@ -106,12 +110,8 @@ export class DataFlowEngine {
     this.registerHandler('aws-sqs', this.createMessageBrokerHandler('aws-sqs'));
     this.registerHandler('gcp-pubsub', this.createMessageBrokerHandler('gcp-pubsub'));
     
-    // APIs - transform and route data
-    this.registerHandler('rest', this.createAPIHandler('rest'));
-    this.registerHandler('grpc', this.createAPIHandler('grpc'));
-    this.registerHandler('graphql', this.createAPIHandler('graphql'));
-    this.registerHandler('websocket', this.createAPIHandler('websocket'));
-    this.registerHandler('webhook', this.createWebhookHandler());
+    // Protocols are now attributes of connections, not separate nodes
+    // Protocol transformation is handled in processInTransitMessages via ProtocolTransformer
     
     // Integration - transform formats
     this.registerHandler('kong', this.createIntegrationHandler('kong'));
@@ -367,12 +367,27 @@ export class DataFlowEngine {
     targetNode: CanvasNode,
     connection: CanvasConnection
   ): DataMessage | null {
+    // First, apply protocol transformation if connection has a protocol
+    const protocol = this.getConnectionProtocol(connection);
+    if (protocol) {
+      message = this.protocolTransformer.transformForProtocol(message, connection);
+    }
+    
     const sourceHandler = this.handlers.get(sourceNode.type);
     const targetHandler = this.handlers.get(targetNode.type);
     
     // Check if transformation is needed
     const sourceFormats = sourceHandler?.getSupportedFormats?.(sourceNode) || [message.format];
     const targetFormats = targetHandler?.getSupportedFormats?.(targetNode) || [message.format];
+    
+    // If protocol is set, check protocol-supported formats
+    if (protocol) {
+      const protocolFormats = this.protocolTransformer.getSupportedFormats(protocol);
+      // Protocol formats take precedence
+      if (protocolFormats.includes(message.format)) {
+        return message;
+      }
+    }
     
     // If formats match, no transformation needed
     if (targetFormats.includes(message.format)) {
@@ -420,6 +435,24 @@ export class DataFlowEngine {
     message.error = `Format ${message.format} not supported by target ${targetNode.type}`;
     return null;
   }
+  
+  /**
+   * Get protocol from connection
+   */
+  private getConnectionProtocol(connection: CanvasConnection): string | null {
+    // Priority: connection.type > connection.data.protocol > 'http' as default
+    if (connection.type && ['rest', 'graphql', 'soap', 'grpc', 'websocket', 'webhook'].includes(connection.type)) {
+      return connection.type;
+    }
+    if (connection.data?.protocol) {
+      return connection.data.protocol as string;
+    }
+    // 'http' is synonym for 'rest'
+    if (connection.type === 'http') {
+      return 'rest';
+    }
+    return null;
+  }
 
   /**
    * Find integration handler in the connection path
@@ -435,13 +468,21 @@ export class DataFlowEngine {
   }
 
   /**
-   * Calculate transit time based on connection characteristics
+   * Calculate transit time based on connection characteristics and protocol
    */
   private calculateTransitTime(connection: CanvasConnection): number {
     const config = connection.data || {};
     const baseLatency = config.latencyMs || 10;
     const jitter = (config.jitterMs || 0) * (Math.random() - 0.5);
-    return Math.max(1, baseLatency + jitter);
+    
+    // Apply protocol-specific latency multiplier
+    const protocol = this.getConnectionProtocol(connection);
+    let protocolMultiplier = 1.0;
+    if (protocol) {
+      protocolMultiplier = this.protocolTransformer.calculateProtocolLatencyMultiplier(protocol);
+    }
+    
+    return Math.max(1, (baseLatency + jitter) * protocolMultiplier);
   }
 
   /**
@@ -4275,6 +4316,14 @@ export class DataFlowEngine {
           });
 
           message.latency = result.latency;
+
+          // Записать результат запроса в EmulationEngine для агрегированных метрик gateway
+          try {
+            const cacheMetrics = routingEngine.getCacheManager().getMetrics();
+            emulationEngine.recordGraphQLGatewayRequest(node.id, result, cacheMetrics);
+          } catch {
+            // Метрики gateway не должны ломать обработку данных
+          }
 
           if (result.status >= 200 && result.status < 300) {
             message.status = 'delivered';

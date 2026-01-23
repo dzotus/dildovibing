@@ -9,7 +9,7 @@ import { ServiceDiscovery } from '../ServiceDiscovery';
 export function createKongRule(discovery: ServiceDiscovery): ConnectionRule {
   return {
     sourceType: 'kong',
-    targetTypes: ['rest', 'grpc', 'graphql', 'websocket', 'soap', 'webhook'],
+    targetTypes: '*', // Kong can connect to any service, protocol is determined from connection
     priority: 10,
     
     updateSourceConfig: (kong, target, connection, metadata) => {
@@ -21,11 +21,12 @@ export function createKongRule(discovery: ServiceDiscovery): ConnectionRule {
       const services = config.services || [];
       const routes = config.routes || [];
       
-      // Определяем URL целевого сервиса
-      const protocol = metadata.protocol === 'grpc' ? 'http' : 'http';
+      // Determine protocol from connection (not from target type)
+      const connectionProtocol = connection.type || connection.data?.protocol || metadata.protocol || 'http';
+      const protocol = (connectionProtocol === 'grpc' || connectionProtocol === 'gRPC') ? 'http' : 'http';
       const targetUrl = `${protocol}://${metadata.targetHost}:${metadata.targetPort}`;
       
-      // Проверяем, есть ли уже Service для этого компонента
+      // Check if Service already exists for this component
       const targetLabel = target.data.label || target.type;
       const serviceName = `${targetLabel}-service`;
       
@@ -34,7 +35,7 @@ export function createKongRule(discovery: ServiceDiscovery): ConnectionRule {
       );
 
       if (!existingService) {
-        // Создаем новый Service
+        // Create new Service
         existingService = {
           id: String(services.length + 1),
           name: serviceName,
@@ -45,7 +46,7 @@ export function createKongRule(discovery: ServiceDiscovery): ConnectionRule {
         services.push(existingService);
       }
 
-      // Проверяем, есть ли уже Route для этого соединения
+      // Check if Route already exists for this connection
       const routePath = `/api/${target.type}`;
       const existingRoute = routes.find((r: any) => 
         r.service === existingService.name && 
@@ -53,17 +54,17 @@ export function createKongRule(discovery: ServiceDiscovery): ConnectionRule {
       );
 
       if (existingRoute) {
-        return null; // Route уже существует
+        return null; // Route already exists
       }
 
-      // Определяем метод на основе типа компонента
+      // Determine method based on connection protocol (not target type)
       let method = 'GET';
-      if (target.type === 'grpc') {
-        method = 'POST'; // gRPC обычно через POST
-      } else if (target.type === 'websocket') {
+      if (connectionProtocol === 'grpc' || connectionProtocol === 'gRPC') {
+        method = 'POST'; // gRPC usually via POST
+      } else if (connectionProtocol === 'websocket' || connectionProtocol === 'WebSocket') {
         method = 'GET'; // WebSocket upgrade
-      } else if (target.type === 'rest' || target.type === 'graphql') {
-        method = 'GET'; // Default для REST/GraphQL
+      } else if (connectionProtocol === 'rest' || connectionProtocol === 'graphql' || connectionProtocol === 'http') {
+        method = 'GET'; // Default for REST/GraphQL
       }
 
       // Создаем новый Route

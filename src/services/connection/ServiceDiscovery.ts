@@ -143,20 +143,28 @@ export class ServiceDiscovery {
     const sourcePort = this.getPort(source, 'main');
     const targetPort = this.getPort(target, 'main');
     
-    // Определяем протокол из типа связи или типа компонента
+    // Determine protocol from connection (priority: connection.type > connection.data.protocol > target type)
     let protocol: ConnectionMetadata['protocol'] = 'http';
-    if (connection.type === 'grpc') {
-      protocol = 'grpc';
-    } else if (connection.type === 'websocket') {
-      protocol = 'websocket';
-    } else if (target.type === 'kafka') {
-      protocol = 'kafka';
-    } else if (target.type === 'rabbitmq' || target.type === 'activemq') {
-      protocol = 'rabbitmq';
-    } else if (connection.type === 'async') {
-      protocol = 'async';
-    } else if (connection.type === 'sync') {
-      protocol = 'sync';
+    
+    // First, check connection.type or connection.data.protocol
+    const connectionProtocol = connection.type || connection.data?.protocol;
+    if (connectionProtocol) {
+      if (['rest', 'graphql', 'soap', 'grpc', 'websocket', 'webhook', 'http'].includes(connectionProtocol)) {
+        protocol = connectionProtocol as ConnectionMetadata['protocol'];
+      } else if (connectionProtocol === 'async') {
+        protocol = 'async';
+      } else if (connectionProtocol === 'sync') {
+        protocol = 'sync';
+      }
+    }
+    
+    // Fallback to target type for messaging/brokers (if protocol not set in connection)
+    if (!connectionProtocol || protocol === 'http') {
+      if (target.type === 'kafka') {
+        protocol = 'kafka';
+      } else if (target.type === 'rabbitmq' || target.type === 'activemq') {
+        protocol = 'rabbitmq';
+      }
     }
     
     return {

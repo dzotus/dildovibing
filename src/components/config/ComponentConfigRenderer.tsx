@@ -102,18 +102,8 @@ export function ComponentConfigRenderer({ componentId, componentType }: Componen
       return <S3DataLakeConfigAdvanced componentId={componentId} />;
     case 'nginx':
       return <NginxConfigAdvanced componentId={componentId} />;
-    case 'rest':
-      return <RestApiConfigAdvanced componentId={componentId} />;
-    case 'grpc':
-      return <GRPCConfigAdvanced componentId={componentId} />;
-    case 'websocket':
-      return <WebSocketConfigAdvanced componentId={componentId} />;
-    case 'graphql':
-      return <GraphQLConfigAdvanced componentId={componentId} />;
-    case 'soap':
-      return <SOAPConfigAdvanced componentId={componentId} />;
-    case 'webhook':
-      return <WebhookConfigAdvanced componentId={componentId} />;
+    // Protocols (rest, grpc, graphql, soap, websocket, webhook) are now attributes of connections, not separate nodes
+    // Protocol configuration is handled in ConnectionPropertiesPanel
     case 'docker':
       return <DockerK8sConfigAdvanced componentId={componentId} />;
     case 'kubernetes':

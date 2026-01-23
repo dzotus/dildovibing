@@ -65,14 +65,6 @@ export const COMPONENT_LIBRARY: ComponentType[] = [
   { id: 'vpn', type: 'vpn', label: 'VPN Concentrator', icon: '🔐', color: '#2D9CDB', category: 'edge' },
   { id: 'cdn', type: 'cdn', label: 'CDN Edge', icon: '🛰️', color: '#FF5A5F', category: 'edge' },
 
-  // APIs & Protocols
-  { id: 'rest', type: 'rest', label: 'REST API', icon: '🔌', color: '#61DAFB', category: 'api' },
-  { id: 'grpc', type: 'grpc', label: 'gRPC', icon: '⚡', color: '#244C5A', category: 'api' },
-  { id: 'graphql', type: 'graphql', label: 'GraphQL', icon: '🔮', color: '#DE33A6', category: 'api' },
-  { id: 'soap', type: 'soap', label: 'SOAP', icon: '🧼', color: '#2196F3', category: 'api' },
-  { id: 'websocket', type: 'websocket', label: 'WebSocket', icon: '🔄', color: '#010101', category: 'api' },
-  { id: 'webhook', type: 'webhook', label: 'Webhook Endpoint', icon: '📬', color: '#0FA3B1', category: 'api' },
-
   // ML & Analytics
   { id: 'spark', type: 'spark', label: 'Apache Spark', icon: '⚙️', color: '#E25A1C', category: 'ml' },
   { id: 'tensorflow-serving', type: 'tensorflow-serving', label: 'TensorFlow Serving', icon: '🧠', color: '#FF6F00', category: 'ml' },
@@ -94,7 +86,6 @@ export const COMPONENT_CATEGORIES: { id: ComponentCategory; label: string; icon:
   { id: 'devops', label: 'DevOps & Platform', icon: '🛠️' },
   { id: 'infrastructure', label: 'Runtime & Infra', icon: '🏗️' },
   { id: 'edge', label: 'Edge & Networking', icon: '🌐' },
-  { id: 'api', label: 'Protocols & APIs', icon: '🔌' },
   { id: 'ml', label: 'ML & Analytics', icon: '🧠' },
   { id: 'business', label: 'Business Systems', icon: '🏢' },
 ] as const;
