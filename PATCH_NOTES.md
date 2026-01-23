@@ -1,5 +1,239 @@
 # Patch Notes
 
+## Версия 0.1.8g - MuleSoft Anypoint Platform: Connectors Management, Enrich Processor и Health Monitoring
+
+### Обзор изменений
+**MuleSoft Anypoint Platform: Connectors Management, Enrich Processor и Health Monitoring**: Реализована детальная конфигурация Connectors для всех типов (Database, API, Messaging, File) с настройками подключения, timeout, retry policy. Добавлен модальный редактор конфигурации connectors с поддержкой всех параметров. Реализована полная конфигурация Enrich processor с поддержкой source (connector/variable/payload), targetVariable и DataWeave трансформаций. Добавлена конфигурация Set Variable и Set Payload processors в Flow Editor. Реализован Connector Health Monitoring с автоматическим определением статуса (connected/disconnected/error) на основе метрик из эмуляции. Расширен MuleSoftRoutingEngine для поддержки детальной конфигурации connectors (connection pool, timeout, retry policy) и enrich processor с учетом retry logic. Синхронизация метрик connectors из эмуляции в UI в реальном времени. Все изменения влияют на симуляцию и метрики.
+
+**Ключевые достижения**: Реализована полная детальная конфигурация Connectors с модальным редактором для каждого типа. Enrich processor поддерживает обогащение данных через connectors с учетом retry policy и DataWeave трансформаций. Set Variable и Set Payload processors имеют полную конфигурацию в UI. Connector Health Monitoring автоматически определяет статус на основе метрик (error count, latency, last operation time). Метрики connectors (errorCount, latency, healthStatus) синхронизируются из эмуляции в реальном времени. Конфигурация connectors влияет на latency симуляции (connection pool size, timeout, buffer size). Реализация соответствует реальному MuleSoft по функциональности.
+
+### Ключевые изменения
+
+#### Flows Management - Полная реализация ✅
+- ✅ **Типы и интерфейсы**:
+  - Расширены интерфейсы `MuleFlow`, `MuleSource`, `MuleTarget`, `MuleProcessor`, `MuleErrorHandler` в `MuleSoftRoutingEngine.ts`
+  - Поддержка source (http-listener, scheduler, file-reader, connector)
+  - Поддержка target (http-request, database, file-writer, connector)
+  - Поддержка processors с вложенными структурами (для choice, try, async)
+  - Поддержка error handlers (on-error-continue, on-error-propagate)
+
+- ✅ **Поддержка в движке**:
+  - Расширен `MuleSoftRoutingEngine` для обработки flows с processors
+  - Метод `processFlow()` обрабатывает flows с учетом processors
+  - Метод `processProcessors()` обрабатывает цепочки processors
+  - Метод `processProcessor()` обрабатывает отдельные processors
+  - Поддержка вложенных processors для choice router и try scope
+  - Интеграция с конфигурацией приложений
+
+- ✅ **UI для управления flows**:
+  - Отображение flows в карточках приложений
+  - Кнопка "Add Flow" для создания новых flows
+  - Flow Editor (модальное окно) для редактирования flows
+  - CRUD операции: Create, Read, Update, Delete
+  - Редактирование имени flow
+  - Удаление flows с подтверждением через toast
+
+- ✅ **Конфигурация flows**:
+  - Source: выбор типа (http-listener, scheduler, file-reader, connector)
+  - Target: выбор типа (http-request, database, file-writer, connector)
+  - Processors: добавление/удаление processors в flow
+  - Async Processing: переключатель для асинхронной обработки
+  - Error Handlers: поддержка обработчиков ошибок
+
+#### DataWeave Transformations - Реализация ✅
+- ✅ **DataWeave парсер**:
+  - Метод `executeDataWeave()` для выполнения трансформаций
+  - Метод `calculateDataWeaveComplexity()` для расчета сложности
+  - Поддержка базовых операций (map, filter, pluck, groupBy, orderBy, reduce, flatten)
+  - Учет вложенных структур и вызовов функций
+  - Влияние сложности на latency симуляции
+
+- ✅ **DataWeave Editor в UI**:
+  - Textarea для ввода DataWeave выражений в Flow Editor
+  - Поддержка многострочных выражений
+  - Моноширинный шрифт для удобства редактирования
+  - Placeholder с примером синтаксиса
+  - Сохранение выражений в конфигурации processor
+
+#### Processors - Полная реализация ✅
+- ✅ **Transform Processor**:
+  - Поддержка DataWeave трансформаций
+  - Расчет latency на основе сложности выражения
+  - Влияние на обработку данных
+
+- ✅ **Validate Processor**:
+  - Валидация данных с конфигурацией
+  - Проверка типов, длины строк
+  - Обработка ошибок валидации
+
+- ✅ **Filter Processor**:
+  - Фильтрация сообщений по условиям
+  - Поддержка выражений для фильтрации
+  - Пропуск сообщений при несоответствии условию
+
+- ✅ **Logger Processor**:
+  - Логирование сообщений
+  - Конфигурация сообщений для логирования
+  - Минимальная latency для логирования
+
+- ✅ **Choice Router**:
+  - Условная маршрутизация с when условиями
+  - Поддержка множественных routes
+  - Default route для случаев без совпадений
+  - Вложенные processors в routes
+
+- ✅ **Try Scope**:
+  - Обработка ошибок с try scope
+  - Интеграция с error handlers flows
+  - Поддержка on-error-continue и on-error-propagate
+  - Вложенные processors в try scope
+
+- ✅ **Set Variable/Payload Processors**:
+  - Set Variable: установка переменных в контексте сообщения
+  - Set Payload: изменение payload сообщения
+  - Поддержка DataWeave для set-payload
+  - Полная конфигурация в Flow Editor (name, value для Set Variable; value, DataWeave для Set Payload)
+
+- ✅ **Enrich Processor**:
+  - Конфигурация source (connector/variable/payload)
+  - Конфигурация connectorName для обогащения через connector
+  - Конфигурация targetVariable для сохранения обогащенных данных
+  - Поддержка DataWeave для трансформации обогащенных данных
+  - Учет retry policy connectors при обогащении
+  - Расчет latency на основе типа source и конфигурации connector
+
+- ✅ **Async Processor**:
+  - Асинхронная обработка (non-blocking)
+  - Сниженная latency для async операций
+  - Вложенные processors в async scope
+
+#### Connectors Management - Детальная конфигурация ✅
+- ✅ **Расширенный интерфейс Connector**:
+  - Добавлены поля для детальной конфигурации (config, healthStatus, lastOperationTime, errorCount, latency)
+  - Поддержка конфигурации для всех типов connectors (database, api, messaging, file, custom)
+
+- ✅ **Модальный редактор конфигурации Connectors**:
+  - Модальное окно Dialog для редактирования конфигурации connector
+  - Database connectors: connection string, connection pool size, query timeout, retry policy (max retries, retry interval, exponential backoff)
+  - API connectors: base URL, authentication type (OAuth/Basic/API Key/None), timeout, retry policy
+  - Messaging connectors: broker URL, queue name, topic name, acknowledgment mode (auto/manual)
+  - File connectors: path, pattern, encoding, buffer size
+  - Кнопка "Test Connection" для проверки подключения
+
+- ✅ **Connector Health Monitoring**:
+  - Автоматическое определение статуса (connected/disconnected/error) на основе метрик
+  - Отображение статуса в UI с иконками (CheckCircle для connected, AlertTriangle для error)
+  - Отображение error count и latency в карточке connector
+  - Синхронизация метрик из эмуляции в реальном времени
+  - Определение статуса на основе error rate (>10% = error) и последней операции (>60s = disconnected)
+
+#### Синхронизация метрик с эмуляцией ✅
+- ✅ **Реальная синхронизация метрик приложений**:
+  - Добавлен `useEffect` для синхронизации метрик из routing engine в UI (каждые 2 секунды)
+  - Метрики обновляются в реальном времени во время симуляции
+  - Метрики (requestCount, errorCount, avgResponseTime) берутся из `MuleSoftRoutingEngine.getApplicationMetrics()`
+  - Синхронизация работает только когда симуляция запущена (`isRunning`)
+
+- ✅ **Синхронизация метрик connectors**:
+  - Синхронизация метрик connectors (errorCount, latency, healthStatus, lastOperationTime) из эмуляции
+  - Автоматическое обновление статуса на основе метрик
+  - Обновление каждые 2 секунды во время симуляции
+
+- ✅ **Синхронизация конфигурации**:
+  - Метод `updateMuleSoftRoutingEngine()` в `EmulationEngine` для обновления конфигурации
+  - Автоматическая синхронизация при изменениях в UI
+  - Обработка ошибок синхронизации с toast уведомлениями
+
+### Изменённые файлы
+
+#### `src/core/MuleSoftRoutingEngine.ts`
+- ✅ Расширены интерфейсы `MuleFlow`, `MuleSource`, `MuleTarget`, `MuleProcessor`, `MuleErrorHandler`
+- ✅ Добавлен метод `processProcessors()` для обработки цепочек processors
+- ✅ Расширен метод `processProcessor()` для поддержки всех типов processors
+- ✅ Добавлен метод `executeDataWeave()` для выполнения DataWeave трансформаций
+- ✅ Добавлен метод `calculateDataWeaveComplexity()` для расчета сложности
+- ✅ Добавлены методы `executeValidation()`, `executeFilter()`, `executeChoice()`, `executeTryScope()`
+- ✅ Добавлены методы `setVariable()`, `setPayload()` для processors
+- ✅ Добавлен метод `executeEnrich()` для обработки enrich processor с поддержкой source (connector/variable/payload), targetVariable, DataWeave и retry policy
+- ✅ Расширен метод `calculateConnectorLatency()` для учета детальной конфигурации connectors:
+  - Database: учет connection pool size (больший pool = меньшая latency)
+  - API: учет timeout (длинный timeout = потенциально большая latency)
+  - File: учет buffer size (больший buffer = потенциально меньшая latency)
+- ✅ Обновлен метод `matchApplication()` для поддержки новых структур flows
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Добавлен метод `updateMuleSoftRoutingEngine()` для обновления конфигурации
+- ✅ Обновлен метод `initializeMuleSoftRoutingEngine()` для поддержки flows с processors
+- ✅ Поддержка конвертации flows из конфигурации в формат routing engine
+
+#### `src/components/config/integration/MuleSoftConfigAdvanced.tsx`
+- ✅ Добавлены интерфейсы `MuleFlow`, `MuleSource`, `MuleTarget`, `MuleProcessor`, `MuleErrorHandler`
+- ✅ Расширен интерфейс `Connector` для поддержки детальной конфигурации:
+  - config с настройками для database, api, messaging, file connectors
+  - healthStatus, lastOperationTime, errorCount, latency для health monitoring
+- ✅ Добавлено поле `flows` в интерфейс `Application`
+- ✅ Добавлены состояния: `editingFlowAppIndex`, `editingFlowId`, `showFlowEditor`, `editingConnectorConfigIndex`
+- ✅ Добавлены функции: `addFlow()`, `removeFlow()`, `updateFlow()`, `addProcessor()`, `removeProcessor()`, `updateProcessor()`
+- ✅ Добавлен Flow Editor (модальное окно Dialog) для редактирования flows
+- ✅ Добавлен Connector Configuration Dialog (модальное окно) для детальной конфигурации connectors
+- ✅ Добавлено отображение flows в карточках приложений
+- ✅ Добавлено отображение health status connectors с иконками и метриками
+- ✅ Добавлена конфигурация Enrich processor в Flow Editor:
+  - Выбор source (connector/variable/payload)
+  - Поле connectorName для обогащения через connector
+  - Поле targetVariable для сохранения обогащенных данных
+  - DataWeave Editor для трансформации
+- ✅ Добавлена конфигурация Set Variable processor в Flow Editor (name, value)
+- ✅ Добавлена конфигурация Set Payload processor в Flow Editor (value, DataWeave)
+- ✅ Добавлен DataWeave Editor (Textarea) в Flow Editor для transform processors
+- ✅ Добавлена синхронизация метрик приложений и connectors из routing engine в UI через `useEffect`
+- ✅ Добавлена синхронизация конфигурации с движком через `updateMuleSoftRoutingEngine()`
+- ✅ Добавлены импорты: `useEmulationStore`, `emulationEngine`, `Dialog`, `useToast`, `useEffect`, `useCallback`
+- ✅ Добавлены иконки: `GitBranch`, `Pencil`, `X`, `CheckCircle`, `AlertTriangle`, `Settings`
+
+### Технические детали
+
+#### Реализация Processors
+- **Transform**: Выполняет DataWeave трансформации с расчетом latency на основе сложности
+- **Validate**: Проверяет данные по конфигурации (типы, длина, обязательные поля)
+- **Filter**: Фильтрует сообщения по условиям, пропускает при несоответствии
+- **Logger**: Логирует сообщения с минимальной latency
+- **Choice**: Маршрутизирует по условиям when, поддерживает default route
+- **Try**: Обрабатывает ошибки с интеграцией error handlers
+- **Set Variable/Payload**: Устанавливает переменные и payload в контексте сообщения
+- **Async**: Выполняет асинхронную обработку с сниженной latency
+
+#### DataWeave Complexity Calculation
+- Подсчет операций (map, filter, pluck, groupBy, orderBy, reduce, flatten)
+- Учет вложенных структур (curly braces, brackets)
+- Учет вызовов функций
+- Минимальная сложность: 1
+- Latency: baseLatency (2ms) + complexityLatency (3ms per unit) + jitter
+
+#### Синхронизация метрик
+- Интервал обновления: 2000ms (2 секунды)
+- Проверка изменений перед обновлением для оптимизации
+- Обновление только при запущенной симуляции
+- Метрики: requestCount, errorCount, avgResponseTime (avgLatency)
+
+### Улучшения UI/UX
+- ✅ Flow Editor с модальным окном для удобного редактирования
+- ✅ Визуальное отображение flows в карточках приложений
+- ✅ Счетчик processors в каждом flow
+- ✅ DataWeave Editor с моноширинным шрифтом
+- ✅ Toast уведомления для операций (создание, удаление flows)
+- ✅ Адаптивный Flow Editor с прокруткой для длинных конфигураций
+
+### Симулятивность
+- ✅ Flows влияют на обработку данных через processors
+- ✅ DataWeave трансформации влияют на latency в зависимости от сложности
+- ✅ Processors влияют на метрики приложений (requestCount, errorCount, latency)
+- ✅ Error handling влияет на error rate
+- ✅ Choice router влияет на маршрутизацию данных
+- ✅ Метрики отражают реальное состояние симуляции
+
+---
+
 ## Версия 0.1.8f - Apigee API Gateway: API Products, Developer Apps и Environment-specific конфигурации
 
 ### Обзор изменений

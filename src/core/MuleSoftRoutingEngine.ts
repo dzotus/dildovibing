@@ -18,14 +18,37 @@ export interface MuleApplication {
 export interface MuleFlow {
   id: string;
   name: string;
-  source?: string; // Source connector or endpoint
+  source?: MuleSource; // Source connector or endpoint
   processors?: MuleProcessor[];
-  target?: string; // Target connector or endpoint
+  target?: MuleTarget; // Target connector or endpoint
+  errorHandlers?: MuleErrorHandler[];
+  async?: boolean;
+}
+
+export interface MuleSource {
+  type: 'http-listener' | 'scheduler' | 'file-reader' | 'connector';
+  config: Record<string, any>;
+}
+
+export interface MuleTarget {
+  type: 'http-request' | 'database' | 'file-writer' | 'connector';
+  config: Record<string, any>;
 }
 
 export interface MuleProcessor {
-  type: 'transform' | 'validate' | 'filter' | 'enrich' | 'route';
+  id: string;
+  type: 'transform' | 'validate' | 'filter' | 'enrich' | 'logger' | 
+        'choice' | 'try' | 'set-variable' | 'set-payload' | 'async';
   config?: Record<string, any>;
+  dataweave?: string; // DataWeave expression для transform
+  children?: MuleProcessor[]; // Для choice, try, async
+  when?: string; // Условие для choice routes
+}
+
+export interface MuleErrorHandler {
+  type: 'on-error-continue' | 'on-error-propagate';
+  errorType?: string;
+  processors: MuleProcessor[];
 }
 
 export interface MuleConnector {
@@ -264,10 +287,19 @@ export class MuleSoftRoutingEngine {
         
         if (matchingConnector) {
           // Find flow that uses this connector
-          const flow = app.flows?.find(f => 
-            f.source === matchingConnector.name || 
-            f.target === matchingConnector.name
-          ) || app.flows?.[0];
+          const flow = app.flows?.find(f => {
+            if (typeof f.source === 'string') {
+              return f.source === matchingConnector.name;
+            } else if (f.source?.type === 'connector' && f.source.config?.connectorName === matchingConnector.name) {
+              return true;
+            }
+            if (typeof f.target === 'string') {
+              return f.target === matchingConnector.name;
+            } else if (f.target?.type === 'connector' && f.target.config?.connectorName === matchingConnector.name) {
+              return true;
+            }
+            return false;
+          }) || app.flows?.[0];
           
           return {
             application: app,
@@ -359,8 +391,10 @@ export class MuleSoftRoutingEngine {
     
     // Process through flow processors
     if (match.flow.processors) {
-      for (const processor of match.flow.processors) {
-        totalLatency += this.processProcessor(processor, request);
+      const processingResult = this.processProcessors(match.flow.processors, request, match);
+      totalLatency += processingResult.latency;
+      if (processingResult.error) {
+        throw new Error(processingResult.error);
       }
     }
     
@@ -370,6 +404,43 @@ export class MuleSoftRoutingEngine {
     }
     
     return totalLatency;
+  }
+
+  /**
+   * Process multiple processors (with support for nested processors)
+   */
+  private processProcessors(
+    processors: MuleProcessor[],
+    request: MuleRequest,
+    match: ApplicationMatch
+  ): { latency: number; error?: string } {
+    let totalLatency = 0;
+    
+    for (const processor of processors) {
+      try {
+        const result = this.processProcessor(processor, request, match);
+        totalLatency += result.latency;
+        
+        if (result.error) {
+          // Try to handle error if there's a try scope
+          if (processor.type === 'try' && processor.children) {
+            // Error handling is done in processProcessor for try scope
+            if (!result.handled) {
+              return { latency: totalLatency, error: result.error };
+            }
+          } else {
+            return { latency: totalLatency, error: result.error };
+          }
+        }
+      } catch (error) {
+        return {
+          latency: totalLatency,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        };
+      }
+    }
+    
+    return { latency: totalLatency };
   }
 
   /**
@@ -391,30 +462,374 @@ export class MuleSoftRoutingEngine {
   /**
    * Process a single processor
    */
-  private processProcessor(processor: MuleProcessor, request: MuleRequest): number {
+  private processProcessor(
+    processor: MuleProcessor,
+    request: MuleRequest,
+    match: ApplicationMatch
+  ): { latency: number; error?: string; handled?: boolean } {
     switch (processor.type) {
       case 'transform':
-        // Data transformation: 2-8ms
-        return 2 + Math.random() * 6;
+        // Data transformation with DataWeave: 2-15ms (depends on complexity)
+        const transformLatency = this.executeDataWeave(processor.dataweave || '', request);
+        return { latency: transformLatency };
+        
       case 'validate':
         // Validation: 1-3ms
-        return 1 + Math.random() * 2;
+        const validationError = this.executeValidation(processor.config || {}, request);
+        if (validationError) {
+          return { latency: 1 + Math.random() * 2, error: validationError };
+        }
+        return { latency: 1 + Math.random() * 2 };
+        
       case 'filter':
         // Filtering: 0.5-2ms
-        return 0.5 + Math.random() * 1.5;
+        const passes = this.executeFilter(processor.config || {}, request);
+        if (!passes) {
+          return { latency: 0.5 + Math.random() * 1.5, error: 'Message filtered out' };
+        }
+        return { latency: 0.5 + Math.random() * 1.5 };
+        
       case 'enrich':
         // Enrichment: 3-10ms (may involve external calls)
-        return 3 + Math.random() * 7;
-      case 'route':
-        // Routing: 0.5-1ms
-        return 0.5 + Math.random() * 0.5;
+        return this.executeEnrich(processor, request, match);
+        
+      case 'logger':
+        // Logging: 0.1-0.5ms
+        return { latency: 0.1 + Math.random() * 0.4 };
+        
+      case 'choice':
+        // Choice router: 0.5-2ms + latency of selected route
+        return this.executeChoice(processor, request, match);
+        
+      case 'try':
+        // Try scope with error handling: base latency + error handling if needed
+        return this.executeTryScope(processor, request, match);
+        
+      case 'set-variable':
+        // Set variable: 0.1-0.3ms
+        this.setVariable(processor.config || {}, request);
+        return { latency: 0.1 + Math.random() * 0.2 };
+        
+      case 'set-payload':
+        // Set payload: 0.1-0.5ms
+        this.setPayload(processor.config || {}, request);
+        return { latency: 0.1 + Math.random() * 0.4 };
+        
+      case 'async':
+        // Async processing: base latency (non-blocking simulation)
+        if (processor.children) {
+          const asyncResult = this.processProcessors(processor.children, request, match);
+          return { latency: asyncResult.latency * 0.1 }; // Async is much faster (non-blocking)
+        }
+        return { latency: 0.5 };
+        
       default:
-        return 1;
+        return { latency: 1 };
     }
   }
 
   /**
-   * Calculate connector latency based on type
+   * Execute DataWeave transformation
+   */
+  private executeDataWeave(dataweave: string, request: MuleRequest): number {
+    if (!dataweave || dataweave.trim() === '') {
+      // No transformation, minimal latency
+      return 1 + Math.random() * 2;
+    }
+    
+    // Simulate DataWeave execution based on complexity
+    // Complexity factors: length, number of operations, nested structures
+    const complexity = this.calculateDataWeaveComplexity(dataweave);
+    
+    // Base latency: 2ms, plus complexity factor
+    const baseLatency = 2;
+    const complexityLatency = complexity * 3; // 3ms per complexity unit
+    const jitter = Math.random() * 2;
+    
+    return baseLatency + complexityLatency + jitter;
+  }
+
+  /**
+   * Calculate DataWeave expression complexity
+   */
+  private calculateDataWeaveComplexity(dataweave: string): number {
+    let complexity = 0;
+    
+    // Count operations
+    const operations = ['map', 'filter', 'pluck', 'groupBy', 'orderBy', 'reduce', 'flatten'];
+    for (const op of operations) {
+      const matches = dataweave.match(new RegExp(`\\b${op}\\b`, 'gi'));
+      if (matches) {
+        complexity += matches.length;
+      }
+    }
+    
+    // Count nested structures (curly braces, brackets)
+    const nestedLevel = (dataweave.match(/\{/g) || []).length;
+    complexity += Math.max(0, nestedLevel - 1);
+    
+    // Count function calls
+    const functionCalls = (dataweave.match(/\(/g) || []).length;
+    complexity += functionCalls * 0.5;
+    
+    return Math.max(1, complexity); // Minimum complexity of 1
+  }
+
+  /**
+   * Execute validation
+   */
+  private executeValidation(config: Record<string, any>, request: MuleRequest): string | null {
+    // Simple validation simulation
+    if (config.required && request.body === undefined) {
+      return 'Required field missing';
+    }
+    
+    if (config.type && typeof request.body !== config.type) {
+      return `Type mismatch: expected ${config.type}`;
+    }
+    
+    if (config.minLength && typeof request.body === 'string' && request.body.length < config.minLength) {
+      return `String too short: minimum length ${config.minLength}`;
+    }
+    
+    if (config.maxLength && typeof request.body === 'string' && request.body.length > config.maxLength) {
+      return `String too long: maximum length ${config.maxLength}`;
+    }
+    
+    return null;
+  }
+
+  /**
+   * Execute filter
+   */
+  private executeFilter(config: Record<string, any>, request: MuleRequest): boolean {
+    // Simple filter simulation
+    if (config.expression) {
+      // In real MuleSoft, this would be a DataWeave expression
+      // For simulation, we'll use a simple check
+      try {
+        // Very simplified expression evaluation
+        // In reality, this would be a full DataWeave parser
+        return true; // Default: pass
+      } catch {
+        return false;
+      }
+    }
+    
+    return true; // No filter expression = pass all
+  }
+
+  /**
+   * Execute choice router
+   */
+  private executeChoice(
+    processor: MuleProcessor,
+    request: MuleRequest,
+    match: ApplicationMatch
+  ): { latency: number; error?: string } {
+    const choiceLatency = 0.5 + Math.random() * 1.5;
+    
+    if (!processor.children || processor.children.length === 0) {
+      return { latency: choiceLatency };
+    }
+    
+    // Find matching route based on 'when' condition
+    let matchedRoute: MuleProcessor | null = null;
+    
+    for (const child of processor.children) {
+      if (this.evaluateCondition(child.when || '', request)) {
+        matchedRoute = child;
+        break;
+      }
+    }
+    
+    // If no route matched, use default (last route without 'when')
+    if (!matchedRoute) {
+      const defaultRoute = processor.children[processor.children.length - 1];
+      if (defaultRoute && !defaultRoute.when) {
+        matchedRoute = defaultRoute;
+      }
+    }
+    
+    if (matchedRoute && matchedRoute.children) {
+      const routeResult = this.processProcessors(matchedRoute.children, request, match);
+      return {
+        latency: choiceLatency + routeResult.latency,
+        error: routeResult.error,
+      };
+    }
+    
+    return { latency: choiceLatency };
+  }
+
+  /**
+   * Evaluate condition (simplified)
+   */
+  private evaluateCondition(condition: string, request: MuleRequest): boolean {
+    if (!condition || condition.trim() === '') {
+      return true; // Default route
+    }
+    
+    // Very simplified condition evaluation
+    // In real MuleSoft, this would be a full DataWeave expression evaluator
+    // For simulation, we'll use simple checks
+    
+    // Check for common patterns
+    if (condition.includes('payload') || condition.includes('attributes')) {
+      // Simulate condition check (50% chance of match for simulation)
+      return Math.random() > 0.5;
+    }
+    
+    return true;
+  }
+
+  /**
+   * Execute try scope with error handling
+   */
+  private executeTryScope(
+    processor: MuleProcessor,
+    request: MuleRequest,
+    match: ApplicationMatch
+  ): { latency: number; error?: string; handled?: boolean } {
+    const tryLatency = 1 + Math.random() * 2;
+    
+    if (!processor.children || processor.children.length === 0) {
+      return { latency: tryLatency };
+    }
+    
+    // Process processors in try scope
+    const tryResult = this.processProcessors(processor.children, request, match);
+    
+    if (tryResult.error) {
+      // Error occurred, check if there's error handler in flow
+      if (match.flow?.errorHandlers && match.flow.errorHandlers.length > 0) {
+        // Find matching error handler
+        const errorHandler = match.flow.errorHandlers[0]; // Simplified: use first handler
+        
+        if (errorHandler.type === 'on-error-continue') {
+          // Continue processing after error
+          if (errorHandler.processors.length > 0) {
+            const handlerResult = this.processProcessors(errorHandler.processors, request, match);
+            return {
+              latency: tryLatency + tryResult.latency + handlerResult.latency,
+              handled: true,
+            };
+          }
+          return {
+            latency: tryLatency + tryResult.latency,
+            handled: true,
+          };
+        } else if (errorHandler.type === 'on-error-propagate') {
+          // Propagate error
+          return {
+            latency: tryLatency + tryResult.latency,
+            error: tryResult.error,
+            handled: false,
+          };
+        }
+      }
+      
+      // No error handler or error not handled
+      return {
+        latency: tryLatency + tryResult.latency,
+        error: tryResult.error,
+        handled: false,
+      };
+    }
+    
+    return {
+      latency: tryLatency + tryResult.latency,
+    };
+  }
+
+  /**
+   * Set variable (simplified simulation)
+   */
+  private setVariable(config: Record<string, any>, request: MuleRequest): void {
+    // In real MuleSoft, this would set variables in the message context
+    // For simulation, we just track that it happened
+    if (config.name && config.value !== undefined) {
+      // Variables would be stored in message context
+      // For simulation, we don't need to actually store them
+    }
+  }
+
+  /**
+   * Set payload (simplified simulation)
+   */
+  private setPayload(config: Record<string, any>, request: MuleRequest): void {
+    // In real MuleSoft, this would modify the message payload
+    // For simulation, we modify the request body
+    if (config.value !== undefined) {
+      request.body = config.value;
+    } else if (config.dataweave) {
+      // Transform payload using DataWeave
+      this.executeDataWeave(config.dataweave, request);
+    }
+  }
+
+  /**
+   * Execute enrich processor
+   */
+  private executeEnrich(
+    processor: MuleProcessor,
+    request: MuleRequest,
+    match: ApplicationMatch
+  ): { latency: number; error?: string } {
+    const config = processor.config || {};
+    const source = config.source || 'connector';
+    
+    let latency = 3; // Base latency
+    
+    if (source === 'connector' && config.connectorName) {
+      // Enrichment from connector - simulate connector call
+      const connector = this.connectors.get(config.connectorName);
+      if (connector && connector.enabled) {
+        latency = this.calculateConnectorLatency(connector);
+        
+        // Apply retry policy if configured
+        if (connector.config?.retryPolicy) {
+          const retryPolicy = connector.config.retryPolicy;
+          const maxRetries = retryPolicy.maxRetries || 3;
+          const retryInterval = retryPolicy.retryInterval || 1000;
+          const exponentialBackoff = retryPolicy.exponentialBackoff || false;
+          
+          // Simulate potential retries (random chance of failure)
+          const failureChance = 0.1; // 10% chance of failure
+          if (Math.random() < failureChance) {
+            // Simulate retries
+            for (let i = 0; i < maxRetries; i++) {
+              const backoff = exponentialBackoff 
+                ? retryInterval * Math.pow(2, i)
+                : retryInterval;
+              latency += backoff + this.calculateConnectorLatency(connector);
+            }
+          }
+        }
+      } else {
+        return { latency: 1, error: 'Connector not found or disabled' };
+      }
+    } else if (source === 'variable' || source === 'payload') {
+      // Enrichment from variable/payload - minimal latency
+      latency = 1 + Math.random() * 2;
+    }
+    
+    // Apply DataWeave transformation if configured
+    if (processor.dataweave) {
+      latency += this.executeDataWeave(processor.dataweave, request);
+    }
+    
+    // Store enriched data in target variable (simulated)
+    if (config.targetVariable) {
+      // In real MuleSoft, this would set a variable in message context
+      // For simulation, we just track that it happened
+    }
+    
+    return { latency };
+  }
+
+  /**
+   * Calculate connector latency based on type and configuration
    */
   private calculateConnectorLatency(connector: MuleConnector): number {
     // Base latency varies by connector type
@@ -426,7 +841,32 @@ export class MuleSoftRoutingEngine {
       'custom': 15, // Custom: 15-40ms
     };
     
-    const base = baseLatencies[connector.type] || 15;
+    let base = baseLatencies[connector.type] || 15;
+    
+    // Adjust based on connector configuration
+    if (connector.config) {
+      // Database connector: connection pool size affects latency
+      if (connector.type === 'database' && connector.config.connectionPoolSize) {
+        const poolSize = connector.config.connectionPoolSize || 10;
+        // Larger pool = lower latency (more available connections)
+        base = base * (10 / Math.max(1, poolSize));
+      }
+      
+      // API connector: timeout affects latency (longer timeout = potentially longer wait)
+      if (connector.type === 'api' && connector.config.timeout) {
+        const timeout = connector.config.timeout || 30000;
+        // Simulate that longer timeout might mean slower response
+        base = Math.min(base * 1.5, timeout * 0.001); // Cap at timeout
+      }
+      
+      // File connector: buffer size affects latency
+      if (connector.type === 'file' && connector.config.bufferSize) {
+        const bufferSize = connector.config.bufferSize || 8192;
+        // Larger buffer = potentially faster (fewer I/O operations)
+        base = base * (8192 / Math.max(1024, bufferSize));
+      }
+    }
+    
     const jitter = base * 0.5 * Math.random();
     
     return base + jitter;

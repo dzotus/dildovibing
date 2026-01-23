@@ -8536,7 +8536,15 @@ export class EmulationEngine {
       errorStrategy: app.errorStrategy || 'continue',
       reconnectionStrategy: app.reconnectionStrategy || 'exponential',
       auditLogging: app.auditLogging || false,
-      flows: app.flows || [],
+      flows: (app.flows || []).map((flow: any) => ({
+        id: flow.id || flow.name || `flow-${Date.now()}`,
+        name: flow.name || 'unnamed-flow',
+        source: flow.source,
+        processors: flow.processors || [],
+        target: flow.target,
+        errorHandlers: flow.errorHandlers || [],
+        async: flow.async || false,
+      })),
     }));
     
     // Convert connectors from config format to routing engine format
@@ -9700,6 +9708,82 @@ export class EmulationEngine {
    */
   public getMuleSoftRoutingEngine(nodeId: string): MuleSoftRoutingEngine | undefined {
     return this.mulesoftRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Update MuleSoft routing engine configuration
+   */
+  public updateMuleSoftRoutingEngine(nodeId: string): void {
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node || node.type !== 'mulesoft') {
+      return;
+    }
+
+    const routingEngine = this.mulesoftRoutingEngines.get(nodeId);
+    if (!routingEngine) {
+      // If engine doesn't exist, initialize it
+      try {
+        this.initializeMuleSoftRoutingEngine(node);
+      } catch (error) {
+        errorCollector.addError(error as Error, {
+          severity: 'critical',
+          source: 'mulesoft-update',
+          componentId: nodeId,
+          componentType: 'mulesoft',
+        });
+      }
+      return;
+    }
+
+    // Update existing engine configuration
+    try {
+      const config = (node.data.config || {}) as any;
+      
+      // Convert applications from config format to routing engine format
+      const applications = (config.applications || []).map((app: any) => ({
+        name: app.name,
+        runtimeVersion: app.runtimeVersion || '4.6.0',
+        workerCount: app.workerCount || 2,
+        status: app.status || 'stopped',
+        connectors: app.connectors || [],
+        errorStrategy: app.errorStrategy || 'continue',
+        reconnectionStrategy: app.reconnectionStrategy || 'exponential',
+        auditLogging: app.auditLogging || false,
+        flows: (app.flows || []).map((flow: any) => ({
+          id: flow.id || flow.name || `flow-${Date.now()}`,
+          name: flow.name || 'unnamed-flow',
+          source: flow.source,
+          processors: flow.processors || [],
+          target: flow.target,
+          errorHandlers: flow.errorHandlers || [],
+          async: flow.async || false,
+        })),
+      }));
+      
+      // Convert connectors from config format to routing engine format
+      const connectors = (config.connectors || []).map((conn: any) => ({
+        name: conn.name,
+        type: conn.type || 'api',
+        enabled: conn.enabled !== false,
+        config: conn.config || {},
+        targetComponentType: conn.targetComponentType,
+        targetComponentId: conn.targetComponentId,
+      }));
+      
+      routingEngine.initialize({
+        organization: config.organization,
+        environment: config.environment,
+        applications,
+        connectors,
+      });
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'mulesoft-update',
+        componentId: nodeId,
+        componentType: 'mulesoft',
+      });
+    }
   }
 
   /**
