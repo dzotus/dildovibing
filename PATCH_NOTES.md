@@ -1,5 +1,190 @@
 # Patch Notes
 
+## Версия 0.1.8j - PostgreSQL: полная симуляция с реальными метриками и синхронизация UI
+
+### PostgreSQL: создание PostgreSQLEmulationEngine
+
+**Критическое улучшение симулятивности**: Создан специализированный движок симуляции PostgreSQL (`PostgreSQLEmulationEngine`), аналогичный другим компонентам (GraphQLEmulationEngine, SparkEmulationEngine). Движок обеспечивает полную симуляцию поведения PostgreSQL с реальными метриками.
+
+**Ключевые изменения**:
+- ✅ Создан файл `src/core/PostgreSQLEmulationEngine.ts` с полной реализацией движка
+- ✅ Реализованы все методы: `initializeConfig`, `updateConfig`, `updateMetrics`, `getMetrics`, `executeQuery`, `getActiveConnections`, `getTables`, `getViews`, `getSchemas`, `getRoles`
+- ✅ Реализованы интерфейсы метрик PostgreSQL, соответствующие реальным метрикам PostgreSQL
+- ✅ Интегрирован с существующим `PostgreSQLQueryEngine` и `PostgreSQLConnectionPool`
+
+### PostgreSQL: реализация реальных метрик
+
+**Улучшение метрик**: Реализованы метрики, полностью соответствующие реальным метрикам PostgreSQL из стандартных представлений (pg_stat_statements, pg_stat_database, pg_stat_user_tables).
+
+**Реализованные метрики**:
+- ✅ **Connection metrics**: active/idle/waiting connections, connection utilization
+- ✅ **Query metrics** (pg_stat_statements): queries per second, average/p50/p95/p99 query time, slow queries, top queries
+- ✅ **Database metrics** (pg_stat_database): transactions/commits/rollbacks per second, database size, bloat ratio
+- ✅ **Table metrics** (pg_stat_user_tables): total tables/rows/indexes, seq scans/index scans per second, dead/live tuples
+- ✅ **Cache metrics**: cache hit ratio, index cache hit ratio
+- ✅ **WAL metrics**: WAL written/archived per second, checkpoint frequency
+- ✅ **Vacuum metrics**: autovacuum running, vacuum operations per hour, last vacuum time
+- ✅ **Lock metrics**: active locks, blocked queries, lock wait time
+- ✅ **Error metrics**: error rate, connection errors, query errors
+
+### PostgreSQL: симуляция реальных паттернов
+
+**Реалистичная симуляция**: Реализована симуляция реальных паттернов работы PostgreSQL, влияющих на метрики и производительность.
+
+**Реализованные паттерны**:
+- ✅ **WAL (Write-Ahead Log)**: запись всех изменений в WAL перед коммитом, расчет размера WAL на основе операций записи
+- ✅ **Checkpoint**: периодическая запись на диск (каждые 5 минут), очистка WAL
+- ✅ **Bloat (раздувание таблиц)**: увеличение размера таблиц при UPDATE/DELETE, расчет dead tuples
+- ✅ **Vacuum/Autovacuum**: автоматический запуск vacuum при накоплении dead tuples (>20%), очистка dead tuples
+- ✅ **Locks**: блокировки при одновременных операциях, отслеживание заблокированных запросов
+- ✅ **Slow queries**: запросы без индексов выполняются медленнее, большие таблицы = медленнее
+- ✅ **Connection pool exhaustion**: ошибки при исчерпании пула, ожидание освобождения соединений
+
+### PostgreSQL: интеграция в EmulationEngine
+
+**Интеграция симуляции**: PostgreSQLEmulationEngine полностью интегрирован в основной движок симуляции.
+
+**Изменения**:
+- ✅ Добавлен `postgresEmulationEngines: Map<string, PostgreSQLEmulationEngine>` в EmulationEngine
+- ✅ Реализован метод `initializePostgreSQLEmulationEngine(node: CanvasNode)` для инициализации
+- ✅ Реализован метод `getPostgreSQLEmulationEngine(nodeId: string)` для доступа к движку
+- ✅ Обновлен `simulateDatabase()` для использования PostgreSQLEmulationEngine вместо упрощенной логики
+- ✅ Реализована синхронизация конфигурации через `updateConfig()` при изменении конфига в UI
+- ✅ Интегрирован с DataFlowEngine через обновленный `processPostgreSQLQuery()`
+
+### PostgreSQL: синхронизация UI с симуляцией
+
+**Двусторонняя синхронизация**: Реализована полная синхронизация между UI и симуляцией.
+
+**Изменения**:
+- ✅ Добавлен `useEffect` для синхронизации конфигурации с emulationEngine при изменении конфига
+- ✅ Добавлен `useEffect` для периодического обновления метрик из симуляции (каждую секунду)
+- ✅ Обновлено выполнение запросов через `emulationEngine.getPostgreSQLEmulationEngine()` вместо прямого вызова QueryEngine
+- ✅ Синхронизация данных таблиц после выполнения запросов - данные из симуляции обновляются в UI
+- ✅ Запросы выполняются через симуляцию, что обеспечивает корректные метрики
+
+### PostgreSQL: улучшение UI/UX
+
+**Улучшение пользовательского интерфейса**: Добавлен таб Metrics, таб Schema Diagram с визуализацией схемы и улучшена адаптивность интерфейса.
+
+**Изменения**:
+- ✅ Табы сделаны адаптивными: `flex-wrap` вместо `grid-cols-7` - табы переносятся на новую строку при узком экране
+- ✅ Добавлен таб "Schema Diagram" с визуализацией схемы базы данных:
+  - Визуальное представление таблиц и связей между ними
+  - Интерактивное создание связей между таблицами (клик на поле в одной таблице, затем на поле в другой)
+  - Удаление связей (клик на связь)
+  - Автоматическое расположение таблиц (Auto Arrange)
+  - Сохранение позиций таблиц в конфигурации (`diagramPositions`)
+  - Валидация схемы с отображением ошибок и предупреждений
+  - Импорт SQL схемы с автоматическим извлечением таблиц и связей
+  - Экспорт схемы в различные форматы:
+    - PostgreSQL SQL
+    - Mermaid ER diagram
+    - DBML (для dbdiagram.io)
+    - Markdown документация
+    - PNG изображение
+    - JPEG изображение
+- ✅ Добавлен таб "Metrics" с отображением всех метрик PostgreSQL в реальном времени:
+  - Connection Metrics (active, idle, waiting connections, utilization)
+  - Query Metrics (queries/sec, avg/p95 query time, slow queries)
+  - Database Metrics (transactions/sec, commits/sec, database size, bloat ratio)
+  - Table Metrics (total tables, total rows, dead/live tuples)
+  - Cache Metrics (cache hit ratio, index cache hit ratio)
+  - WAL & Vacuum Metrics (WAL written, checkpoints, autovacuum, vacuum ops)
+  - Lock Metrics (active locks, blocked queries, lock wait time)
+- ✅ Метрики обновляются в реальном времени (каждую секунду)
+- ✅ Красивое отображение метрик в карточках с группировкой по категориям
+
+### Изменённые файлы
+
+#### `src/core/PostgreSQLEmulationEngine.ts` (новый)
+- ✅ Создан класс `PostgreSQLEmulationEngine` с полной реализацией симуляции PostgreSQL
+- ✅ Реализованы все методы для работы с конфигурацией, метриками, запросами
+- ✅ Реализована симуляция WAL, checkpoint, vacuum, locks, bloat
+- ✅ Реализованы все метрики PostgreSQL
+
+#### `src/core/EmulationEngine.ts`
+- ✅ Добавлен импорт `PostgreSQLEmulationEngine`
+- ✅ Добавлен `postgresEmulationEngines: Map<string, PostgreSQLEmulationEngine>`
+- ✅ Реализован метод `initializePostgreSQLEmulationEngine(node: CanvasNode)`
+- ✅ Реализован метод `getPostgreSQLEmulationEngine(nodeId: string)`
+- ✅ Обновлен `simulateDatabase()` для использования PostgreSQLEmulationEngine
+- ✅ Добавлена инициализация движка в `initialize()`
+- ✅ Добавлено обновление конфигурации в `updateNodesAndConnections()`
+- ✅ Добавлено удаление движка при удалении узла
+
+#### `src/core/DataFlowEngine.ts`
+- ✅ Обновлен `processPostgreSQLQuery()` для использования PostgreSQLEmulationEngine
+- ✅ Поддержка различных форматов SQL в payload (string, {sql}, {query})
+- ✅ Запросы выполняются через emulationEngine вместо прямого вызова QueryEngine
+
+#### `src/components/config/data/PostgreSQLConfigAdvanced.tsx`
+- ✅ Добавлен импорт `emulationEngine` и `useEffect`
+- ✅ Добавлен `useEffect` для синхронизации конфигурации с emulationEngine
+- ✅ Добавлен `useEffect` для периодического обновления метрик
+- ✅ Обновлено выполнение запросов через `emulationEngine.getPostgreSQLEmulationEngine()`
+- ✅ Синхронизация данных таблиц после выполнения запросов
+- ✅ Табы сделаны адаптивными (`flex-wrap` вместо `grid-cols-7`)
+- ✅ Добавлен таб "Schema Diagram" с визуализацией схемы базы данных:
+  - Компонент `SchemaDiagram` для отображения таблиц и связей
+  - Интерактивное создание и удаление связей между таблицами
+  - Автоматическое расположение таблиц
+  - Валидация схемы через `validateSchema()`
+  - Импорт SQL через `importPostgreSQLSchema()`
+  - Экспорт в различные форматы (SQL, Mermaid, DBML, Documentation, PNG, JPEG)
+  - Сохранение позиций таблиц в `diagramPositions` конфигурации
+- ✅ Добавлен таб "Metrics" с отображением всех метрик PostgreSQL
+- ✅ Добавлены импорты иконок: `Activity` для таба Metrics, `Network` для таба Schema Diagram
+
+#### `src/components/config/data/SchemaDiagram.tsx` (новый)
+- ✅ Создан компонент `SchemaDiagram` для визуализации схемы базы данных:
+  - Отображение таблиц с колонками, типами данных и ключами
+  - Интерактивное создание связей между таблицами (клик на поле в одной таблице, затем на поле в другой)
+  - Удаление связей (клик на связь)
+  - Перетаскивание таблиц для изменения их позиции
+  - Автоматическое расположение таблиц (Auto Arrange)
+  - Визуализация связей с типами (one-to-one, one-to-many, many-to-many)
+  - Сохранение позиций таблиц через callback `onTableUpdate`
+  - Обработка добавления и удаления связей через callbacks `onRelationshipAdd` и `onRelationshipRemove`
+  - Экспорт диаграммы в PNG/JPEG изображения
+
+#### Утилиты для работы со схемой PostgreSQL (новые файлы)
+- ✅ `src/utils/schemaExport.ts` - экспорт схемы в различные форматы:
+  - `exportPostgreSQLSchema()` - экспорт в PostgreSQL SQL
+  - `exportMermaidSchema()` - экспорт в Mermaid ER diagram
+  - `exportDBMLSchema()` - экспорт в DBML формат для dbdiagram.io
+  - `exportDocumentationSchema()` - экспорт в Markdown документацию
+- ✅ `src/utils/schemaImport.ts` - импорт схемы из SQL:
+  - `importPostgreSQLSchema()` - парсинг SQL и извлечение таблиц, колонок, индексов, constraints и связей
+- ✅ `src/utils/schemaValidation.ts` - валидация схемы:
+  - `validateSchema()` - проверка схемы на ошибки и предупреждения (дубликаты таблиц, несуществующие связи, циклические зависимости)
+- ✅ `src/utils/schemaDiagramConverter.ts` - конвертация схемы для визуализации:
+  - `DrawDBRelationship` - интерфейс для представления связей в диаграмме
+  - Конвертация таблиц и связей в формат для компонента SchemaDiagram
+- ✅ `src/utils/schemaArrangement.ts` - автоматическое расположение таблиц в диаграмме
+
+### Технические детали
+
+**Архитектура PostgreSQLEmulationEngine**:
+- Движок использует существующий `PostgreSQLQueryEngine` для выполнения запросов
+- Движок использует существующий `PostgreSQLConnectionPool` для управления соединениями
+- Все запросы записываются в историю для расчета метрик
+- Метрики обновляются на каждом цикле симуляции через `updateMetrics()`
+- Симуляция WAL, checkpoint, vacuum происходит автоматически на основе активности
+
+**Синхронизация данных**:
+- Конфигурация синхронизируется с движком при изменении в UI
+- Метрики обновляются из движка каждую секунду в UI
+- Данные таблиц синхронизируются после выполнения запросов
+- Запросы выполняются через движок, что обеспечивает корректные метрики
+
+**Метрики**:
+- Все метрики рассчитываются на основе реальной активности (запросы, транзакции, операции)
+- Метрики соответствуют реальным метрикам PostgreSQL из стандартных представлений
+- Метрики обновляются в реальном времени и отображаются в UI
+
+---
+
 ## Версия 0.1.8i - BFF Service: реальная связь с бэкендами через DataFlowEngine + расширенный UI/UX
 
 ### BFF Service: устранение хардкода и реализация реальной симуляции

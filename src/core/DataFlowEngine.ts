@@ -1596,34 +1596,41 @@ export class DataFlowEngine {
   }
 
   /**
-   * Process PostgreSQL SQL query using Query Engine
+   * Process PostgreSQL SQL query using PostgreSQLEmulationEngine
    */
   private processPostgreSQLQuery(
     node: CanvasNode,
     message: DataMessage,
     config: ComponentConfig
   ): DataMessage {
-    if (!this.postgresQueryEngine) {
+    // Get PostgreSQL emulation engine from emulationEngine
+    const pgEngine = emulationEngine.getPostgreSQLEmulationEngine(node.id);
+    if (!pgEngine) {
       message.status = 'failed';
-      message.error = 'PostgreSQL Query Engine not initialized';
+      message.error = 'PostgreSQL Emulation Engine not initialized';
       return message;
     }
 
-    const sql = (message.payload as any)?.sql;
-    if (!sql || typeof sql !== 'string') {
+    // Extract SQL from payload - support multiple formats
+    let sql: string | undefined;
+    const payload = message.payload as any;
+    
+    if (typeof payload === 'string') {
+      sql = payload;
+    } else if (payload?.sql && typeof payload.sql === 'string') {
+      sql = payload.sql;
+    } else if (payload?.query && typeof payload.query === 'string') {
+      sql = payload.query;
+    }
+
+    if (!sql) {
       message.status = 'failed';
-      message.error = 'No SQL query provided';
+      message.error = 'No SQL query provided in payload';
       return message;
     }
 
-    // Get tables, indexes, and views from config
-    const pgConfig = node.data.config as any;
-    const tables: PostgreSQLTable[] = pgConfig.tables || [];
-    const indexes: PostgreSQLIndex[] = this.extractIndexesFromConfig(pgConfig, tables);
-    const views = pgConfig.views || [];
-
-    // Execute query
-    const result = this.postgresQueryEngine.execute(sql, tables, indexes, views);
+    // Execute query through emulation engine
+    const result = pgEngine.executeQuery(sql);
 
     if (result.success) {
       message.status = 'delivered';

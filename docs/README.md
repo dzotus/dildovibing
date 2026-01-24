@@ -39,6 +39,15 @@
   - Exactly-once delivery, schemas, flow control
   - Retry policy, expiration policy, полный набор метрик
 
+### Компоненты баз данных (Databases)
+
+- **[PostgreSQL](./data/postgresql.md)** - Объектно-реляционная СУБД PostgreSQL
+  - Schemas, Tables, Views, Roles, Connection Pool
+  - Query Engine с поддержкой SQL (SELECT, INSERT, UPDATE, DELETE, транзакции)
+  - WAL (Write-Ahead Log), Vacuum/Autovacuum, Locks
+  - Query Planning с использованием индексов, полный набор метрик PostgreSQL
+  - Метрики из pg_stat_statements, pg_stat_database, pg_stat_user_tables
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -64,6 +73,12 @@
   - Caching с TTL и persisted queries, Rate Limiting
   - Query Complexity Analysis, Introspection, Subscriptions
   - Полный набор метрик производительности и cache statistics
+
+- **[BFF Service](./integration/bff-service.md)** - Backend for Frontend Service
+  - Backend Aggregation (merge, parallel, sequential), Multi-Protocol Support
+  - Caching (memory, redis, off), Circuit Breaking, Retry Logic
+  - Request Batching, Response Compression, Fallback Support
+  - Audience-Specific Optimization (mobile, web, partner), полный набор метрик
 
 ### Протоколы и API (Protocols & APIs)
 
@@ -220,6 +235,11 @@
 - **Apigee API Gateway:** [Документация Apigee API Gateway](./integration/apigee.md)
 - **MuleSoft Integration:** [Документация MuleSoft Integration](./integration/mulesoft.md)
 - **GraphQL Gateway:** [Документация GraphQL Gateway](./integration/graphql-gateway.md)
+- **BFF Service:** [Документация BFF Service](./integration/bff-service.md)
+
+### По базам данных
+
+- **PostgreSQL:** [Документация PostgreSQL](./data/postgresql.md)
 
 ## Обновления
 
@@ -246,3 +266,5 @@
 - [Официальная документация MuleSoft Anypoint Platform](https://docs.mulesoft.com/)
 - [GraphQL Specification](https://graphql.org/learn/)
 - [Apollo Federation Documentation](https://www.apollographql.com/docs/federation/)
+- [BFF Pattern - Sam Newman](https://samnewman.io/patterns/architectural/bff/)
+- [Официальная документация PostgreSQL](https://www.postgresql.org/docs/)

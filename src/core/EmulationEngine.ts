@@ -28,6 +28,7 @@ import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
+import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
@@ -258,6 +259,9 @@ export class EmulationEngine {
   
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
+  
+  // PostgreSQL emulation engines per node
+  private postgresEmulationEngines: Map<string, PostgreSQLEmulationEngine> = new Map();
   
   // Prometheus emulation engines per node
   private prometheusEngines: Map<string, PrometheusEmulationEngine> = new Map();
@@ -629,6 +633,7 @@ export class EmulationEngine {
         }
         if (node.type === 'postgres') {
           this.initializePostgreSQLConnectionPool(node);
+          this.initializePostgreSQLEmulationEngine(node);
         }
         if (node.type === 'redis') {
           this.initializeRedisRoutingEngine(node);
@@ -790,7 +795,7 @@ export class EmulationEngine {
         }
       }
       
-      // Update existing PostgreSQL pools if config changed
+      // Update existing PostgreSQL pools and engines if config changed
       for (const node of nodes) {
         if (node.type === 'postgres') {
           const existingPool = this.postgresConnectionPools.get(node.id);
@@ -803,6 +808,14 @@ export class EmulationEngine {
               maxLifetime: config.maxLifetime || 3600000,
               connectionTimeout: config.connectionTimeout || 5000,
             });
+          }
+          
+          // Update or initialize PostgreSQL emulation engine
+          const existingEngine = this.postgresEmulationEngines.get(node.id);
+          if (existingEngine) {
+            existingEngine.updateConfig((node.data.config || {}) as PostgreSQLConfig);
+          } else {
+            this.initializePostgreSQLEmulationEngine(node);
           }
         }
       }
@@ -1288,6 +1301,7 @@ export class EmulationEngine {
         this.prometheusEngines.delete(nodeId);
         this.grafanaEngines.delete(nodeId);
         this.graphQLEngines.delete(nodeId);
+        this.postgresEmulationEngines.delete(nodeId);
         this.soapEngines.delete(nodeId);
         this.websocketEngines.delete(nodeId);
         this.lokiEngines.delete(nodeId);
@@ -4714,61 +4728,83 @@ export class EmulationEngine {
     const maxConnections = config.maxConnections || 100;
     const queryLatency = config.queryLatency || 10; // ms
     
-    // Для PostgreSQL используем Connection Pool
+    // Для PostgreSQL используем PostgreSQLEmulationEngine
     if (node.type === 'postgres') {
-      const pool = this.postgresConnectionPools.get(node.id);
-      if (pool) {
-        // Simulate queries coming in
+      // Ensure engine is initialized
+      if (!this.postgresEmulationEngines.has(node.id)) {
+        this.initializePostgreSQLEmulationEngine(node);
+      }
+      
+      const pgEngine = this.postgresEmulationEngines.get(node.id);
+      if (pgEngine) {
+        // Update engine configuration if changed
+        pgEngine.updateConfig((node.data.config || {}) as PostgreSQLConfig);
+        
+        // Update metrics
+        pgEngine.updateMetrics();
+        
+        // Get metrics from engine
+        const pgMetrics = pgEngine.getMetrics();
+        
+        // Simulate queries coming in from incoming connections
         const incomingConnections = this.connections.filter(conn => conn.target === node.id);
         const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
           const sourceMetrics = this.metrics.get(conn.source);
           return sum + (sourceMetrics?.throughput || 0);
         }, 0);
 
-        // Simulate acquiring connections for queries
-        const queriesPerSecond = Math.min(totalIncomingThroughput, maxConnections * 10);
-        const queriesThisUpdate = (queriesPerSecond * this.updateInterval) / 1000;
-        
-        for (let i = 0; i < Math.floor(queriesThisUpdate); i++) {
-          const connId = pool.acquireConnection('SELECT');
-          if (connId) {
-            // Simulate query execution time
-            const queryDuration = queryLatency + Math.random() * 20;
-            setTimeout(() => {
-              pool.releaseConnection(connId, queryDuration);
-            }, queryDuration);
+        // Simulate query execution for incoming throughput
+        if (totalIncomingThroughput > 0) {
+          const queriesPerSecond = Math.min(totalIncomingThroughput, maxConnections * 10);
+          const queriesThisUpdate = (queriesPerSecond * this.updateInterval) / 1000;
+          
+          // Execute sample queries to simulate activity
+          for (let i = 0; i < Math.floor(queriesThisUpdate); i++) {
+            // Use a simple SELECT query for simulation
+            pgEngine.executeQuery('SELECT 1');
           }
         }
-
-        // Get pool metrics
-        const poolMetrics = pool.getMetrics();
         
-        metrics.throughput = poolMetrics.queriesPerSecond;
-        metrics.latency = poolMetrics.averageQueryTime || queryLatency;
-        metrics.utilization = poolMetrics.utilization;
-        metrics.errorRate = poolMetrics.waitingConnections > 0 ? 0.01 : 0.001; // Higher error rate if pool exhausted
+        // Update component metrics from PostgreSQL metrics
+        metrics.throughput = pgMetrics.queriesPerSecond;
+        metrics.latency = pgMetrics.averageQueryTime;
+        metrics.utilization = pgMetrics.connectionUtilization;
+        metrics.errorRate = pgMetrics.errorRate;
         
-        // Calculate index count for PostgreSQL
-        const pgConfig = node.data.config as any;
-        const tables = pgConfig.tables || [];
-        let indexCount = 0;
-        for (const table of tables) {
-          indexCount += (table.indexes || []).length;
-        }
-        if (indexCount === 0) indexCount = 5; // Default
-
-        // Cache hit ratio calculation (will be improved later)
-        const cacheHitRatio = this.calculateCacheHitRatio(node, poolMetrics.queriesPerSecond);
-        
+        // Set custom metrics
         metrics.customMetrics = {
-          'active_connections': poolMetrics.activeConnections,
-          'idle_connections': poolMetrics.idleConnections,
-          'waiting_connections': poolMetrics.waitingConnections,
-          'total_connections': poolMetrics.totalConnections,
-          'max_connections': maxConnections,
-          'indexes': indexCount,
-          'cache_hit_ratio': cacheHitRatio,
-          'connection_wait_time': poolMetrics.connectionWaitTime,
+          'active_connections': pgMetrics.activeConnections,
+          'idle_connections': pgMetrics.idleConnections,
+          'waiting_connections': pgMetrics.waitingConnections,
+          'total_connections': pgMetrics.totalConnections,
+          'max_connections': pgMetrics.maxConnections,
+          'queries_per_second': pgMetrics.queriesPerSecond,
+          'transactions_per_second': pgMetrics.transactionsPerSecond,
+          'commits_per_second': pgMetrics.commitsPerSecond,
+          'rollbacks_per_second': pgMetrics.rollbacksPerSecond,
+          'database_size': pgMetrics.databaseSize,
+          'bloat_ratio': pgMetrics.bloatRatio,
+          'total_tables': pgMetrics.totalTables,
+          'total_rows': pgMetrics.totalRows,
+          'total_indexes': pgMetrics.totalIndexes,
+          'seq_scans_per_second': pgMetrics.seqScansPerSecond,
+          'index_scans_per_second': pgMetrics.indexScansPerSecond,
+          'dead_tuples': pgMetrics.deadTuples,
+          'live_tuples': pgMetrics.liveTuples,
+          'cache_hit_ratio': pgMetrics.cacheHitRatio,
+          'index_cache_hit_ratio': pgMetrics.indexCacheHitRatio,
+          'wal_written': pgMetrics.walWritten,
+          'wal_archived': pgMetrics.walArchived,
+          'checkpoint_frequency': pgMetrics.checkpointFrequency,
+          'autovacuum_running': pgMetrics.autovacuumRunning,
+          'vacuum_operations_per_hour': pgMetrics.vacuumOperationsPerHour,
+          'active_locks': pgMetrics.activeLocks,
+          'blocked_queries': pgMetrics.blockedQueries,
+          'lock_wait_time': pgMetrics.lockWaitTime,
+          'slow_queries': pgMetrics.slowQueries,
+          'p50_query_time': pgMetrics.p50QueryTime,
+          'p95_query_time': pgMetrics.p95QueryTime,
+          'p99_query_time': pgMetrics.p99QueryTime,
         };
         
         return; // Early return for PostgreSQL
@@ -9337,6 +9373,25 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize PostgreSQL Emulation Engine for PostgreSQL node
+   */
+  private initializePostgreSQLEmulationEngine(node: CanvasNode): void {
+    try {
+      const pgConfig = (node.data.config || {}) as PostgreSQLConfig;
+      const pgEngine = new PostgreSQLEmulationEngine(node.id, pgConfig);
+      this.postgresEmulationEngines.set(node.id, pgEngine);
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'initialization',
+        componentId: node.id,
+        componentType: node.type,
+        context: { operation: 'initializePostgreSQLEmulationEngine' },
+      });
+    }
+  }
+
+  /**
    * Initialize SOAP Emulation Engine for SOAP node
    */
   private initializeSOAPEngine(node: CanvasNode): void {
@@ -10418,6 +10473,13 @@ export class EmulationEngine {
    */
   public getGraphQLEmulationEngine(nodeId: string): GraphQLEmulationEngine | undefined {
     return this.graphQLEngines.get(nodeId);
+  }
+
+  /**
+   * Get PostgreSQL emulation engine for a node
+   */
+  public getPostgreSQLEmulationEngine(nodeId: string): PostgreSQLEmulationEngine | undefined {
+    return this.postgresEmulationEngines.get(nodeId);
   }
 
   /**

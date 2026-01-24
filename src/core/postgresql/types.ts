@@ -9,6 +9,7 @@ export interface PostgreSQLTable {
   indexes: string[];
   constraints: string[];
   data?: PostgreSQLRow[];
+  comment?: string; // Table comment
 }
 
 export interface PostgreSQLColumn {
@@ -17,6 +18,7 @@ export interface PostgreSQLColumn {
   nullable: boolean;
   default?: string;
   primaryKey?: boolean;
+  comment?: string; // Column comment
 }
 
 export interface PostgreSQLRow {

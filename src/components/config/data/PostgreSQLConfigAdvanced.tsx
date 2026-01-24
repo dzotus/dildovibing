@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
 import { CanvasNode } from '@/types';
 import { PostgreSQLQueryEngine } from '@/core/postgresql/QueryEngine';
 import { PostgreSQLTable, PostgreSQLIndex } from '@/core/postgresql/types';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -14,7 +15,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { usePortValidation } from '@/hooks/usePortValidation';
-import { AlertCircle } from 'lucide-react';
 import { showSuccess, showError } from '@/utils/toast';
 import { validateRequiredFields, type RequiredField } from '@/utils/requiredFields';
 import { PageTitle, Description } from '@/components/ui/typography';
@@ -30,8 +30,44 @@ import {
   Trash2,
   Search,
   Play,
-  FolderTree
+  FolderTree,
+  Activity,
+  Edit2,
+  Network,
+  Download,
+  FileText,
+  Copy,
+  Check,
+  Upload,
+  AlertCircle,
+  CheckCircle2,
+  LayoutGrid
 } from 'lucide-react';
+import { SchemaDiagram } from './SchemaDiagram';
+import { DrawDBRelationship } from '@/utils/schemaDiagramConverter';
+import {
+  exportPostgreSQLSchema,
+  exportMermaidSchema,
+  exportDBMLSchema,
+  exportDocumentationSchema,
+} from '@/utils/schemaExport';
+import { importPostgreSQLSchema } from '@/utils/schemaImport';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { validateSchema, ValidationResult } from '@/utils/schemaValidation';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 
 interface PostgreSQLConfigProps {
   componentId: string;
@@ -93,11 +129,15 @@ interface PostgreSQLConfig {
     port?: number;
     path?: string;
   };
+  diagramPositions?: Record<string, { x: number; y: number }>; // Table positions for diagram: "schema.table" -> {x, y}
 }
 
 export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
+  
+  // Check if component has real connections
+  const hasConnections = connections.some(conn => conn.source === componentId || conn.target === componentId);
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
@@ -149,6 +189,39 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     { name: 'id', type: 'SERIAL', nullable: false, primaryKey: true },
   ]);
   const [selectedTableForData, setSelectedTableForData] = useState<string>('');
+  const [pgMetrics, setPgMetrics] = useState<any>(null);
+  const [relationships, setRelationships] = useState<DrawDBRelationship[]>([]);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportContent, setExportContent] = useState('');
+  const [exportType, setExportType] = useState<'sql' | 'mermaid' | 'dbml' | 'docs'>('sql');
+  const [copied, setCopied] = useState(false);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importSQL, setImportSQL] = useState('');
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [validationResult, setValidationResult] = useState<ValidationResult | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
+  
+  // Синхронизация конфигурации с emulationEngine
+  useEffect(() => {
+    const pgEngine = emulationEngine.getPostgreSQLEmulationEngine(componentId);
+    if (pgEngine) {
+      // Обновить конфигурацию движка при изменении конфига
+      pgEngine.updateConfig(config);
+    }
+  }, [componentId, config.host, config.port, config.database, config.username, config.tables, config.views, config.schemas]);
+  
+  // Синхронизация метрик из симуляции
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const pgEngine = emulationEngine.getPostgreSQLEmulationEngine(componentId);
+      if (pgEngine) {
+        const metrics = pgEngine.getMetrics();
+        setPgMetrics(metrics);
+      }
+    }, 1000); // Обновлять каждую секунду
+    
+    return () => clearInterval(interval);
+  }, [componentId]);
   
   // Валидация портов и хостов
   const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
@@ -170,6 +243,78 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     );
     setFieldErrors(result.errors);
     return result.isValid;
+  };
+
+  const handleImportSQL = () => {
+    if (!importSQL || !importSQL.trim()) {
+      showError('SQL string is empty');
+      return;
+    }
+    
+    try {
+      const result = importPostgreSQLSchema(importSQL);
+      
+      if (result.errors.length > 0) {
+        setImportErrors(result.errors);
+        // Still show errors but continue if we have tables
+        if (result.tables.length === 0) {
+          showError(`Import failed: ${result.errors.join(', ')}`);
+          return;
+        }
+      } else {
+        setImportErrors([]);
+      }
+      
+      if (result.tables.length === 0) {
+        showError('No tables found in SQL');
+        return;
+      }
+      
+      // Get current tables
+      const currentTables = config.tables || tables;
+      
+      // Merge imported tables with existing ones
+      // If table already exists, skip it (or could update it)
+      const newTables = [...currentTables];
+      let importedCount = 0;
+      
+      result.tables.forEach((importedTable) => {
+        const exists = newTables.some(
+          t => t.name === importedTable.name && t.schema === importedTable.schema
+        );
+        
+        if (!exists) {
+          newTables.push(importedTable);
+          importedCount++;
+        }
+      });
+      
+      // Update config with new tables
+      updateConfig({
+        tables: newTables,
+      });
+      
+      // Update relationships if any
+      if (result.relationships.length > 0) {
+        // Relationships will be automatically extracted by SchemaDiagram
+        // But we can store them if needed
+        setRelationships([...relationships, ...result.relationships]);
+      }
+      
+      // Close dialog and show success
+      setImportDialogOpen(false);
+      setImportSQL('');
+      setImportErrors([]);
+      
+      if (importedCount > 0) {
+        showSuccess(`Successfully imported ${importedCount} table(s)`);
+      } else {
+        showError('All tables already exist');
+      }
+    } catch (error) {
+      showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      setImportErrors([error instanceof Error ? error.message : String(error)]);
+    }
   };
 
   const addTable = () => {
@@ -249,17 +394,129 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     }
   };
 
-  const addSchema = () => {
-    updateConfig({
-      schemas: [...schemas, { name: 'new_schema', owner: username }],
-    });
-    showSuccess('Схема успешно создана');
+  const removeConstraintFromTable = (tableName: string, constraintIndex: number) => {
+    const newTables = [...tables];
+    const tableIndex = newTables.findIndex(t => t.name === tableName && t.schema === currentSchema);
+    if (tableIndex >= 0 && newTables[tableIndex].constraints) {
+      newTables[tableIndex].constraints = newTables[tableIndex].constraints.filter((_, i) => i !== constraintIndex);
+      updateConfig({ tables: newTables });
+      showSuccess(`Constraint удален из таблицы "${tableName}"`);
+    }
   };
 
+  const [editingSchema, setEditingSchema] = useState<string | null>(null);
+  const [newSchemaName, setNewSchemaName] = useState('');
+  const [showCreateSchema, setShowCreateSchema] = useState(false);
+
+  const addSchema = () => {
+    if (newSchemaName && newSchemaName.trim()) {
+      // Check if schema with same name already exists
+      const schemaExists = schemas.some(s => s.name === newSchemaName.trim());
+      
+      if (schemaExists) {
+        showError(`Схема "${newSchemaName.trim()}" уже существует`);
+        return;
+      }
+      
+      updateConfig({
+        schemas: [...schemas, { name: newSchemaName.trim(), owner: username }],
+      });
+      
+      // Reset form
+      setNewSchemaName('');
+      setShowCreateSchema(false);
+      showSuccess(`Схема "${newSchemaName.trim()}" успешно создана`);
+    }
+  };
+
+  const updateSchema = (oldName: string, field: 'name' | 'owner', value: string) => {
+    const newSchemas = schemas.map(s => {
+      if (s.name === oldName) {
+        return { ...s, [field]: value };
+      }
+      return s;
+    });
+    
+    // If schema name changed, update all tables and views that use this schema
+    if (field === 'name' && value !== oldName) {
+      // Check if new name already exists
+      if (schemas.some(s => s.name === value && s.name !== oldName)) {
+        showError(`Схема "${value}" уже существует`);
+        return;
+      }
+      
+      // Update tables
+      const newTables = tables.map(t => {
+        if (t.schema === oldName) {
+          return { ...t, schema: value };
+        }
+        return t;
+      });
+      
+      // Update views
+      const newViews = views.map(v => {
+        if (v.schema === oldName) {
+          return { ...v, schema: value };
+        }
+        return v;
+      });
+      
+      // Update currentSchema if it was the old name
+      const newCurrentSchema = oldName === currentSchema ? value : currentSchema;
+      
+      updateConfig({
+        schemas: newSchemas,
+        tables: newTables,
+        views: newViews,
+        currentSchema: newCurrentSchema,
+      });
+      
+      showSuccess(`Схема "${oldName}" переименована в "${value}"`);
+    } else {
+      updateConfig({ schemas: newSchemas });
+      if (field === 'owner') {
+        showSuccess(`Владелец схемы "${oldName}" изменен на "${value}"`);
+      }
+    }
+  };
+
+  const removeSchema = (schemaName: string) => {
+    // Don't allow deleting current schema
+    if (schemaName === currentSchema) {
+      showError('Нельзя удалить текущую схему. Сначала выберите другую схему.');
+      return;
+    }
+    
+    // Check if schema has tables or views
+    const hasTables = tables.some(t => t.schema === schemaName);
+    const hasViews = views.some(v => v.schema === schemaName);
+    
+    if (hasTables || hasViews) {
+      showError(`Нельзя удалить схему "${schemaName}" - в ней есть таблицы или представления. Сначала удалите их.`);
+      return;
+    }
+    
+    const newSchemas = schemas.filter(s => s.name !== schemaName);
+    updateConfig({ schemas: newSchemas });
+    showSuccess(`Схема "${schemaName}" успешно удалена`);
+  };
+
+  const [editingView, setEditingView] = useState<string | null>(null);
+  const [editingRole, setEditingRole] = useState<string | null>(null);
+
   const addView = () => {
+    const newViewName = 'new_view';
+    // Check if view with same name already exists in current schema
+    const viewExists = views.some(v => v.name === newViewName && v.schema === currentSchema);
+    
+    if (viewExists) {
+      showError(`Представление "${newViewName}" уже существует в схеме "${currentSchema}"`);
+      return;
+    }
+    
     updateConfig({
       views: [...views, {
-        name: 'new_view',
+        name: newViewName,
         schema: currentSchema,
         definition: 'SELECT * FROM table_name',
       }],
@@ -267,11 +524,89 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
     showSuccess('Представление успешно создано');
   };
 
+  const updateView = (oldName: string, schema: string, field: 'name' | 'schema' | 'definition', value: string) => {
+    const newViews = views.map(v => {
+      if (v.name === oldName && v.schema === schema) {
+        return { ...v, [field]: value };
+      }
+      return v;
+    });
+    
+    // If view name or schema changed, check for duplicates
+    if (field === 'name' || field === 'schema') {
+      const newName = field === 'name' ? value : oldName;
+      const newSchema = field === 'schema' ? value : schema;
+      const duplicate = newViews.some(v => v.name === newName && v.schema === newSchema && !(v.name === oldName && v.schema === schema));
+      if (duplicate) {
+        showError(`Представление "${newName}" уже существует в схеме "${newSchema}"`);
+        return;
+      }
+    }
+    
+    updateConfig({ views: newViews });
+    if (field === 'name') {
+      showSuccess(`Представление "${oldName}" переименовано в "${value}"`);
+    } else if (field === 'definition') {
+      showSuccess(`Определение представления "${oldName}" обновлено`);
+    }
+  };
+
+  const removeView = (viewName: string, viewSchema: string) => {
+    const newViews = views.filter(v => !(v.name === viewName && v.schema === viewSchema));
+    updateConfig({ views: newViews });
+    showSuccess(`Представление "${viewName}" успешно удалено`);
+  };
+
   const addRole = () => {
+    const newRoleName = 'new_role';
+    // Check if role with same name already exists
+    const roleExists = roles.some(r => r.name === newRoleName);
+    
+    if (roleExists) {
+      showError(`Роль "${newRoleName}" уже существует`);
+      return;
+    }
+    
     updateConfig({
-      roles: [...roles, { name: 'new_role', login: false, superuser: false }],
+      roles: [...roles, { name: newRoleName, login: false, superuser: false }],
     });
     showSuccess('Роль успешно создана');
+  };
+
+  const updateRole = (oldName: string, field: 'name' | 'login' | 'superuser', value: string | boolean) => {
+    const newRoles = roles.map(r => {
+      if (r.name === oldName) {
+        return { ...r, [field]: value };
+      }
+      return r;
+    });
+    
+    // If role name changed, check for duplicates
+    if (field === 'name' && typeof value === 'string') {
+      if (roles.some(r => r.name === value && r.name !== oldName)) {
+        showError(`Роль "${value}" уже существует`);
+        return;
+      }
+    }
+    
+    updateConfig({ roles: newRoles });
+    if (field === 'name') {
+      showSuccess(`Роль "${oldName}" переименована в "${value}"`);
+    } else {
+      showSuccess(`Роль "${oldName}" обновлена`);
+    }
+  };
+
+  const removeRole = (roleName: string) => {
+    // Don't allow deleting system roles
+    if (roleName === 'postgres') {
+      showError('Нельзя удалить системную роль "postgres"');
+      return;
+    }
+    
+    const newRoles = roles.filter(r => r.name !== roleName);
+    updateConfig({ roles: newRoles });
+    showSuccess(`Роль "${roleName}" успешно удалена`);
   };
 
   const filteredTables = tables.filter(t => t.schema === currentSchema);
@@ -305,8 +640,8 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Connected
+              <div className={`h-2 w-2 rounded-full ${hasConnections ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {hasConnections ? 'Connected' : 'Not Connected'}
             </Badge>
             <Button size="sm" variant="outline">
               <FileCode className="h-4 w-4 mr-2" />
@@ -319,7 +654,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="schemas" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
+          <TabsList className="flex flex-wrap w-full gap-1">
             <TabsTrigger value="schemas" className="gap-2">
               <FolderTree className="h-4 w-4" />
               Schemas
@@ -327,6 +662,10 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
             <TabsTrigger value="tables" className="gap-2">
               <Table className="h-4 w-4" />
               Tables
+            </TabsTrigger>
+            <TabsTrigger value="diagram" className="gap-2">
+              <Network className="h-4 w-4" />
+              Schema Diagram
             </TabsTrigger>
             <TabsTrigger value="data" className="gap-2">
               <Search className="h-4 w-4" />
@@ -344,6 +683,10 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
               <Users className="h-4 w-4" />
               Roles
             </TabsTrigger>
+            <TabsTrigger value="metrics" className="gap-2">
+              <Activity className="h-4 w-4" />
+              Metrics
+            </TabsTrigger>
             <TabsTrigger value="connection" className="gap-2">
               <Settings className="h-4 w-4" />
               Connection
@@ -359,7 +702,7 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                     <CardTitle>Database Schemas</CardTitle>
                     <CardDescription>Schema organization and management</CardDescription>
                   </div>
-                  <Button size="sm" onClick={addSchema} variant="outline">
+                  <Button size="sm" onClick={() => setShowCreateSchema(true)} variant="outline">
                     <Plus className="h-4 w-4 mr-2" />
                     Create Schema
                   </Button>
@@ -367,32 +710,132 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
+                  {showCreateSchema && (
+                    <Card className="border-dashed border-2">
+                      <CardContent className="pt-6">
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <Label>Schema Name</Label>
+                            <Input
+                              value={newSchemaName}
+                              onChange={(e) => setNewSchemaName(e.target.value)}
+                              placeholder="Enter schema name"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  addSchema();
+                                } else if (e.key === 'Escape') {
+                                  setShowCreateSchema(false);
+                                  setNewSchemaName('');
+                                }
+                              }}
+                              autoFocus
+                            />
+                          </div>
+                          <div className="flex gap-2">
+                            <Button size="sm" onClick={addSchema}>
+                              Create
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setShowCreateSchema(false);
+                                setNewSchemaName('');
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                   {schemas.map((schema, index) => (
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
                             <div className="p-2 rounded bg-primary/10">
                               <FolderTree className="h-4 w-4 text-primary" />
                             </div>
-                            <div>
-                              <CardTitle className="text-lg">{schema.name}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
-                                Owner: {schema.owner}
-                              </CardDescription>
-                            </div>
+                            {editingSchema === schema.name ? (
+                              <div className="flex-1 space-y-2">
+                                <Input
+                                  value={schema.name}
+                                  onChange={(e) => updateSchema(schema.name, 'name', e.target.value)}
+                                  className="font-semibold"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      setEditingSchema(null);
+                                    } else if (e.key === 'Escape') {
+                                      setEditingSchema(null);
+                                    }
+                                  }}
+                                  autoFocus
+                                />
+                                <Input
+                                  value={schema.owner}
+                                  onChange={(e) => updateSchema(schema.name, 'owner', e.target.value)}
+                                  className="text-sm"
+                                  placeholder="Owner"
+                                />
+                              </div>
+                            ) : (
+                              <div className="flex-1">
+                                <CardTitle className="text-lg">{schema.name}</CardTitle>
+                                <CardDescription className="text-xs mt-1">
+                                  Owner: {schema.owner}
+                                </CardDescription>
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center gap-2">
                             {schema.name === currentSchema && (
                               <Badge variant="default">Current</Badge>
                             )}
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => updateConfig({ currentSchema: schema.name })}
-                            >
-                              Use
-                            </Button>
+                            {editingSchema === schema.name ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingSchema(null)}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingSchema(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => updateConfig({ currentSchema: schema.name })}
+                                >
+                                  Use
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingSchema(schema.name)}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeSchema(schema.name)}
+                                  className="text-destructive hover:text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </CardHeader>
@@ -785,8 +1228,17 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                             <Label className="text-sm font-semibold mb-2 block">Constraints</Label>
                             <div className="space-y-1">
                               {table.constraints.map((constraint, constIndex) => (
-                                <div key={constIndex} className="p-2 border rounded text-sm font-mono text-muted-foreground">
-                                  {constraint}
+                                <div key={constIndex} className="flex items-center justify-between p-2 border rounded text-sm">
+                                  <span className="font-mono text-muted-foreground">{constraint}</span>
+                                  {editingTable === table.name && (
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => removeConstraintFromTable(table.name, constIndex)}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  )}
                                 </div>
                               ))}
                             </div>
@@ -796,6 +1248,471 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                     </Card>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Schema Diagram Tab */}
+          <TabsContent value="diagram" className="space-y-4 mt-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle>Schema Diagram</CardTitle>
+                    <CardDescription>
+                      Visual representation of database schema with tables and relationships.
+                      <br />
+                      <span className="text-xs text-muted-foreground mt-2 block">
+                        💡 <strong>Как создать связь:</strong> Кликните на поле в одной таблице, затем кликните на поле в другой таблице. 
+                        Связь создастся автоматически. Для удаления связи кликните на неё.
+                      </span>
+                    </CardDescription>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const result = validateSchema(tables, relationships);
+                        setValidationResult(result);
+                        setShowValidation(true);
+                      }}
+                    >
+                      <AlertCircle className="h-4 w-4 mr-2" />
+                      Validate Schema
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setImportSQL('');
+                        setImportErrors([]);
+                        setImportDialogOpen(true);
+                      }}
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Import SQL
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm">
+                          <Upload className="h-4 w-4 mr-2" />
+                          Export
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const sql = exportPostgreSQLSchema(tables, relationships);
+                            setExportContent(sql);
+                            setExportType('sql');
+                            setExportDialogOpen(true);
+                          }}
+                        >
+                          <FileCode className="h-4 w-4 mr-2" />
+                          Export SQL
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const mermaid = exportMermaidSchema(tables, relationships);
+                            setExportContent(mermaid);
+                            setExportType('mermaid');
+                            setExportDialogOpen(true);
+                          }}
+                        >
+                          <FileText className="h-4 w-4 mr-2" />
+                          Export Mermaid
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const dbml = exportDBMLSchema(tables, relationships);
+                            setExportContent(dbml);
+                            setExportType('dbml');
+                            setExportDialogOpen(true);
+                          }}
+                        >
+                          <FileText className="h-4 w-4 mr-2" />
+                          Export DBML
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() => {
+                            const docs = exportDocumentationSchema(tables, relationships, database);
+                            setExportContent(docs);
+                            setExportType('docs');
+                            setExportDialogOpen(true);
+                          }}
+                        >
+                          <FileText className="h-4 w-4 mr-2" />
+                          Export Documentation
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            try {
+                              // Find the schema diagram container
+                              const container = document.querySelector('.schema-diagram-container > div') as HTMLElement;
+                              if (!container) {
+                                showError('Schema diagram not found');
+                                return;
+                              }
+                              
+                              const { toPng } = await import('html-to-image');
+                              const dataUrl = await toPng(container, {
+                                quality: 1.0,
+                                pixelRatio: 2,
+                                backgroundColor: 'white',
+                              });
+                              
+                              const link = document.createElement('a');
+                              link.download = 'schema-diagram.png';
+                              link.href = dataUrl;
+                              link.click();
+                              showSuccess('PNG exported successfully');
+                            } catch (error) {
+                              showError('Failed to export PNG');
+                              console.error(error);
+                            }
+                          }}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Export PNG
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={async () => {
+                            try {
+                              // Find the schema diagram container
+                              const container = document.querySelector('.schema-diagram-container > div') as HTMLElement;
+                              if (!container) {
+                                showError('Schema diagram not found');
+                                return;
+                              }
+                              
+                              const { toJpeg } = await import('html-to-image');
+                              const dataUrl = await toJpeg(container, {
+                                quality: 0.95,
+                                pixelRatio: 2,
+                                backgroundColor: 'white',
+                              });
+                              
+                              const link = document.createElement('a');
+                              link.download = 'schema-diagram.jpg';
+                              link.href = dataUrl;
+                              link.click();
+                              showSuccess('JPEG exported successfully');
+                            } catch (error) {
+                              showError('Failed to export JPEG');
+                              console.error(error);
+                            }
+                          }}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Export JPEG
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="h-[600px] min-h-[400px] schema-diagram-container">
+                  <SchemaDiagram
+                    tables={tables}
+                    tablePositions={config.diagramPositions || {}}
+                    onTableUpdate={(tableId, updates) => {
+                      // Update table position in config
+                      if (updates.x !== undefined || updates.y !== undefined) {
+                        const tableKey = tableId.replace(/^table_/, ''); // Remove "table_" prefix
+                        const newPositions = {
+                          ...(config.diagramPositions || {}),
+                          [tableKey]: {
+                            x: updates.x ?? config.diagramPositions?.[tableKey]?.x ?? 100,
+                            y: updates.y ?? config.diagramPositions?.[tableKey]?.y ?? 100,
+                          },
+                        };
+                        updateConfig({ diagramPositions: newPositions });
+                      }
+                    }}
+                    onRelationshipAdd={(relationship) => {
+                      // Create foreign key constraint from relationship
+                      const startTableKey = relationship.startTableId.replace(/^table_/, '').replace(/_/g, '.');
+                      const endTableKey = relationship.endTableId.replace(/^table_/, '').replace(/_/g, '.');
+                      
+                      const startTable = tables.find(t => {
+                        const tableKey = `${t.schema}.${t.name}`;
+                        return relationship.startTableId === `table_${t.schema}_${t.name}` || startTableKey === tableKey;
+                      });
+                      const endTable = tables.find(t => {
+                        const tableKey = `${t.schema}.${t.name}`;
+                        return relationship.endTableId === `table_${t.schema}_${t.name}` || endTableKey === tableKey;
+                      });
+                      
+                      if (!startTable || !endTable) return;
+                      
+                      const startField = startTable.columns.find((col, idx) => {
+                        const fieldId = `field_${startTable.name}_${col.name}_${idx}`;
+                        return relationship.startFieldId === fieldId || relationship.startFieldId.includes(col.name);
+                      });
+                      const endField = endTable.columns.find((col, idx) => {
+                        const fieldId = `field_${endTable.name}_${col.name}_${idx}`;
+                        return relationship.endFieldId === fieldId || relationship.endFieldId.includes(col.name);
+                      });
+                      
+                      if (!startField || !endField) return;
+                      
+                      const constraint = `FOREIGN KEY (${startField.name}) REFERENCES ${endTable.name}(${endField.name}) ON DELETE ${relationship.constraint === 'Cascade' ? 'CASCADE' : relationship.constraint === 'Restrict' ? 'RESTRICT' : relationship.constraint === 'Set null' ? 'SET NULL' : 'NO ACTION'}`;
+                      
+                      const newTables = [...tables];
+                      const tableIndex = newTables.findIndex(t => t.name === startTable.name && t.schema === startTable.schema);
+                      if (tableIndex >= 0) {
+                        if (!newTables[tableIndex].constraints) {
+                          newTables[tableIndex].constraints = [];
+                        }
+                        newTables[tableIndex].constraints.push(constraint);
+                        updateConfig({ tables: newTables });
+                        showSuccess(`Foreign key constraint добавлен: ${startTable.name}.${startField.name} → ${endTable.name}.${endField.name}`);
+                      }
+                    }}
+                    onRelationshipDelete={(relationshipId) => {
+                      // Find and remove constraint
+                      const relationship = relationships.find(r => r.id === relationshipId);
+                      if (!relationship) return;
+                      
+                      const startTableKey = relationship.startTableId.replace(/^table_/, '').replace(/_/g, '.');
+                      const startTable = tables.find(t => {
+                        const tableKey = `${t.schema}.${t.name}`;
+                        return relationship.startTableId === `table_${t.schema}_${t.name}` || startTableKey === tableKey;
+                      });
+                      
+                      if (!startTable) return;
+                      
+                      // Find field name from field ID
+                      const fieldNameMatch = relationship.startFieldId.match(/field_\w+_(\w+)_\d+/);
+                      const fieldName = fieldNameMatch ? fieldNameMatch[1] : '';
+                      
+                      const newTables = [...tables];
+                      const tableIndex = newTables.findIndex(t => t.name === startTable.name && t.schema === startTable.schema);
+                      if (tableIndex >= 0 && newTables[tableIndex].constraints) {
+                        newTables[tableIndex].constraints = newTables[tableIndex].constraints.filter(c => {
+                          // Remove constraint that matches this field
+                          if (c.includes('FOREIGN KEY') && fieldName && c.includes(`(${fieldName})`)) {
+                            return false;
+                          }
+                          return true;
+                        });
+                        updateConfig({ tables: newTables });
+                        showSuccess('Foreign key constraint удален');
+                      }
+                    }}
+                    onRelationshipsChange={(rels) => {
+                      setRelationships(rels);
+                    }}
+                    onAutoArrange={(positions) => {
+                      updateConfig({ diagramPositions: positions });
+                    }}
+                  />
+                </div>
+                
+                {/* Export Dialog */}
+                <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>
+                  <DialogContent className="max-w-4xl max-h-[80vh]">
+                    <DialogHeader>
+                      <DialogTitle>
+                        Export {exportType === 'sql' ? 'SQL' : exportType === 'mermaid' ? 'Mermaid' : exportType === 'dbml' ? 'DBML' : 'Documentation'}
+                      </DialogTitle>
+                      <DialogDescription>
+                        {exportType === 'sql' && 'PostgreSQL SQL schema definition'}
+                        {exportType === 'mermaid' && 'Mermaid ER diagram format'}
+                        {exportType === 'dbml' && 'DBML format for dbdiagram.io'}
+                        {exportType === 'docs' && 'Markdown documentation'}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(exportContent);
+                              setCopied(true);
+                              setTimeout(() => setCopied(false), 2000);
+                              showSuccess('Copied to clipboard');
+                            } catch (err) {
+                              showError('Failed to copy to clipboard');
+                            }
+                          }}
+                        >
+                          {copied ? (
+                            <>
+                              <Check className="h-4 w-4 mr-2" />
+                              Copied
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="h-4 w-4 mr-2" />
+                              Copy
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const blob = new Blob([exportContent], {
+                              type: exportType === 'sql' ? 'text/sql' :
+                                    exportType === 'mermaid' ? 'text/plain' :
+                                    exportType === 'dbml' ? 'text/plain' :
+                                    'text/markdown',
+                            });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `schema.${exportType === 'sql' ? 'sql' : exportType === 'mermaid' ? 'mmd' : exportType === 'dbml' ? 'dbml' : 'md'}`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                            showSuccess('File downloaded');
+                          }}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Download
+                        </Button>
+                      </div>
+                      <Textarea
+                        value={exportContent}
+                        readOnly
+                        className="font-mono text-sm h-[400px] resize-none"
+                      />
+                    </div>
+                  </DialogContent>
+                </Dialog>
+                
+                {/* Import Dialog */}
+                <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+                  <DialogContent className="max-w-4xl max-h-[80vh]">
+                    <DialogHeader>
+                      <DialogTitle>Import SQL Schema</DialogTitle>
+                      <DialogDescription>
+                        Paste PostgreSQL CREATE TABLE and ALTER TABLE statements to import tables and relationships
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setImportSQL('');
+                            setImportErrors([]);
+                          }}
+                        >
+                          Clear
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={handleImportSQL}
+                        >
+                          <Download className="h-4 w-4 mr-2" />
+                          Import
+                        </Button>
+                      </div>
+                      {importErrors.length > 0 && (
+                        <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-md">
+                          <div className="text-sm font-medium text-destructive mb-2">Import Errors:</div>
+                          <ul className="text-sm text-destructive/80 list-disc list-inside space-y-1">
+                            {importErrors.map((error, idx) => (
+                              <li key={idx}>{error}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <Textarea
+                        value={importSQL}
+                        onChange={(e) => setImportSQL(e.target.value)}
+                        placeholder="Paste SQL here, e.g.&#10;&#10;CREATE TABLE users (&#10;  id SERIAL PRIMARY KEY,&#10;  username VARCHAR(255) NOT NULL&#10;);&#10;&#10;CREATE TABLE orders (&#10;  id SERIAL PRIMARY KEY,&#10;  user_id INTEGER NOT NULL&#10;);&#10;&#10;ALTER TABLE orders&#10;ADD FOREIGN KEY (user_id) REFERENCES users(id)&#10;ON DELETE CASCADE;"
+                        className="font-mono text-sm h-[400px] resize-none"
+                      />
+                    </div>
+                  </DialogContent>
+                </Dialog>
+                
+                {/* Validation Dialog */}
+                <Dialog open={showValidation} onOpenChange={setShowValidation}>
+                  <DialogContent className="max-w-4xl max-h-[80vh]">
+                    <DialogHeader>
+                      <DialogTitle className="flex items-center gap-2">
+                        {validationResult?.valid ? (
+                          <>
+                            <CheckCircle2 className="h-5 w-5 text-green-500" />
+                            Schema Validation - Valid
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="h-5 w-5 text-destructive" />
+                            Schema Validation - Errors Found
+                          </>
+                        )}
+                      </DialogTitle>
+                      <DialogDescription>
+                        {validationResult?.valid
+                          ? 'Schema is valid with no errors'
+                          : `${validationResult?.errors.length || 0} error(s) and ${validationResult?.warnings.length || 0} warning(s) found`}
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      {validationResult && (
+                        <>
+                          {validationResult.errors.length > 0 && (
+                            <Alert variant="destructive">
+                              <AlertCircle className="h-4 w-4" />
+                              <AlertTitle>Errors ({validationResult.errors.length})</AlertTitle>
+                              <AlertDescription>
+                                <ul className="list-disc list-inside space-y-1 mt-2">
+                                  {validationResult.errors.map((error, idx) => (
+                                    <li key={idx}>
+                                      {error.table && <strong>{error.table}</strong>}
+                                      {error.column && ` → ${error.column}`}
+                                      {error.relationship && ` (${error.relationship})`}
+                                      : {error.message}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          {validationResult.warnings.length > 0 && (
+                            <Alert>
+                              <AlertCircle className="h-4 w-4" />
+                              <AlertTitle>Warnings ({validationResult.warnings.length})</AlertTitle>
+                              <AlertDescription>
+                                <ul className="list-disc list-inside space-y-1 mt-2">
+                                  {validationResult.warnings.map((warning, idx) => (
+                                    <li key={idx}>
+                                      {warning.table && <strong>{warning.table}</strong>}
+                                      {warning.column && ` → ${warning.column}`}
+                                      {warning.relationship && ` (${warning.relationship})`}
+                                      : {warning.message}
+                                    </li>
+                                  ))}
+                                </ul>
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                          {validationResult.errors.length === 0 && validationResult.warnings.length === 0 && (
+                            <Alert>
+                              <CheckCircle2 className="h-4 w-4" />
+                              <AlertTitle>Schema is Valid</AlertTitle>
+                              <AlertDescription>
+                                No errors or warnings found in the schema.
+                              </AlertDescription>
+                            </Alert>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </DialogContent>
+                </Dialog>
               </CardContent>
             </Card>
           </TabsContent>
@@ -1011,8 +1928,31 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                           data: t.data,
                         }));
 
-                        // Execute query using Query Engine (with views support)
-                        const result = queryEngine.execute(sqlQuery, pgTables, indexes, views);
+                        // Execute query using PostgreSQL Emulation Engine
+                        const pgEngine = emulationEngine.getPostgreSQLEmulationEngine(componentId);
+                        let result;
+                        if (pgEngine) {
+                          // Use emulation engine for execution
+                          result = pgEngine.executeQuery(sqlQuery);
+                          
+                          // Sync tables from engine after execution
+                          const engineTables = pgEngine.getTables();
+                          if (Array.isArray(engineTables) && engineTables.length > 0) {
+                            const updatedTables = tables.map(t => {
+                              const engineTable = engineTables.find(et => 
+                                et.name === t.name && et.schema === t.schema
+                              );
+                              if (engineTable && Array.isArray(engineTable.data)) {
+                                return { ...t, data: engineTable.data };
+                              }
+                              return t;
+                            });
+                            updateConfig({ tables: updatedTables });
+                          }
+                        } else {
+                          // Fallback to query engine if emulation engine not available
+                          result = queryEngine.execute(sqlQuery, pgTables, indexes, views);
+                        }
 
                           if (result.success) {
                           // Update tables if INSERT/UPDATE/DELETE
@@ -1226,16 +2166,78 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
                             <div className="p-2 rounded bg-primary/10">
                               <Eye className="h-4 w-4 text-primary" />
                             </div>
-                            <div>
-                              <CardTitle className="text-lg">{view.name}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
-                                Schema: {view.schema}
-                              </CardDescription>
-                            </div>
+                            {editingView === `${view.schema}.${view.name}` ? (
+                              <div className="flex-1 space-y-2">
+                                <Input
+                                  value={view.name}
+                                  onChange={(e) => updateView(view.name, view.schema, 'name', e.target.value)}
+                                  className="font-semibold"
+                                  placeholder="View name"
+                                />
+                                <Select
+                                  value={view.schema}
+                                  onValueChange={(value) => updateView(view.name, view.schema, 'schema', value)}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {schemas.map((s) => (
+                                      <SelectItem key={s.name} value={s.name}>{s.name}</SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ) : (
+                              <div className="flex-1">
+                                <CardTitle className="text-lg">{view.name}</CardTitle>
+                                <CardDescription className="text-xs mt-1">
+                                  Schema: {view.schema}
+                                </CardDescription>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {editingView === `${view.schema}.${view.name}` ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingView(null)}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingView(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingView(`${view.schema}.${view.name}`)}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeView(view.name, view.schema)}
+                                  className="text-destructive hover:text-destructive"
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </CardHeader>
@@ -1244,7 +2246,8 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                           <Label>Definition</Label>
                           <Textarea
                             value={view.definition}
-                            readOnly
+                            onChange={(e) => updateView(view.name, view.schema, 'definition', e.target.value)}
+                            readOnly={editingView !== `${view.schema}.${view.name}`}
                             className="font-mono text-sm"
                             rows={3}
                           />
@@ -1278,23 +2281,259 @@ export function PostgreSQLConfigAdvanced({ componentId }: PostgreSQLConfigProps)
                     <Card key={index} className="border-border">
                       <CardHeader className="pb-3">
                         <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-1">
                             <div className="p-2 rounded bg-primary/10">
                               <Users className="h-4 w-4 text-primary" />
                             </div>
-                            <div>
-                              <CardTitle className="text-lg">{role.name}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
-                                {role.login && <Badge variant="outline" className="mr-1">LOGIN</Badge>}
-                                {role.superuser && <Badge variant="destructive" className="mr-1">SUPERUSER</Badge>}
-                              </CardDescription>
-                            </div>
+                            {editingRole === role.name ? (
+                              <div className="flex-1 space-y-2">
+                                <Input
+                                  value={role.name}
+                                  onChange={(e) => updateRole(role.name, 'name', e.target.value)}
+                                  className="font-semibold"
+                                  placeholder="Role name"
+                                />
+                                <div className="flex items-center gap-4">
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={role.login}
+                                      onCheckedChange={(checked) => updateRole(role.name, 'login', checked)}
+                                    />
+                                    <Label className="text-sm">LOGIN</Label>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={role.superuser}
+                                      onCheckedChange={(checked) => updateRole(role.name, 'superuser', checked)}
+                                    />
+                                    <Label className="text-sm">SUPERUSER</Label>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex-1">
+                                <CardTitle className="text-lg">{role.name}</CardTitle>
+                                <CardDescription className="text-xs mt-1 flex gap-1">
+                                  {role.login && <Badge variant="outline">LOGIN</Badge>}
+                                  {role.superuser && <Badge variant="destructive">SUPERUSER</Badge>}
+                                  {!role.login && !role.superuser && <span className="text-muted-foreground">No special privileges</span>}
+                                </CardDescription>
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {editingRole === role.name ? (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingRole(null)}
+                                >
+                                  Save
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingRole(null)}
+                                >
+                                  Cancel
+                                </Button>
+                              </>
+                            ) : (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setEditingRole(role.name)}
+                                >
+                                  <Edit2 className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => removeRole(role.name)}
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={role.name === 'postgres'}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )}
                           </div>
                         </div>
                       </CardHeader>
                     </Card>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Metrics Tab */}
+          <TabsContent value="metrics" className="space-y-4 mt-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>PostgreSQL Metrics</CardTitle>
+                <CardDescription>Real-time metrics from PostgreSQL emulation engine</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {pgMetrics ? (
+                  <>
+                    {/* Connection Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Connection Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Active Connections</div>
+                          <div className="text-2xl font-bold">{pgMetrics.activeConnections}</div>
+                          <div className="text-xs text-muted-foreground">/ {pgMetrics.maxConnections}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Idle Connections</div>
+                          <div className="text-2xl font-bold">{pgMetrics.idleConnections}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Waiting Connections</div>
+                          <div className="text-2xl font-bold">{pgMetrics.waitingConnections}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Utilization</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.connectionUtilization * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Query Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Query Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Queries/sec</div>
+                          <div className="text-2xl font-bold">{pgMetrics.queriesPerSecond.toFixed(1)}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Avg Query Time</div>
+                          <div className="text-2xl font-bold">{pgMetrics.averageQueryTime.toFixed(1)}ms</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">P95 Query Time</div>
+                          <div className="text-2xl font-bold">{pgMetrics.p95QueryTime.toFixed(1)}ms</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Slow Queries</div>
+                          <div className="text-2xl font-bold">{pgMetrics.slowQueries}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Database Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Database Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Transactions/sec</div>
+                          <div className="text-2xl font-bold">{pgMetrics.transactionsPerSecond.toFixed(1)}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Commits/sec</div>
+                          <div className="text-2xl font-bold">{pgMetrics.commitsPerSecond.toFixed(1)}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Database Size</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.databaseSize / 1024 / 1024).toFixed(2)}MB</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Bloat Ratio</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.bloatRatio * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Table Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Table Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Total Tables</div>
+                          <div className="text-2xl font-bold">{pgMetrics.totalTables}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Total Rows</div>
+                          <div className="text-2xl font-bold">{pgMetrics.totalRows.toLocaleString()}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Dead Tuples</div>
+                          <div className="text-2xl font-bold">{pgMetrics.deadTuples.toLocaleString()}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Live Tuples</div>
+                          <div className="text-2xl font-bold">{pgMetrics.liveTuples.toLocaleString()}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cache Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Cache Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Cache Hit Ratio</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.cacheHitRatio * 100).toFixed(1)}%</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Index Cache Hit Ratio</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.indexCacheHitRatio * 100).toFixed(1)}%</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* WAL & Vacuum Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">WAL & Vacuum Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">WAL Written/sec</div>
+                          <div className="text-2xl font-bold">{(pgMetrics.walWritten / 1024).toFixed(1)}KB</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Checkpoints/hour</div>
+                          <div className="text-2xl font-bold">{pgMetrics.checkpointFrequency.toFixed(1)}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Autovacuum Running</div>
+                          <div className="text-2xl font-bold">{pgMetrics.autovacuumRunning}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Vacuum Ops/hour</div>
+                          <div className="text-2xl font-bold">{pgMetrics.vacuumOperationsPerHour}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Lock Metrics */}
+                    <div className="space-y-4">
+                      <h3 className="text-lg font-semibold">Lock Metrics</h3>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Active Locks</div>
+                          <div className="text-2xl font-bold">{pgMetrics.activeLocks}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Blocked Queries</div>
+                          <div className="text-2xl font-bold">{pgMetrics.blockedQueries}</div>
+                        </div>
+                        <div className="p-4 border rounded-lg">
+                          <div className="text-sm text-muted-foreground">Lock Wait Time</div>
+                          <div className="text-2xl font-bold">{pgMetrics.lockWaitTime.toFixed(1)}ms</div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    Metrics will appear here when simulation is running
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
