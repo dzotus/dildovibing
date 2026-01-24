@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
+import { emulationEngine } from '@/core/EmulationEngine';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -66,9 +68,17 @@ interface AggregationStage {
   expression: string;
 }
 
+interface Shard {
+  name: string;
+  hosts: string[]; // Array of host:port strings (for replica sets)
+  zones?: string[]; // Zones for geographic distribution
+  weight?: number; // Weight for balancer (1-100)
+  tags?: Record<string, string>; // Tags for shard management
+}
+
 interface ShardConfig {
   shardKey: Record<string, 1 | -1 | 'hashed'>;
-  shards: string[];
+  shards: Shard[];
 }
 
 interface ReplicaSetMember {
@@ -100,10 +110,48 @@ interface MongoDBConfig {
 }
 
 export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
-  const { nodes, updateNode } = useCanvasStore();
+  const { nodes, updateNode, connections } = useCanvasStore();
+  const { isRunning, getComponentMetrics } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
+
+  // Get real-time metrics from simulation
+  const metrics = isRunning ? getComponentMetrics(componentId) : undefined;
+  const customMetrics = metrics?.customMetrics || {};
+
+  // Connection status - check if component has connections and engine is initialized
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected'>('disconnected');
+  
+  useEffect(() => {
+    if (!node) {
+      setConnectionStatus('disconnected');
+      return;
+    }
+
+    const checkConnection = () => {
+      // Check if component has connections
+      const hasConnections = connections.some(
+        conn => conn.source === componentId || conn.target === componentId
+      );
+
+      // Check if MongoDBEmulationEngine is initialized (only if simulation is running)
+      const mongoEngine = isRunning ? emulationEngine.getMongoDBEmulationEngine(componentId) : null;
+
+      // Connected if has connections OR engine is initialized (during simulation)
+      if (hasConnections || mongoEngine) {
+        setConnectionStatus('connected');
+      } else {
+        setConnectionStatus('disconnected');
+      }
+    };
+
+    checkConnection();
+    
+    // Update periodically to catch connection changes
+    const interval = setInterval(checkConnection, 500);
+    return () => clearInterval(interval);
+  }, [node, componentId, connections, isRunning]);
 
   const config = (node.data.config as any) || {} as MongoDBConfig;
   const host = config.host || 'localhost';
@@ -120,7 +168,73 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
     { host: 'localhost', port: 27019, priority: 0, votes: 0, arbiterOnly: true }
   ];
   const enableSharding = config.enableSharding ?? false;
-  const shardConfig = config.shardConfig || { shardKey: { _id: 'hashed' }, shards: ['shard1', 'shard2'] };
+  
+  // Migrate old shard config (string[]) to new format (Shard[])
+  useEffect(() => {
+    const currentShardConfig = config.shardConfig;
+    if (currentShardConfig && Array.isArray(currentShardConfig.shards) && currentShardConfig.shards.length > 0) {
+      // Check if it's old format (string[])
+      if (typeof currentShardConfig.shards[0] === 'string') {
+        // Migrate to new format
+        const migratedShardConfig = {
+          ...currentShardConfig,
+          shards: (currentShardConfig.shards as string[]).map((shardName, index) => ({
+            name: shardName,
+            hosts: [`localhost:${27017 + index}`],
+            zones: [],
+            weight: 1,
+            tags: {},
+          })),
+        };
+        // Update config with migrated data
+        updateConfig({ shardConfig: migratedShardConfig });
+      }
+    }
+  }, []); // Run only once on mount
+  
+  // Get shard config with safe defaults
+  let shardConfig = config.shardConfig;
+  if (!shardConfig) {
+    shardConfig = { 
+      shardKey: { _id: 'hashed' }, 
+      shards: [
+        { name: 'shard1', hosts: ['localhost:27017'], zones: [], weight: 1 },
+        { name: 'shard2', hosts: ['localhost:27018'], zones: [], weight: 1 }
+      ]
+    };
+  } else {
+    // Ensure shards array exists and normalize format
+    if (!Array.isArray(shardConfig.shards)) {
+      shardConfig = {
+        ...shardConfig,
+        shards: [],
+      };
+    } else if (shardConfig.shards.length > 0 && typeof shardConfig.shards[0] === 'string') {
+      // Still old format, use temporary migrated version for display
+      shardConfig = {
+        ...shardConfig,
+        shards: (shardConfig.shards as string[]).map((shardName, index) => ({
+          name: shardName,
+          hosts: [`localhost:${27017 + index}`],
+          zones: [],
+          weight: 1,
+          tags: {},
+        })),
+      };
+    } else {
+      // Ensure all shards have required fields
+      shardConfig = {
+        ...shardConfig,
+        shards: shardConfig.shards.map((shard: any) => ({
+          name: shard.name || `shard${shardConfig.shards.indexOf(shard) + 1}`,
+          hosts: Array.isArray(shard.hosts) ? shard.hosts : [`localhost:27017`],
+          zones: Array.isArray(shard.zones) ? shard.zones : [],
+          weight: typeof shard.weight === 'number' ? shard.weight : 1,
+          tags: typeof shard.tags === 'object' ? shard.tags : {},
+        })),
+      };
+    }
+  }
   const collections = config.collections || [];
   const selectedDatabase = config.selectedDatabase || database;
   const selectedCollection = config.selectedCollection || '';
@@ -505,13 +619,74 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
     updateConfig({ replicaSetMembers: replicaSetMembers.filter((_, i) => i !== index) });
   };
 
+  const [editingShardIndex, setEditingShardIndex] = useState<number | null>(null);
+  const [newShardName, setNewShardName] = useState<string>('');
+  const [newShardHosts, setNewShardHosts] = useState<string>('');
+  const [newShardZones, setNewShardZones] = useState<string>('');
+  const [newShardWeight, setNewShardWeight] = useState<number>(1);
+
   const addShard = () => {
+    const shardName = newShardName.trim() || `shard${shardConfig.shards.length + 1}`;
+    
+    // Проверка на дубликаты
+    if (shardConfig.shards.some(s => s.name === shardName)) {
+      showError(`Шард с именем "${shardName}" уже существует`);
+      return;
+    }
+
+    // Парсинг хостов
+    const hosts = newShardHosts.trim()
+      ? newShardHosts.split(',').map(h => h.trim()).filter(h => h)
+      : [`localhost:${27017 + shardConfig.shards.length}`];
+
+    // Парсинг зон
+    const zones = newShardZones.trim()
+      ? newShardZones.split(',').map(z => z.trim()).filter(z => z)
+      : [];
+
+    const newShard: Shard = {
+      name: shardName,
+      hosts,
+      zones,
+      weight: newShardWeight || 1,
+      tags: {},
+    };
+
     updateConfig({
       shardConfig: {
         ...shardConfig,
-        shards: [...shardConfig.shards, `shard${shardConfig.shards.length + 1}`]
+        shards: [...shardConfig.shards, newShard]
       }
     });
+
+    // Сброс формы
+    setNewShardName('');
+    setNewShardHosts('');
+    setNewShardZones('');
+    setNewShardWeight(1);
+    showSuccess(`Шард "${shardName}" успешно добавлен`);
+  };
+
+  const updateShard = (index: number, field: keyof Shard, value: any) => {
+    const updated = [...shardConfig.shards];
+    updated[index] = { ...updated[index], [field]: value };
+    updateConfig({
+      shardConfig: {
+        ...shardConfig,
+        shards: updated
+      }
+    });
+  };
+
+  const removeShard = (index: number) => {
+    const shardName = shardConfig.shards[index].name;
+    updateConfig({
+      shardConfig: {
+        ...shardConfig,
+        shards: shardConfig.shards.filter((_, i) => i !== index)
+      }
+    });
+    showSuccess(`Шард "${shardName}" удален`);
   };
 
   const addAggregationStage = () => {
@@ -677,10 +852,16 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Badge variant="outline">v7.0</Badge>
-            <Badge variant="secondary" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Connected
+            <Badge 
+              variant={connectionStatus === 'connected' ? 'secondary' : 'outline'} 
+              className="gap-2"
+            >
+              <div className={`h-2 w-2 rounded-full ${
+                connectionStatus === 'connected' 
+                  ? 'bg-green-500 animate-pulse' 
+                  : 'bg-gray-400'
+              }`} />
+              {connectionStatus === 'connected' ? 'Connected' : 'Disconnected'}
             </Badge>
           </div>
         </div>
@@ -834,28 +1015,35 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
 
         {/* Tabs */}
         <Tabs defaultValue="collections" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
-            <TabsTrigger value="collections" className="gap-2">
-              <FileText className="h-4 w-4" />
-              Collections
-            </TabsTrigger>
-            <TabsTrigger value="documents" className="gap-2">
-              <Database className="h-4 w-4" />
-              Documents
-            </TabsTrigger>
-            <TabsTrigger value="aggregations" className="gap-2">
-              <Filter className="h-4 w-4" />
-              Aggregations
-            </TabsTrigger>
-            <TabsTrigger value="replication" className="gap-2">
-              <Copy className="h-4 w-4" />
-              Replication
-            </TabsTrigger>
-            <TabsTrigger value="sharding" className="gap-2">
-              <Network className="h-4 w-4" />
-              Sharding
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto -mx-6 px-6 pb-2">
+            <TabsList className="inline-flex w-auto min-w-full sm:flex-wrap sm:min-w-0 gap-1 h-auto py-1">
+              <TabsTrigger value="collections" className="whitespace-nowrap flex-shrink-0 gap-2">
+                <FileText className="h-4 w-4" />
+                <span className="hidden sm:inline">Collections</span>
+                <span className="sm:hidden">Coll</span>
+              </TabsTrigger>
+              <TabsTrigger value="documents" className="whitespace-nowrap flex-shrink-0 gap-2">
+                <Database className="h-4 w-4" />
+                <span className="hidden sm:inline">Documents</span>
+                <span className="sm:hidden">Docs</span>
+              </TabsTrigger>
+              <TabsTrigger value="aggregations" className="whitespace-nowrap flex-shrink-0 gap-2">
+                <Filter className="h-4 w-4" />
+                <span className="hidden sm:inline">Aggregations</span>
+                <span className="sm:hidden">Agg</span>
+              </TabsTrigger>
+              <TabsTrigger value="replication" className="whitespace-nowrap flex-shrink-0 gap-2">
+                <Copy className="h-4 w-4" />
+                <span className="hidden sm:inline">Replication</span>
+                <span className="sm:hidden">Repl</span>
+              </TabsTrigger>
+              <TabsTrigger value="sharding" className="whitespace-nowrap flex-shrink-0 gap-2">
+                <Network className="h-4 w-4" />
+                <span className="hidden sm:inline">Sharding</span>
+                <span className="sm:hidden">Shard</span>
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* Collections Tab */}
           <TabsContent value="collections" className="mt-4 space-y-4">
@@ -1573,30 +1761,183 @@ export function MongoDBConfigAdvanced({ componentId }: MongoDBConfigProps) {
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
                         <Label>Shards</Label>
-                        <Button variant="outline" size="sm" onClick={addShard}>
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          onClick={() => {
+                            setEditingShardIndex(null);
+                            setNewShardName('');
+                            setNewShardHosts('');
+                            setNewShardZones('');
+                            setNewShardWeight(1);
+                          }}
+                        >
                           <Plus className="h-4 w-4 mr-2" />
                           Add Shard
                         </Button>
                       </div>
+
+                      {/* Form for adding new shard */}
+                      {editingShardIndex === null && (
+                        <Card className="p-4 border-dashed">
+                          <div className="space-y-3">
+                            <div className="space-y-2">
+                              <Label>Shard Name</Label>
+                              <Input
+                                value={newShardName}
+                                onChange={(e) => setNewShardName(e.target.value)}
+                                placeholder="shard1"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Hosts (comma-separated)</Label>
+                              <Input
+                                value={newShardHosts}
+                                onChange={(e) => setNewShardHosts(e.target.value)}
+                                placeholder="localhost:27017,localhost:27018"
+                              />
+                              <p className="text-xs text-muted-foreground">
+                                Format: host:port,host:port (for replica sets)
+                              </p>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Zones (comma-separated, optional)</Label>
+                              <Input
+                                value={newShardZones}
+                                onChange={(e) => setNewShardZones(e.target.value)}
+                                placeholder="us-east,us-west"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Weight (1-100)</Label>
+                              <Input
+                                type="number"
+                                min="1"
+                                max="100"
+                                value={newShardWeight}
+                                onChange={(e) => setNewShardWeight(parseInt(e.target.value) || 1)}
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button onClick={addShard} size="sm">
+                                Add Shard
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setNewShardName('');
+                                  setNewShardHosts('');
+                                  setNewShardZones('');
+                                  setNewShardWeight(1);
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        </Card>
+                      )}
+
                       <div className="space-y-2">
                         {shardConfig.shards.map((shard, index) => (
-                          <div key={index} className="p-3 border rounded bg-muted/50 flex items-center justify-between">
-                            <span className="font-mono">{shard}</span>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {
-                                updateConfig({
-                                  shardConfig: {
-                                    ...shardConfig,
-                                    shards: shardConfig.shards.filter((_, i) => i !== index)
-                                  }
-                                });
-                              }}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
+                          <Card key={index} className="p-4">
+                            {editingShardIndex === index ? (
+                              <div className="space-y-3">
+                                <div className="space-y-2">
+                                  <Label>Shard Name</Label>
+                                  <Input
+                                    value={shard.name}
+                                    onChange={(e) => updateShard(index, 'name', e.target.value)}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Hosts (comma-separated)</Label>
+                                  <Input
+                                    value={Array.isArray(shard.hosts) ? shard.hosts.join(', ') : ''}
+                                    onChange={(e) => {
+                                      const hosts = e.target.value.split(',').map(h => h.trim()).filter(h => h);
+                                      updateShard(index, 'hosts', hosts);
+                                    }}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Zones (comma-separated)</Label>
+                                  <Input
+                                    value={Array.isArray(shard.zones) ? shard.zones.join(', ') : ''}
+                                    onChange={(e) => {
+                                      const zones = e.target.value.split(',').map(z => z.trim()).filter(z => z);
+                                      updateShard(index, 'zones', zones);
+                                    }}
+                                  />
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Weight (1-100)</Label>
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    max="100"
+                                    value={shard.weight || 1}
+                                    onChange={(e) => updateShard(index, 'weight', parseInt(e.target.value) || 1)}
+                                  />
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => {
+                                      setEditingShardIndex(null);
+                                      showSuccess(`Шард "${shard.name}" обновлен`);
+                                    }}
+                                  >
+                                    Save
+                                  </Button>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setEditingShardIndex(null)}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                  <div className="space-y-1">
+                                    <div className="font-semibold font-mono">{shard.name || `shard${index + 1}`}</div>
+                                    <div className="text-sm text-muted-foreground">
+                                      Hosts: {Array.isArray(shard.hosts) ? shard.hosts.join(', ') : 'N/A'}
+                                    </div>
+                                    {Array.isArray(shard.zones) && shard.zones.length > 0 && (
+                                      <div className="text-sm text-muted-foreground">
+                                        Zones: {shard.zones.join(', ')}
+                                      </div>
+                                    )}
+                                    <div className="text-sm text-muted-foreground">
+                                      Weight: {shard.weight || 1}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => setEditingShardIndex(index)}
+                                    >
+                                      <Edit className="h-4 w-4 mr-2" />
+                                      Edit
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => removeShard(index)}
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </Card>
                         ))}
                       </div>
                     </div>

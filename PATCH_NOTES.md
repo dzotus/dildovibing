@@ -1,5 +1,111 @@
 # Patch Notes
 
+## Версия 0.1.8k - MongoDB: полная симуляция с реальными метриками и интеграция
+
+### MongoDB: создание MongoDBEmulationEngine
+
+**Критическое улучшение симулятивности**: Создан специализированный движок симуляции MongoDB (`MongoDBEmulationEngine`), аналогичный PostgreSQL. Движок обеспечивает полную симуляцию поведения MongoDB с реальными метриками.
+
+**Ключевые изменения**:
+- ✅ Создан файл `src/core/MongoDBEmulationEngine.ts` с полной реализацией движка
+- ✅ Реализованы все методы: `initializeConfig`, `updateConfig`, `updateMetrics`, `getMetrics`, `executeOperation`, `executeAggregation`, `getCollections`, `getReplicaSetStatus`, `getShardingStatus`
+- ✅ Реализованы интерфейсы метрик MongoDB, соответствующие реальным метрикам MongoDB
+- ✅ Реализована симуляция Document Model, Aggregation Pipeline, Change Streams, Transactions
+- ✅ Реализована симуляция Replication (Replica Set), Sharding, Indexes, WiredTiger Storage Engine
+
+### MongoDB: реализация реальных метрик
+
+**Улучшение метрик**: Реализованы метрики, полностью соответствующие реальным метрикам MongoDB из `db.serverStatus()`, `db.stats()`, `db.collection.stats()`.
+
+**Реализованные метрики**:
+- ✅ **Operations metrics**: operations/inserts/queries/updates/deletes/commands/getmores per second
+- ✅ **Connection metrics**: current/available/active connections, connection utilization
+- ✅ **Collections & Documents metrics**: total collections/documents/indexes, data/storage/index size, avg object size
+- ✅ **Performance metrics**: average/p50/p95/p99 query/insert/update/delete time
+- ✅ **Cache metrics (WiredTiger)**: cache hit ratio, cache used/total, cache utilization
+- ✅ **Replication metrics**: replication lag, replica set members, primary member, is primary
+- ✅ **Sharding metrics**: shard count, total chunks, chunk distribution, balancer running
+- ✅ **Oplog metrics**: oplog size/used/utilization
+- ✅ **Cursor metrics**: open cursors, timed out cursors
+- ✅ **Error metrics**: error rate, validation errors, connection errors
+- ✅ **Storage metrics**: storage utilization
+
+### MongoDB: симуляция реальных паттернов
+
+**Реалистичная симуляция**: Реализована симуляция реальных паттернов работы MongoDB, влияющих на метрики и производительность.
+
+**Реализованные паттерны**:
+- ✅ **Document Model**: хранение документов как JSON объектов, поддержка вложенных структур, динамическая схема с optional validation
+- ✅ **Aggregation Pipeline**: реальное выполнение всех stages ($match, $group, $project, $sort, $limit, $skip, $unwind, $lookup)
+- ✅ **Change Streams**: генерация change events при операциях, фильтрация по типу операции
+- ✅ **Transactions**: multi-document transactions, read/write concerns
+- ✅ **Replication**: primary/secondary/arbiter роли, election, heartbeat, oplog для репликации операций
+- ✅ **Sharding**: chunk distribution, shard key calculation, balancer для перераспределения, chunk migrations
+- ✅ **Indexes**: различные типы индексов (single, compound, text, geospatial, hashed, TTL), влияние на производительность запросов
+- ✅ **WiredTiger Storage Engine**: document-level concurrency, cache hit ratio, compression, checkpoint
+- ✅ **Connection Pool**: пул соединений с настраиваемыми параметрами, активные/ожидающие соединения
+- ✅ **Oplog**: oplog для репликации операций, управление размером oplog
+
+### MongoDB: интеграция в EmulationEngine
+
+**Интеграция симуляции**: MongoDBEmulationEngine полностью интегрирован в основной движок симуляции.
+
+**Изменения**:
+- ✅ Добавлен `mongodbEmulationEngines: Map<string, MongoDBEmulationEngine>` в EmulationEngine
+- ✅ Реализован метод `initializeMongoDBEmulationEngine(node: CanvasNode)` для инициализации
+- ✅ Реализован метод `getMongoDBEmulationEngine(nodeId: string)` для доступа к движку
+- ✅ Обновлен `simulateDatabase()` для использования MongoDBEmulationEngine вместо упрощенной логики
+- ✅ Реализована синхронизация конфигурации через `updateConfig()` при изменении конфига в UI
+- ✅ Интегрирован с DataFlowEngine через обновленные методы обработки операций
+
+### MongoDB: расширение DataFlowEngine
+
+**Обработка операций**: Реализована полная обработка MongoDB операций в DataFlowEngine с использованием MongoDBEmulationEngine.
+
+**Изменения**:
+- ✅ Обновлена обработка `insert`: использует `MongoDBEmulationEngine.executeOperation()`
+- ✅ Обновлена обработка `update`: использует `MongoDBEmulationEngine.executeOperation()`
+- ✅ Обновлена обработка `delete`: использует `MongoDBEmulationEngine.executeOperation()`
+- ✅ Обновлена обработка `query`: использует `MongoDBEmulationEngine.executeOperation()`
+- ✅ Поддержка `aggregate`: использует `MongoDBEmulationEngine.executeAggregation()`
+- ✅ Schema validation интегрирована с MongoDBEmulationEngine
+
+### MongoDB: улучшение UI/UX
+
+**Улучшение пользовательского интерфейса**: Добавлена адаптивность табов и подготовка к синхронизации с симуляцией.
+
+**Изменения**:
+- ✅ Табы сделаны адаптивными: `flex-wrap` вместо `grid-cols-5` - табы переносятся на новую строку при узком экране
+- ✅ Добавлена поддержка коротких названий табов на узких экранах
+- ✅ Добавлен импорт `useEmulationStore` для получения метрик из симуляции
+- ✅ Подготовлена структура для отображения реальных метрик из симуляции
+
+### Изменённые файлы
+
+#### `src/core/MongoDBEmulationEngine.ts` (новый)
+- Полная реализация MongoDBEmulationEngine с поддержкой всех функций MongoDB
+- Реализация метрик, соответствующих реальным метрикам MongoDB
+- Симуляция Document Model, Aggregation Pipeline, Change Streams, Transactions
+- Симуляция Replication, Sharding, Indexes, WiredTiger Storage Engine
+
+#### `src/core/EmulationEngine.ts`
+- Добавлен импорт `MongoDBEmulationEngine` и `MongoDBConfig`
+- Добавлено поле `mongodbEmulationEngines: Map<string, MongoDBEmulationEngine>`
+- Реализован метод `initializeMongoDBEmulationEngine(node: CanvasNode)`
+- Реализован метод `getMongoDBEmulationEngine(nodeId: string)`
+- Обновлен `simulateDatabase()` для использования MongoDBEmulationEngine
+- Добавлена инициализация MongoDB в методах `initialize()` и `updateNodesAndConnections()`
+- Добавлена очистка MongoDB engines в `removeNode()`
+
+#### `src/core/DataFlowEngine.ts`
+- Обновлена обработка MongoDB операций `insert`, `update`, `delete`, `query` для использования MongoDBEmulationEngine
+- Интеграция с MongoDBEmulationEngine вместо упрощенной обработки
+
+#### `src/components/config/data/MongoDBConfigAdvanced.tsx`
+- Обновлены табы на адаптивные с `flex-wrap` и поддержкой узких экранов
+- Добавлен импорт `useEmulationStore` для получения метрик из симуляции
+- Подготовлена структура для синхронизации с симуляцией
+
 ## Версия 0.1.8j - PostgreSQL: полная симуляция с реальными метриками и синхронизация UI
 
 ### PostgreSQL: создание PostgreSQLEmulationEngine

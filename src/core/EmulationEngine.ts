@@ -29,6 +29,7 @@ import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
+import { MongoDBEmulationEngine, MongoDBConfig } from './MongoDBEmulationEngine';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
@@ -262,6 +263,7 @@ export class EmulationEngine {
   
   // PostgreSQL emulation engines per node
   private postgresEmulationEngines: Map<string, PostgreSQLEmulationEngine> = new Map();
+  private mongodbEmulationEngines: Map<string, MongoDBEmulationEngine> = new Map();
   
   // Prometheus emulation engines per node
   private prometheusEngines: Map<string, PrometheusEmulationEngine> = new Map();
@@ -635,6 +637,9 @@ export class EmulationEngine {
           this.initializePostgreSQLConnectionPool(node);
           this.initializePostgreSQLEmulationEngine(node);
         }
+        if (node.type === 'mongodb') {
+          this.initializeMongoDBEmulationEngine(node);
+        }
         if (node.type === 'redis') {
           this.initializeRedisRoutingEngine(node);
         }
@@ -816,6 +821,15 @@ export class EmulationEngine {
             existingEngine.updateConfig((node.data.config || {}) as PostgreSQLConfig);
           } else {
             this.initializePostgreSQLEmulationEngine(node);
+          }
+        }
+        if (node.type === 'mongodb') {
+          // Update or initialize MongoDB emulation engine
+          const existingMongoEngine = this.mongodbEmulationEngines.get(node.id);
+          if (existingMongoEngine) {
+            existingMongoEngine.updateConfig((node.data.config || {}) as MongoDBConfig);
+          } else {
+            this.initializeMongoDBEmulationEngine(node);
           }
         }
       }
@@ -1302,6 +1316,7 @@ export class EmulationEngine {
         this.grafanaEngines.delete(nodeId);
         this.graphQLEngines.delete(nodeId);
         this.postgresEmulationEngines.delete(nodeId);
+        this.mongodbEmulationEngines.delete(nodeId);
         this.soapEngines.delete(nodeId);
         this.websocketEngines.delete(nodeId);
         this.lokiEngines.delete(nodeId);
@@ -4808,6 +4823,104 @@ export class EmulationEngine {
         };
         
         return; // Early return for PostgreSQL
+      }
+    }
+    
+    // Для MongoDB используем MongoDBEmulationEngine
+    if (node.type === 'mongodb') {
+      // Ensure engine is initialized
+      if (!this.mongodbEmulationEngines.has(node.id)) {
+        this.initializeMongoDBEmulationEngine(node);
+      }
+      
+      const mongoEngine = this.mongodbEmulationEngines.get(node.id);
+      if (mongoEngine) {
+        // Update engine configuration if changed
+        mongoEngine.updateConfig((node.data.config || {}) as MongoDBConfig);
+        
+        // Update metrics
+        mongoEngine.updateMetrics();
+        
+        // Get metrics from engine
+        const mongoMetrics = mongoEngine.getMetrics();
+        
+        // Simulate operations coming in from incoming connections
+        const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+        const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+          const sourceMetrics = this.metrics.get(conn.source);
+          return sum + (sourceMetrics?.throughput || 0);
+        }, 0);
+
+        // Simulate operation execution for incoming throughput
+        if (totalIncomingThroughput > 0) {
+          const operationsPerSecond = Math.min(totalIncomingThroughput, (config.maxConnections || 100) * 10);
+          const operationsThisUpdate = (operationsPerSecond * this.updateInterval) / 1000;
+          
+          // Execute sample operations to simulate activity
+          for (let i = 0; i < Math.floor(operationsThisUpdate); i++) {
+            // Use a simple query operation for simulation
+            const collections = mongoEngine.getCollections();
+            if (collections.length > 0) {
+              const collection = collections[0];
+              mongoEngine.executeOperation('query', collection.name, collection.database, {});
+            }
+          }
+        }
+        
+        // Update component metrics from MongoDB metrics
+        metrics.throughput = mongoMetrics.operationsPerSecond;
+        metrics.latency = mongoMetrics.averageQueryTime;
+        metrics.utilization = mongoMetrics.connectionUtilization;
+        metrics.errorRate = mongoMetrics.errorRate;
+        
+        // Set custom metrics
+        metrics.customMetrics = {
+          'operations_per_second': mongoMetrics.operationsPerSecond,
+          'inserts_per_second': mongoMetrics.insertsPerSecond,
+          'queries_per_second': mongoMetrics.queriesPerSecond,
+          'updates_per_second': mongoMetrics.updatesPerSecond,
+          'deletes_per_second': mongoMetrics.deletesPerSecond,
+          'commands_per_second': mongoMetrics.commandsPerSecond,
+          'current_connections': mongoMetrics.currentConnections,
+          'available_connections': mongoMetrics.availableConnections,
+          'active_connections': mongoMetrics.activeConnections,
+          'connection_utilization': mongoMetrics.connectionUtilization,
+          'total_collections': mongoMetrics.totalCollections,
+          'total_documents': mongoMetrics.totalDocuments,
+          'total_indexes': mongoMetrics.totalIndexes,
+          'data_size': mongoMetrics.dataSize,
+          'storage_size': mongoMetrics.storageSize,
+          'index_size': mongoMetrics.indexSize,
+          'avg_obj_size': mongoMetrics.avgObjSize,
+          'average_query_time': mongoMetrics.averageQueryTime,
+          'average_insert_time': mongoMetrics.averageInsertTime,
+          'average_update_time': mongoMetrics.averageUpdateTime,
+          'average_delete_time': mongoMetrics.averageDeleteTime,
+          'p50_query_time': mongoMetrics.p50QueryTime,
+          'p95_query_time': mongoMetrics.p95QueryTime,
+          'p99_query_time': mongoMetrics.p99QueryTime,
+          'cache_hit_ratio': mongoMetrics.cacheHitRatio,
+          'cache_used': mongoMetrics.cacheUsed,
+          'cache_total': mongoMetrics.cacheTotal,
+          'cache_utilization': mongoMetrics.cacheUtilization,
+          'replication_lag': mongoMetrics.replicationLag,
+          'replica_set_members': mongoMetrics.replicaSetMembers,
+          'primary_member': mongoMetrics.primaryMember || '',
+          'is_primary': mongoMetrics.isPrimary ? 1 : 0,
+          'shard_count': mongoMetrics.shardCount,
+          'total_chunks': mongoMetrics.totalChunks,
+          'balancer_running': mongoMetrics.balancerRunning ? 1 : 0,
+          'oplog_size': mongoMetrics.oplogSize,
+          'oplog_used': mongoMetrics.oplogUsed,
+          'oplog_utilization': mongoMetrics.oplogUtilization,
+          'open_cursors': mongoMetrics.openCursors,
+          'timed_out_cursors': mongoMetrics.timedOutCursors,
+          'validation_errors': mongoMetrics.validationErrors,
+          'connection_errors': mongoMetrics.connectionErrors,
+          'storage_utilization': mongoMetrics.storageUtilization,
+        };
+        
+        return; // Early return for MongoDB
       }
     }
     
@@ -9392,6 +9505,27 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize MongoDB Emulation Engine for MongoDB node
+   */
+  private initializeMongoDBEmulationEngine(node: CanvasNode): void {
+    try {
+      if (node.type === 'mongodb') {
+        const mongoConfig = (node.data.config || {}) as MongoDBConfig;
+        const mongoEngine = new MongoDBEmulationEngine(node.id, mongoConfig);
+        this.mongodbEmulationEngines.set(node.id, mongoEngine);
+      }
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'initialization',
+        componentId: node.id,
+        componentType: node.type,
+        context: { operation: 'initializeMongoDBEmulationEngine' },
+      });
+    }
+  }
+
+  /**
    * Initialize SOAP Emulation Engine for SOAP node
    */
   private initializeSOAPEngine(node: CanvasNode): void {
@@ -10478,8 +10612,15 @@ export class EmulationEngine {
   /**
    * Get PostgreSQL emulation engine for a node
    */
-  public getPostgreSQLEmulationEngine(nodeId: string): PostgreSQLEmulationEngine | undefined {
+  public   getPostgreSQLEmulationEngine(nodeId: string): PostgreSQLEmulationEngine | undefined {
     return this.postgresEmulationEngines.get(nodeId);
+  }
+
+  /**
+   * Get MongoDB Emulation Engine for a node
+   */
+  getMongoDBEmulationEngine(nodeId: string): MongoDBEmulationEngine | undefined {
+    return this.mongodbEmulationEngines.get(nodeId);
   }
 
   /**

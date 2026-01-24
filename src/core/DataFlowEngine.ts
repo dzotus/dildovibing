@@ -945,85 +945,67 @@ export class DataFlowEngine {
             const latency = config.queryLatency || 10;
             message.latency = latency;
 
-            // MongoDB specific processing
+            // MongoDB specific processing - use MongoDBEmulationEngine
             if (type === 'mongodb') {
-              const mongoConfig = node.data.config as any;
-              const collections = mongoConfig?.collections || [];
+              const mongoEngine = emulationEngine.getMongoDBEmulationEngine(node.id);
               
-              // Extract collection name from payload or use first collection
-              const payload = message.payload as any;
-              let collectionName = payload?.collection;
-              
-              // If no collection specified, try to infer from payload structure
-              if (!collectionName && collections.length > 0) {
-                // Try to match by data type or use first collection
-                if (payload?.type) {
-                  const matchingCollection = collections.find((c: any) => 
-                    c.name.toLowerCase().includes(payload.type.toLowerCase())
-                  );
-                  collectionName = matchingCollection?.name || collections[0].name;
-                } else {
-                  collectionName = collections[0].name;
-                }
-              }
-              
-              if (collectionName) {
-                const collection = collections.find((c: any) => c.name === collectionName);
+              if (mongoEngine) {
+                const payload = message.payload as any;
+                const database = payload?.database || (node.data.config as any)?.database || 'test';
+                let collectionName = payload?.collection;
                 
-                if (collection) {
-                  // Schema validation
-                  if (collection.validation) {
-                    const validation = collection.validation;
-                    
-                    // Skip validation if level is 'off'
-                    if (validation.validationLevel !== 'off') {
-                      // Extract document from payload
-                      const document = payload?.document || payload?.data || payload;
-                      
-                      // Skip _id field for validation (it's auto-generated)
-                      const docForValidation = { ...document };
-                      delete docForValidation._id;
-                      
-                      const validationResult = this.validateMongoDBSchema(docForValidation, validation.validator);
-
-                      if (!validationResult.valid) {
-                        if (validation.validationAction === 'error') {
-                          // Reject invalid document
-                          message.status = 'failed';
-                          message.error = `Schema validation failed for collection "${collectionName}": ${validationResult.error}`;
-                          return message;
-                        } else if (validation.validationAction === 'warn') {
-                          // Warn but allow (could log this in real scenario)
-                          message.metadata = {
-                            ...message.metadata,
-                            validationWarning: validationResult.error,
-                            collection: collectionName
-                          };
-                        }
-                      }
+                // If no collection specified, try to infer from payload structure
+                if (!collectionName) {
+                  const collections = mongoEngine.getCollections();
+                  if (collections.length > 0) {
+                    if (payload?.type) {
+                      const matchingCollection = collections.find((c: any) => 
+                        c.name.toLowerCase().includes(payload.type.toLowerCase())
+                      );
+                      collectionName = matchingCollection?.name || collections[0].name;
+                    } else {
+                      collectionName = collections[0].name;
                     }
                   }
+                }
+                
+                if (collectionName) {
+                  // Extract document from payload
+                  const document = payload?.document || payload?.data || payload;
                   
-                  // Simulate document storage (update document count)
+                  // Execute operation using MongoDBEmulationEngine
+                  const result = mongoEngine.executeOperation(
+                    operation as 'insert' | 'update',
+                    collectionName,
+                    database,
+                    document,
+                    payload?.filter || payload?.update || {}
+                  );
+                  
+                  if (!result.success) {
+                    message.status = 'failed';
+                    message.error = result.error || 'Operation failed';
+                    message.latency = result.executionTime;
+                    return message;
+                  }
+                  
+                  message.latency = result.executionTime;
+                  message.metadata = {
+                    ...message.metadata,
+                    collection: collectionName,
+                    database,
+                    documentsAffected: result.documentsAffected,
+                    documentIds: result.documentIds,
+                  };
+                  
                   if (operation === 'insert') {
-                    // In real scenario, this would increment documentCount
-                    // For simulation, we just mark it as processed
-                    message.metadata = {
-                      ...message.metadata,
-                      collection: collectionName,
-                      documentStored: true
-                    };
+                    message.metadata.documentStored = true;
                   } else if (operation === 'update') {
-                    message.metadata = {
-                      ...message.metadata,
-                      collection: collectionName,
-                      documentUpdated: true
-                    };
+                    message.metadata.documentUpdated = true;
                   }
                 } else {
-                  // Collection not found
                   message.status = 'failed';
-                  message.error = `Collection "${collectionName}" not found`;
+                  message.error = 'Collection name not specified';
                   return message;
                 }
               }
@@ -1032,57 +1014,120 @@ export class DataFlowEngine {
             message.status = 'delivered';
             return message;
           }
-          case 'delete':
-            // Simulate processing time
-            const latency = config.queryLatency || 10;
-            message.latency = latency;
+          case 'delete': {
+            // MongoDB specific processing - use MongoDBEmulationEngine
+            if (type === 'mongodb') {
+              const mongoEngine = emulationEngine.getMongoDBEmulationEngine(node.id);
+              
+              if (mongoEngine) {
+                const payload = message.payload as any;
+                const database = payload?.database || (node.data.config as any)?.database || 'test';
+                const collectionName = payload?.collection;
+                
+                if (collectionName) {
+                  const result = mongoEngine.executeOperation(
+                    'delete',
+                    collectionName,
+                    database,
+                    payload?.filter || {}
+                  );
+                  
+                  if (!result.success) {
+                    message.status = 'failed';
+                    message.error = result.error || 'Delete operation failed';
+                    message.latency = result.executionTime;
+                    return message;
+                  }
+                  
+                  message.latency = result.executionTime;
+                  message.metadata = {
+                    ...message.metadata,
+                    collection: collectionName,
+                    database,
+                    documentsAffected: result.documentsAffected,
+                    documentIds: result.documentIds,
+                  };
+                } else {
+                  message.status = 'failed';
+                  message.error = 'Collection name not specified';
+                  return message;
+                }
+              }
+            } else {
+              // Simulate processing time for other databases
+              const latency = config.queryLatency || 10;
+              message.latency = latency;
+            }
+            
             message.status = 'delivered';
             return message;
+          }
           case 'query': {
             // Return query results
             let results: Record<string, unknown>[] = [];
             
-            // MongoDB specific: use documents from collections if available
+            // MongoDB specific: use MongoDBEmulationEngine
             if (type === 'mongodb') {
-              const mongoConfig = node.data.config as any;
-              const collections = mongoConfig?.collections || [];
-              const payload = message.payload as any;
-              const collectionName = payload?.collection || collections[0]?.name;
+              const mongoEngine = emulationEngine.getMongoDBEmulationEngine(node.id);
               
-              if (collectionName) {
-                const collection = collections.find((c: any) => c.name === collectionName);
+              if (mongoEngine) {
+                const payload = message.payload as any;
+                const database = payload?.database || (node.data.config as any)?.database || 'test';
+                const collectionName = payload?.collection;
                 
-                if (collection?.documents && collection.documents.length > 0) {
-                  // Return actual documents from collection (simulate query)
-                  results = collection.documents.map((doc: any) => ({ ...doc }));
+                if (collectionName) {
+                  // Execute query using MongoDBEmulationEngine
+                  const result = mongoEngine.executeOperation(
+                    'query',
+                    collectionName,
+                    database,
+                    payload?.filter || {}
+                  );
                   
-                  // Apply simple filtering if query filter provided
-                  if (payload?.filter) {
-                    try {
-                      const filter = typeof payload.filter === 'string' 
-                        ? JSON.parse(payload.filter) 
-                        : payload.filter;
-                      
-                      results = results.filter((doc: any) => {
-                        for (const [key, value] of Object.entries(filter)) {
-                          if (doc[key] !== value) return false;
-                        }
-                        return true;
-                      });
-                    } catch (e) {
-                      // Invalid filter, return all
-                    }
+                  if (!result.success) {
+                    message.status = 'failed';
+                    message.error = result.error || 'Query operation failed';
+                    message.latency = result.executionTime;
+                    return message;
                   }
                   
-                  // Limit results
-                  const limit = payload?.limit || 100;
-                  results = results.slice(0, limit);
+                  // Get documents from collection state
+                  const collections = mongoEngine.getCollections();
+                  const collection = collections.find(c => c.name === collectionName && c.database === database);
+                  
+                  if (collection?.documents) {
+                    // Apply filter if provided
+                    if (payload?.filter) {
+                      try {
+                        const filter = typeof payload.filter === 'string' 
+                          ? JSON.parse(payload.filter) 
+                          : payload.filter;
+                        
+                        results = collection.documents.filter((doc: any) => {
+                          for (const [key, value] of Object.entries(filter)) {
+                            if (doc[key] !== value) return false;
+                          }
+                          return true;
+                        });
+                      } catch (e) {
+                        results = collection.documents;
+                      }
+                    } else {
+                      results = collection.documents;
+                    }
+                    
+                    // Limit results
+                    const limit = payload?.limit || 100;
+                    results = results.slice(0, limit);
+                  }
+                  
+                  message.latency = result.executionTime;
                 } else {
-                  // No documents in collection, generate mock results
+                  // No collection specified, generate mock results
                   results = this.generateQueryResults(type, payload?.query);
                 }
               } else {
-                results = this.generateQueryResults(type, payload?.query);
+                results = this.generateQueryResults(type, (message.payload as any)?.query);
               }
             } else {
               results = this.generateQueryResults(type, (message.payload as any)?.query);
