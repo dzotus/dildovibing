@@ -1,5 +1,580 @@
 # Patch Notes
 
+## Версия 0.1.8m - Cassandra: UI/UX улучшения (Фаза 5.1, 5.3, 5.6)
+
+### Cassandra: Управление узлами кластера, настройка compaction strategy и отображение метрик
+
+**Критическое улучшение**: Реализованы UI/UX улучшения для управления кластером Cassandra: добавление/редактирование/удаление узлов с валидацией, настройка compaction strategy через UI, отображение hinted handoffs и pending compactions в реальном времени.
+
+#### 5.1 Управление узлами кластера ✅
+
+**Улучшение**: Добавлена возможность управлять узлами кластера через UI с полной валидацией.
+
+**Реализовано**:
+- ✅ Форма для создания узла в Cluster tab
+  - Address (host:port) с валидацией формата
+  - Tokens (vnodes) с валидацией диапазона (1-10000)
+  - Datacenter (опционально, по умолчанию из конфигурации)
+  - Rack (опционально, по умолчанию rack1)
+  - Initial status (up/down)
+- ✅ Редактирование существующих узлов
+  - Кнопка редактирования для каждого узла
+  - Сохранение изменений с валидацией
+  - Синхронизация с CassandraRoutingEngine
+- ✅ Удаление узлов
+  - Кнопка удаления для каждого узла
+  - Автоматическое обновление token ring после удаления
+- ✅ Валидация через `cassandraValidation.ts`
+  - Проверка формата адреса (host:port)
+  - Проверка уникальности адреса
+  - Проверка диапазона tokens
+  - Отображение ошибок валидации в UI
+- ✅ Синхронизация с `CassandraRoutingEngine`
+  - Автоматическое обновление узлов в engine через `syncFromConfig`
+  - Обновление token ring при изменении узлов
+  - Синхронизация gossip engine с новыми узлами
+
+**Механизм работы**:
+- Пользователь добавляет/редактирует/удаляет узлы через UI
+- Валидация выполняется перед сохранением
+- Конфигурация обновляется через `updateConfig`
+- `CassandraRoutingEngine.syncFromConfig` синхронизирует изменения с runtime
+- Token ring и gossip engine обновляются автоматически
+
+**Преимущества**:
+- Полный контроль над топологией кластера через UI
+- Валидация предотвращает ошибки конфигурации
+- Синхронизация с runtime обеспечивает актуальность данных
+- Отсутствие хардкода - все значения конфигурируемые
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (добавлена форма управления узлами, валидация, синхронизация)
+
+#### 5.3 Настройка compaction strategy через UI ✅
+
+**Улучшение**: Добавлена возможность настраивать compaction strategy через Settings tab.
+
+**Реализовано**:
+- ✅ Выбор compaction strategy в Settings tab
+  - SizeTieredCompactionStrategy (по умолчанию)
+  - LeveledCompactionStrategy
+  - TimeWindowCompactionStrategy
+- ✅ Отображение текущей стратегии
+- ✅ Переключатель для включения/выключения compaction
+- ✅ Синхронизация с `CassandraRoutingEngine`
+  - Обновление compaction strategy в engine через `syncFromConfig`
+  - Инициализация compaction engine с новой стратегией
+  - Влияние на метрики compaction (pending compactions)
+
+**Механизм работы**:
+- Пользователь выбирает compaction strategy в Settings tab
+- Конфигурация обновляется через `updateConfig`
+- `CassandraRoutingEngine.syncFromConfig` обновляет стратегию в engine
+- `CompactionEngine.initialize` применяет новую стратегию
+- Метрики compaction обновляются в реальном времени
+
+**Преимущества**:
+- Легкая настройка compaction strategy без изменения кода
+- Визуальная обратная связь о текущей стратегии
+- Синхронизация с runtime обеспечивает актуальность
+- Влияние на метрики compaction видно сразу
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (добавлен выбор compaction strategy в Settings tab)
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН** (syncFromConfig поддерживает compactionStrategy и enableCompaction)
+
+#### 5.6 Отображение hinted handoffs в реальном времени ✅
+
+**Улучшение**: Добавлено отображение метрик hinted handoffs и pending compactions в Settings tab.
+
+**Реализовано**:
+- ✅ Отображение hinted handoffs в Settings tab
+  - Количество pending hints в реальном времени
+  - Обновление каждые 500ms из `CassandraRoutingEngine.getMetrics()`
+- ✅ Отображение pending compactions в Settings tab
+  - Количество pending SSTable compactions
+  - Обновление в реальном времени
+- ✅ Карточки метрик в Settings tab
+  - Hinted Handoffs: количество pending hints
+  - Pending Compactions: количество SSTable compactions
+  - Отображаются только если есть данные
+
+**Механизм работы**:
+- `CassandraRoutingEngine.getMetrics()` возвращает `hintedHandoffs` и `pendingCompactions`
+- UI обновляет метрики каждые 500ms через `useEffect`
+- Карточки отображаются только если метрики определены
+- Метрики обновляются в реальном времени при работе симуляции
+
+**Преимущества**:
+- Видимость состояния hinted handoffs в реальном времени
+- Мониторинг pending compactions
+- Информация о здоровье кластера
+- Отсутствие хардкода - все значения из runtime
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (добавлены карточки метрик для hinted handoffs и pending compactions)
+
+---
+
+## Версия 0.1.8m - Cassandra: Расширение CQL поддержки (Фаза 4.1-4.2)
+
+### Cassandra: Продвинутый CQL парсер, TTL поддержка и расширенная поддержка запросов
+
+**Критическое улучшение**: Реализован продвинутый CQL парсер с поддержкой сложных WHERE clauses, ORDER BY, GROUP BY, агрегатных функций, batch операций, lightweight transactions и полная поддержка TTL (Time To Live).
+
+#### 4.1 Улучшение парсера CQL ✅
+
+**Улучшение**: Создан полнофункциональный CQL парсер, заменяющий упрощенные регулярные выражения.
+
+**Реализовано**:
+- ✅ Создан `CQLParser` класс (`src/core/cassandra/CQLParser.ts`)
+  - Продвинутый парсинг всех типов CQL запросов (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, BATCH)
+  - Поддержка сложных WHERE clauses:
+    - Операторы сравнения: `=`, `!=`, `<>`, `>`, `<`, `>=`, `<=`
+    - Логические операторы: `AND`, `OR`
+    - Оператор `IN` для списков значений
+    - Оператор `LIKE` для pattern matching (поддержка `%` и `_`)
+  - Поддержка `ORDER BY` с множественными колонками и направлениями (ASC, DESC)
+  - Поддержка `GROUP BY` для группировки данных
+  - Поддержка агрегатных функций: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` (с GROUP BY)
+  - Парсинг TTL в INSERT операциях (`USING TTL`)
+  - Парсинг lightweight transactions (`IF EXISTS`, `IF NOT EXISTS`)
+  - Парсинг BATCH операций (`BEGIN BATCH ... APPLY BATCH`)
+  - Улучшенный парсинг типов данных (UUID, TIMESTAMP, числа, строки, булевы, NULL)
+  - Валидация CQL синтаксиса (метод `validate`)
+- ✅ Интегрирован в `CassandraRoutingEngine`
+  - Все запросы теперь проходят через новый парсер
+  - Созданы методы `execute*FromParsed` для выполнения распарсенных запросов
+  - Реализована обработка сложных WHERE clauses (`applyWhereClause`, `evaluateWhereCondition`)
+  - Реализована обработка ORDER BY (`applyOrderBy`)
+  - Реализована обработка GROUP BY (`applyGroupBy`)
+  - Реализована обработка агрегатных функций (`applyAggregateFunctions`, `calculateAggregate`)
+  - Реализована обработка batch операций (`executeBatchFromParsed`)
+  - Реализована обработка lightweight transactions в INSERT/UPDATE
+
+**Механизм работы**:
+- Парсер разбирает CQL запрос на структурированное представление (`ParsedCQLQuery`)
+- WHERE clauses парсятся в дерево условий с поддержкой AND/OR
+- Агрегатные функции обрабатываются с учетом GROUP BY (если используется)
+- Batch операции выполняются последовательно с единым consistency level
+- Lightweight transactions проверяют условия перед выполнением операций
+
+**Преимущества**:
+- Реалистичная симуляция сложных CQL запросов
+- Поддержка всех основных операторов и функций Cassandra
+- Отсутствие хардкода - все значения парсятся динамически
+- Расширяемая архитектура для добавления новых фич
+
+**Изменённые файлы**:
+- `src/core/cassandra/CQLParser.ts` ✅ **НОВЫЙ** (~800 строк)
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН** (интеграция парсера, новые методы выполнения)
+
+#### 4.2 Поддержка TTL ✅
+
+**Улучшение**: Реализована полная поддержка Time To Live (TTL) для записей в Cassandra.
+
+**Реализовано**:
+- ✅ Создан `TTLManager` класс (`src/core/cassandra/TTLManager.ts`)
+  - Управление TTL для каждой записи (tableKey, rowKey, ttlSeconds, createdAt, expiresAt)
+  - Проверка истечения TTL (`isExpired`, `getRemainingTTL`)
+  - Автоматическая очистка expired записей (`cleanupExpired`)
+  - Метрики TTL (totalTTLRecords, expiredRecords, activeRecords)
+  - Конфигурируемый интервал очистки (по умолчанию 1 секунда)
+- ✅ Интегрирован в `CassandraRoutingEngine`
+  - TTL устанавливается при INSERT операциях (`USING TTL`)
+  - TTL обновляется при UPDATE операциях (`USING TTL`)
+  - Автоматическое удаление expired записей в `updateMetrics`
+  - Фильтрация expired записей в SELECT операциях (expired записи не возвращаются)
+- ✅ Парсинг TTL в CQL запросах
+  - INSERT: `INSERT INTO table (col) VALUES (val) USING TTL 3600`
+  - UPDATE: `UPDATE table SET col = val USING TTL 1800 WHERE ...`
+  - TTL в секундах (0 означает удаление TTL)
+
+**Механизм работы**:
+- При INSERT/UPDATE с TTL создается запись в TTLManager с временем истечения
+- Периодически (в `updateMetrics`) проверяются expired записи
+- Expired записи автоматически удаляются из таблиц
+- SELECT операции фильтруют expired записи (они не возвращаются)
+- TTL можно обновить или удалить (TTL 0) через UPDATE операцию
+
+**Преимущества**:
+- Реалистичная симуляция TTL как в реальной Cassandra
+- Автоматическое управление жизненным циклом записей
+- Отсутствие хардкода - все значения конфигурируемые
+- Эффективная очистка expired записей
+
+**Изменённые файлы**:
+- `src/core/cassandra/TTLManager.ts` ✅ **НОВЫЙ** (~200 строк)
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН** (интеграция TTLManager, поддержка TTL в INSERT/UPDATE/SELECT)
+- `src/core/cassandra/CQLParser.ts` ✅ **ОБНОВЛЕН** (парсинг TTL в UPDATE операциях)
+
+#### 4.3 Batch operations ✅
+
+**Улучшение**: Реализована поддержка CQL batch операций для выполнения множественных операций в одной транзакции.
+
+**Реализовано**:
+- ✅ Парсинг BATCH запросов в `CQLParser` (`parseBatch`)
+  - Поддержка `BEGIN BATCH ... APPLY BATCH` синтаксиса
+  - Парсинг множественных операций внутри batch (INSERT, UPDATE, DELETE)
+  - Парсинг `USING CONSISTENCY` для batch
+- ✅ Выполнение batch операций в `CassandraRoutingEngine` (`executeBatchFromParsed`)
+  - Последовательное выполнение всех операций в batch
+  - Единый consistency level для всех операций в batch
+  - Обработка ошибок (если одна операция fails, batch может быть откатан)
+
+**Механизм работы**:
+- Batch операции парсятся в массив `ParsedCQLQuery`
+- Все операции выполняются последовательно с единым consistency level
+- Результат batch содержит информацию о количестве выполненных операций
+
+**Преимущества**:
+- Реалистичная симуляция batch операций как в реальной Cassandra
+- Поддержка атомарных операций над несколькими записями
+- Отсутствие хардкода - все значения парсятся динамически
+
+**Изменённые файлы**:
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН** (executeBatchFromParsed реализован)
+- `src/core/cassandra/CQLParser.ts` ✅ **ОБНОВЛЕН** (parseBatch метод)
+
+#### 4.4 Lightweight transactions ✅
+
+**Улучшение**: Завершена полная реализация lightweight transactions (IF EXISTS, IF NOT EXISTS) с возвратом applied статуса и учетом в метриках.
+
+**Реализовано**:
+- ✅ Парсинг IF EXISTS/IF NOT EXISTS в INSERT/UPDATE операциях (в `CQLParser`)
+- ✅ Правильная проверка существования записи:
+  - IF NOT EXISTS в INSERT: проверка по partition key (через `generateRowKey`)
+  - IF EXISTS в UPDATE: проверка по WHERE условию (поиск matching row)
+- ✅ Возврат applied статуса:
+  - Добавлено поле `applied?: boolean` в интерфейс `CQLResult`
+  - `applied: false` когда операция не была применена (запись уже существует для IF NOT EXISTS или не существует для IF EXISTS)
+  - `applied: true` когда операция была применена
+- ✅ Учет в метриках:
+  - Добавлены метрики `lightweightTransactionsTotal` и `lightweightTransactionsApplied` в `CassandraMetrics`
+  - Метод `recordLightweightTransaction(applied: boolean)` для учета lightweight transactions
+  - Автоматический подсчет общего количества и количества примененных lightweight transactions
+
+**Механизм работы**:
+- При INSERT с IF NOT EXISTS: проверяется существование записи с таким же partition key
+  - Если запись существует → возвращается `applied: false`, операция не выполняется
+  - Если запись не существует → выполняется INSERT, возвращается `applied: true`
+- При UPDATE с IF EXISTS: проверяется наличие matching row по WHERE условию
+  - Если matching row не найден → возвращается `applied: false`, операция не выполняется
+  - Если matching row найден → выполняется UPDATE, возвращается `applied: true`
+- Все lightweight transactions учитываются в метриках для мониторинга
+
+**Преимущества**:
+- Реалистичная симуляция lightweight transactions как в реальной Cassandra
+- Правильная проверка существования записей по partition key (не упрощенная)
+- Полная информация о статусе операции через applied поле
+- Метрики для анализа использования lightweight transactions
+- Отсутствие хардкода - все проверки основаны на реальных данных
+
+**Изменённые файлы**:
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН** (обработка ifExists/ifNotExists, возврат applied статуса, учет в метриках)
+- `src/core/cassandra/CQLParser.ts` ✅ **ОБНОВЛЕН** (парсинг IF EXISTS/IF NOT EXISTS)
+
+---
+
+## Версия 0.1.8m (предыдущая) - Cassandra: Gossip протокол и Hinted Handoff (Фаза 3)
+
+### Cassandra: Gossip протокол и Hinted Handoff (Фаза 3)
+
+**Критическое улучшение симуляции**: Реализованы gossip протокол и hinted handoff для реалистичной симуляции кластерного управления и обработки недоступных узлов.
+
+#### 3.1 Базовая симуляция gossip протокола ✅
+
+**Улучшение**: Реализован gossip протокол для обмена информацией о состоянии кластера между узлами.
+
+**Реализовано**:
+- ✅ Создан `CassandraGossipEngine` класс
+  - Симуляция обмена информацией о узлах (status, load, tokens, datacenter, rack)
+  - Периодическое обновление (каждые 1 секунду через `GOSSIP_INTERVAL_MS`)
+  - Определение недоступных узлов через heartbeat timeout (`HEARTBEAT_TIMEOUT_MS`)
+  - Распространение изменений по кластеру через gossip partners (по умолчанию 3 партнера на узел)
+  - Версионирование состояния узлов для отслеживания изменений
+- ✅ Интегрирован с node status updates в `CassandraRoutingEngine`
+- ✅ Используется для определения healthy nodes (более точно, чем просто проверка status)
+- ✅ Автоматическая синхронизация с изменениями узлов
+
+**Механизм работы**:
+- Каждый узел периодически обменивается информацией с несколькими случайными партнерами (gossip partners)
+- При обмене узлы делятся знаниями о всех известных им узлах
+- Состояние узла версионируется - при изменениях версия увеличивается
+- Узлы, не отправившие heartbeat в течение `HEARTBEAT_TIMEOUT_MS`, помечаются как недоступные
+- Gossip engine автоматически синхронизируется с реальным состоянием узлов
+
+**Преимущества**:
+- Более точное определение здоровых узлов (на основе gossip, а не только статуса)
+- Реалистичная симуляция распространения информации по кластеру
+- Автоматическое обнаружение недоступных узлов
+
+**Изменённые файлы**:
+- `src/core/cassandra/GossipEngine.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 3.2 Hinted Handoff ✅
+
+**Улучшение**: Реализована реальная логика hinted handoff для обработки write операций к недоступным узлам.
+
+**Реализовано**:
+- ✅ Создан `CassandraHintedHandoffManager` класс
+  - Сохранение hints для недоступных узлов при write операциях
+  - TTL для hints (3 часа по умолчанию через `HINT_TTL_MS`)
+  - Автоматическая доставка hints когда узел возвращается онлайн
+  - Периодическая очистка expired hints
+  - Отслеживание метрик (total hints, pending hints, delivered hints, expired hints)
+- ✅ Интегрирован с write операциями (INSERT) в `CassandraRoutingEngine`
+- ✅ Метрики hinted handoff теперь основаны на реальных hints, а не симуляции
+- ✅ Автоматическая доставка hints при восстановлении узлов
+
+**Механизм работы**:
+- При write операции к недоступному узлу создается hint с данными для записи
+- Hint сохраняется с TTL (3 часа) и информацией о целевом узле, keyspace, table и row
+- Когда узел возвращается онлайн, hints автоматически доставляются
+- Expired hints (старше TTL) периодически очищаются
+- Метрики `hintedHandoffs` теперь показывают реальное количество pending hints
+
+**Преимущества**:
+- Реалистичная обработка недоступных узлов
+- Данные не теряются при временной недоступности узла
+- Автоматическое восстановление данных при восстановлении узла
+- Точные метрики на основе реальных hints
+
+**Изменённые файлы**:
+- `src/core/cassandra/HintedHandoffManager.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 3.3 Read Repair ✅
+
+**Улучшение**: Read repair уже был реализован в предыдущих фазах, подтверждена полная интеграция.
+
+**Реализовано**:
+- ✅ Read repair логика в SELECT операциях (уже реализовано в `executeSelect`)
+- ✅ Интеграция с `ReplicaStateManager` (метод `performReadRepair`)
+- ✅ Автоматическое исправление рассинхронизации реплик при чтении
+- ✅ Обновление метрик consistency violations
+
+**Изменённые файлы**:
+- `src/core/CassandraRoutingEngine.ts` ✅ **ПОДТВЕРЖДЕНО** (read repair уже реализован)
+- `src/core/cassandra/ReplicaStateManager.ts` ✅ **ПОДТВЕРЖДЕНО** (performReadRepair уже реализован)
+
+---
+
+## Версия 0.1.8m (Фаза 2) - Cassandra: Token Ring и Replication Strategies (Фаза 2)
+
+### Cassandra: Token Ring топология и Replication Strategies (Фаза 2)
+
+**Критическое улучшение симуляции**: Реализована реальная token ring топология и replication strategies для правильного распределения данных и определения реплик.
+
+#### 2.1 Token Ring топология ✅
+
+**Улучшение**: Реализована реальная token ring топология с Murmur3Partitioner для распределения данных по узлам кластера.
+
+**Реализовано**:
+- ✅ Создан `CassandraTokenRing` класс
+  - Token range: -2^63 to 2^63-1 (64-bit signed integer)
+  - Murmur3Partitioner для hash partition key
+  - Распределение token ranges между узлами
+  - Поддержка vnodes (каждый узел имеет num_tokens токенов, по умолчанию 256)
+  - Определение primary replica на основе token
+  - Определение replica nodes на основе replication strategy
+- ✅ Интегрирован с операциями read/write в `CassandraRoutingEngine`
+- ✅ Используется для определения на какие узлы отправлять запросы
+
+**Механизм работы**:
+- Каждый partition key хешируется через Murmur3 для получения token
+- Token определяет primary replica (узел, владеющий token range)
+- Vnodes обеспечивают равномерное распределение данных (каждый узел имеет несколько токенов)
+- Token ranges автоматически пересчитываются при изменении узлов
+
+**Изменённые файлы**:
+- `src/core/cassandra/TokenRing.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 2.2 Vnodes (Virtual Nodes) ✅
+
+**Улучшение**: Реализована поддержка vnodes для более равномерного распределения данных.
+
+**Реализовано**:
+- ✅ Каждый узел имеет `num_tokens` токенов (по умолчанию 256)
+- ✅ Токены распределены равномерно по ring
+- ✅ Определение реплик на основе всех токенов узла
+- ✅ Автоматическое перераспределение при добавлении/удалении узлов
+
+**Преимущества**:
+- Более равномерное распределение данных
+- Упрощенное управление кластером (не нужно вручную назначать токены)
+- Лучшая балансировка нагрузки
+
+**Изменённые файлы**:
+- `src/core/cassandra/TokenRing.ts` ✅ **ОБНОВЛЕН**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 2.3 Replication Strategies ✅
+
+**Улучшение**: Реализованы реальные replication strategies для определения размещения реплик.
+
+**Реализовано**:
+- ✅ Создан интерфейс `ReplicationStrategy`
+- ✅ Реализован `SimpleStrategy`:
+  - Реплики размещаются последовательно по ring
+  - Начинается с primary replica и идет по порядку узлов
+- ✅ Реализован `NetworkTopologyStrategy`:
+  - Учет datacenter и rack топологии
+  - Размещение реплик в разных datacenter/rack для высокой доступности
+  - Поддержка datacenter-specific replication factors (например, { 'dc1': 3, 'dc2': 2 })
+  - Приоритет размещения: разные datacenter > разные rack > любые узлы
+- ✅ Интегрирован с token ring
+- ✅ Используется для определения реплик при всех операциях (read/write)
+
+**Механизм работы**:
+- При записи данных определяется primary replica через token ring
+- Replication strategy определяет дополнительные реплики
+- NetworkTopologyStrategy старается разместить реплики в разных datacenter и rack
+- Учитываются только здоровые узлы (status === 'up')
+
+**Расширение интерфейсов**:
+- ✅ `CassandraNode` расширен полями `datacenter` и `rack`
+- ✅ `Keyspace` расширен полем `datacenterReplication` для NetworkTopologyStrategy
+
+**Изменённые файлы**:
+- `src/core/cassandra/ReplicationStrategy.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+## Версия 0.1.8m (предыдущая) - Cassandra: устранение хардкода и реалистичная симуляция (Фаза 1)
+
+### Cassandra: устранение хардкода и скриптованности (Фаза 1)
+
+**Критическое улучшение симуляции**: Реализована динамическая симуляция Cassandra без хардкода и скриптованности. Все расчеты теперь основаны на реальных операциях и состоянии системы.
+
+#### 1.1 Динамический расчет latency ✅
+
+**Улучшение**: Latency теперь рассчитывается на основе реальных операций, состояния узлов и network latency, а не фиксированных формул.
+
+**Реализовано**:
+- ✅ Создан `CassandraLatencyCalculator` класс
+  - Расчет на основе реальных операций (read/write)
+  - Учет network latency между узлами (на основе connection latency)
+  - Учет node load (загруженные узлы = выше latency)
+  - Учет consistency level (реальное количество реплик)
+  - Учет replication factor
+  - Учет datacenter topology (LOCAL_QUORUM быстрее чем QUORUM)
+- ✅ Интегрирован с `CassandraRoutingEngine`
+- ✅ Поддержка network latency map из `EmulationEngine`
+
+**Изменённые файлы**:
+- `src/core/cassandra/LatencyCalculator.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 1.2 Динамический расчет размера данных ✅
+
+**Улучшение**: Размер строки теперь рассчитывается на основе реальных типов данных, а не фиксированного значения 1KB.
+
+**Реализовано**:
+- ✅ Создан `CassandraDataSizeCalculator` класс
+  - Расчет размера на основе типов данных (TEXT, INT, UUID, BLOB, LIST, MAP, etc.)
+  - Учет overhead (metadata, column names)
+  - Учет compression (если включена)
+  - Учет replication (размер * replication factor)
+- ✅ Интегрирован с операциями INSERT/UPDATE/DELETE
+- ✅ Обновление размера таблицы при каждой операции
+
+**Поддерживаемые типы данных**:
+- Примитивные: TEXT, VARCHAR, ASCII, INT, BIGINT, SMALLINT, TINYINT, FLOAT, DOUBLE, BOOLEAN
+- UUID и временные: UUID, TIMEUUID, TIMESTAMP, DATE, TIME
+- Специальные: BLOB, INET, COUNTER, VARINT, DECIMAL
+- Коллекции: LIST, SET, MAP, TUPLE
+
+**Изменённые файлы**:
+- `src/core/cassandra/DataSizeCalculator.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 1.3 Реалистичная симуляция compaction ✅
+
+**Улучшение**: Compaction теперь симулируется на основе реальных SSTables, а не формулы.
+
+**Реализовано**:
+- ✅ Создан `CassandraCompactionEngine` класс
+  - Симуляция SSTables (Memtable -> SSTable при flush)
+  - Поддержка разных compaction strategies:
+    - ✅ SizeTieredCompactionStrategy
+    - ✅ LeveledCompactionStrategy
+    - ✅ TimeWindowCompactionStrategy
+  - Реальный расчет pending compactions на основе SSTable count
+  - Симуляция compaction операций (уменьшение SSTable count)
+- ✅ Интегрирован с write операциями
+- ✅ Обновление метрик на основе реального состояния
+
+**Механизм работы**:
+- Memtables накапливают данные до порога (50MB или 50 строк)
+- При достижении порога memtable флашится в SSTable
+- Compaction запускается автоматически на основе стратегии
+- Метрики pending compactions рассчитываются на основе реального количества SSTables
+
+**Изменённые файлы**:
+- `src/core/cassandra/CompactionEngine.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 1.4 Реалистичная симуляция consistency violations ✅
+
+**Улучшение**: Consistency violations теперь определяются на основе реального состояния реплик, а не случайности.
+
+**Реализовано**:
+- ✅ Создан `ReplicaStateManager` класс
+  - Отслеживание состояния реплик для каждой записи
+  - Симуляция рассинхронизации реплик (на основе node status)
+  - Определение violations на основе реального количества синхронных реплик
+  - Симуляция read repair для исправления violations
+- ✅ Интегрирован с операциями read/write
+- ✅ Автоматическое исправление рассинхронизации через read repair
+
+**Механизм работы**:
+- Каждая запись имеет состояние реплик с версиями
+- При записи обновляются версии всех реплик
+- При чтении проверяется синхронизация реплик
+- Read repair автоматически синхронизирует реплики с разными версиями
+- Учет статуса узлов (up/down) при определении violations
+
+**Изменённые файлы**:
+- `src/core/cassandra/ReplicaStateManager.ts` ✅ **НОВЫЙ**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+### Принципы реализации
+
+**Избегание хардкода**:
+- ✅ Все значения используют константы из `constants.ts`
+- ✅ Константы конфигурируемы и могут быть изменены
+- ✅ Нет фиксированных формул - все расчеты динамические
+
+**Реалистичность симуляции**:
+- ✅ Симуляция реальных процессов (compaction, read repair)
+- ✅ Учет реальных ограничений (consistency levels, network latency)
+- ✅ Динамические метрики на основе реального состояния
+
+**Расширяемость**:
+- ✅ Модульная архитектура с отдельными классами
+- ✅ Легко добавлять новые compaction strategies
+- ✅ Легко расширять поддержку типов данных
+
+### Статус реализации
+
+**Завершено (Фаза 1)**:
+- ✅ 1.1 Динамический расчет latency (100%)
+- ✅ 1.2 Динамический расчет размера данных (100%)
+- ✅ 1.3 Реалистичная симуляция compaction (100%)
+- ✅ 1.4 Реалистичная симуляция consistency violations (100%)
+
+**Следующие фазы** (из плана улучшений):
+- ⏳ Фаза 2: Token ring и vnodes
+- ⏳ Фаза 3: Gossip протокол и cluster management
+- ⏳ Фаза 4: Расширение CQL поддержки
+- ⏳ Фаза 5: UI/UX улучшения
+
+---
+
 ## Версия 0.1.8l - Redis: расширение команд, Streams, метрики, защитное программирование и улучшение UI
 
 ### Redis: расширение команд Redis (Этап 1)
@@ -20753,3 +21328,73 @@ BFF Service теперь работает как полноценный BFF с r
 - ✅ Расчет латентности с учетом стратегий агрегации
 - ✅ Автоматическая регистрация бэкендов при связях
 - ⚠️ UI требует доработки для полноценного редактирования конфигурации
+
+---
+
+## Версия 0.1.8m - Cassandra: Визуализация token ring, метрики по datacenter/rack и репликация (Фаза 5.2, 5.4, 5.5, TTL)
+
+### Cassandra: Визуализация топологии кластера и репликации данных
+
+**Критическое улучшение**: Реализованы компоненты визуализации для Cassandra: визуализация token ring топологии, метрики по datacenter/rack, визуализация репликации данных и отображение TTL информации в UI.
+
+#### 5.2 Визуализация token ring ✅
+
+**Улучшение**: Добавлена интерактивная визуализация token ring топологии кластера.
+
+**Реализовано**:
+- ✅ Компонент `CassandraTokenRingVisualization` с canvas-based визуализацией
+- ✅ Интеграция в Cluster tab с обновлением в реальном времени
+- ✅ Метод `getTokenRingData()` в CassandraRoutingEngine
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraTokenRingVisualization.tsx` ✅ **СОЗДАН**
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 5.4 Метрики по datacenter/rack ✅
+
+**Улучшение**: Добавлены метрики, сгруппированные по datacenter и rack.
+
+**Реализовано**:
+- ✅ Компонент `CassandraDatacenterMetrics` с tabs для datacenters
+- ✅ Метод `getDatacenterMetrics()` в CassandraRoutingEngine
+- ✅ Интеграция в Cluster tab
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraDatacenterMetrics.tsx` ✅ **СОЗДАН**
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 5.5 Визуализация репликации ✅
+
+**Улучшение**: Добавлена визуализация того, как данные реплицируются по кластеру.
+
+**Реализовано**:
+- ✅ Компонент `CassandraReplicationVisualization` с интерактивным вводом partition key
+- ✅ Метод `getReplicaInfo()` в CassandraRoutingEngine
+- ✅ Интеграция в Tables tab
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraReplicationVisualization.tsx` ✅ **СОЗДАН**
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### Отображение TTL в UI ✅
+
+**Улучшение**: Добавлено отображение TTL информации для таблиц.
+
+**Реализовано**:
+- ✅ Метод `getTTLInfo()` в CassandraRoutingEngine
+- ✅ Метод `getTTLData()` в TTLManager
+- ✅ Отображение в Tables tab с статистикой по TTL
+
+**Изменённые файлы**:
+- `src/components/config/data/CassandraConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+- `src/core/CassandraRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/cassandra/TTLManager.ts` ✅ **ОБНОВЛЕН**
+
+### Итоговый статус Фазы 5
+
+**Фаза 5: UI/UX улучшения** - ✅ **100% завершена**
+
+Все задачи Фазы 5 реализованы. Общий прогресс плана улучшения Cassandra: ~95%
