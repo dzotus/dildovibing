@@ -27,7 +27,8 @@ import {
   List,
   Layers,
   FileText,
-  Zap
+  Zap,
+  Radio
 } from 'lucide-react';
 
 interface RedisConfigProps {
@@ -105,6 +106,16 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
   const [commandInput, setCommandInput] = useState('');
   const [editingKeyIndex, setEditingKeyIndex] = useState<number | null>(null);
   
+  // Pub/Sub state
+  const [pubSubChannel, setPubSubChannel] = useState('');
+  const [pubSubMessage, setPubSubMessage] = useState('');
+  const [pubSubPattern, setPubSubPattern] = useState('');
+  const [pubSubChannelSearch, setPubSubChannelSearch] = useState('');
+  const [pubSubInfo, setPubSubInfo] = useState<{
+    channels: Array<{ name: string; subscribers: number; messageCount: number; lastMessageAt?: number }>;
+    patterns: Array<{ pattern: string; subscribers: number }>;
+  } | null>(null);
+  
   // Real-time metrics from RedisRoutingEngine
   const [realMetrics, setRealMetrics] = useState<{
     totalKeys: number;
@@ -114,6 +125,29 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
     hitRate: number;
     hitCount: number;
     missCount: number;
+    slowlog?: Array<{
+      id: number;
+      timestamp: number;
+      duration: number;
+      command: string;
+      args: string[];
+      client: string;
+    }>;
+    commandStatistics?: Array<{
+      command: string;
+      calls: number;
+      totalDuration: number;
+      averageDuration: number;
+    }>;
+    networkBytesIn?: number;
+    networkBytesOut?: number;
+    connectedClientsDetail?: Array<{
+      id: string;
+      addr: string;
+      age: number;
+      idle: number;
+      cmd: string;
+    }>;
   } | null>(null);
   
   // Runtime keys from RedisRoutingEngine (merged with config keys)
@@ -146,6 +180,11 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
           hitRate: metrics.hitRate,
           hitCount: metrics.hitCount,
           missCount: metrics.missCount,
+          slowlog: metrics.slowlog,
+          commandStatistics: metrics.commandStatistics,
+          networkBytesIn: metrics.networkBytesIn,
+          networkBytesOut: metrics.networkBytesOut,
+          connectedClientsDetail: metrics.connectedClientsDetail,
         });
         
         // Merge runtime keys with config keys (runtime takes precedence for values)
@@ -317,8 +356,79 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
     }
   };
 
+  // Pub/Sub handlers
+  const handlePublish = () => {
+    if (!pubSubChannel || !pubSubMessage) return;
+
+    const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+    if (!redisEngine) {
+      showError('Redis Routing Engine not initialized');
+      return;
+    }
+
+    const result = redisEngine.executeCommand('PUBLISH', [pubSubChannel, pubSubMessage]);
+    if (result.success) {
+      const subscribersCount = result.value as number;
+      showSuccess(`Message published to ${subscribersCount} subscriber${subscribersCount !== 1 ? 's' : ''}`);
+      setPubSubMessage('');
+      // Refresh Pub/Sub info
+      setPubSubInfo(redisEngine.getPubSubInfo());
+    } else {
+      showError(result.error || 'Failed to publish message');
+    }
+  };
+
+  const handleSubscribe = (channel: string) => {
+    const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+    if (!redisEngine) {
+      showError('Redis Routing Engine not initialized');
+      return;
+    }
+
+    const result = redisEngine.executeCommand('SUBSCRIBE', [channel]);
+    if (result.success) {
+      showSuccess(`Subscribed to channel: ${channel}`);
+      setPubSubInfo(redisEngine.getPubSubInfo());
+    } else {
+      showError(result.error || 'Failed to subscribe');
+    }
+  };
+
+  const handlePSubscribe = (pattern?: string) => {
+    const patternToUse = pattern || pubSubPattern;
+    if (!patternToUse) return;
+
+    const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+    if (!redisEngine) {
+      showError('Redis Routing Engine not initialized');
+      return;
+    }
+
+    const result = redisEngine.executeCommand('PSUBSCRIBE', [patternToUse]);
+    if (result.success) {
+      showSuccess(`Subscribed to pattern: ${patternToUse}`);
+      setPubSubPattern('');
+      setPubSubInfo(redisEngine.getPubSubInfo());
+    } else {
+      showError(result.error || 'Failed to subscribe to pattern');
+    }
+  };
+
+  // Update Pub/Sub info from RedisRoutingEngine
+  useEffect(() => {
+    const redisEngine = emulationEngine.getRedisRoutingEngine(componentId);
+    if (redisEngine) {
+      setPubSubInfo(redisEngine.getPubSubInfo());
+    }
+  }, [componentId, realMetrics]); // Update when metrics change
+
   const addClusterNode = () => {
-    updateConfig({ clusterNodes: [...clusterNodes, 'localhost:6382'] });
+    // Generate next node address based on current port + clusterNodes length
+    // If current port is 6379, next nodes will be 6380, 6381, etc.
+    const basePort = port || 6379;
+    const nextPort = basePort + clusterNodes.length + 1;
+    const newNodeAddress = `${host || 'localhost'}:${nextPort}`;
+    updateConfig({ clusterNodes: [...clusterNodes, newNodeAddress] });
   };
 
   const removeClusterNode = (index: number) => {
@@ -564,7 +674,7 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
 
         {/* Tabs */}
         <Tabs defaultValue="keys" className="w-full">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="flex w-full flex-wrap gap-2">
             <TabsTrigger value="keys" className="gap-2">
               <Key className="h-4 w-4" />
               Keys
@@ -572,6 +682,14 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
             <TabsTrigger value="commands" className="gap-2">
               <Terminal className="h-4 w-4" />
               Commands
+            </TabsTrigger>
+            <TabsTrigger value="pubsub" className="gap-2">
+              <Radio className="h-4 w-4" />
+              Pub/Sub
+            </TabsTrigger>
+            <TabsTrigger value="metrics" className="gap-2">
+              <Zap className="h-4 w-4" />
+              Metrics
             </TabsTrigger>
             <TabsTrigger value="configuration" className="gap-2">
               <Settings className="h-4 w-4" />
@@ -850,6 +968,299 @@ export function RedisConfigAdvanced({ componentId }: RedisConfigProps) {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Pub/Sub Tab */}
+          <TabsContent value="pubsub" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Pub/Sub Channels</CardTitle>
+                <CardDescription>Manage Redis Pub/Sub channels and subscriptions</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Publish Message */}
+                <div className="space-y-2">
+                  <Label>Publish Message</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Channel name"
+                      value={pubSubChannel || ''}
+                      onChange={(e) => setPubSubChannel(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Input
+                      placeholder="Message"
+                      value={pubSubMessage || ''}
+                      onChange={(e) => setPubSubMessage(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={handlePublish}
+                      disabled={!pubSubChannel || !pubSubMessage}
+                    >
+                      Publish
+                    </Button>
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Channels List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Active Channels</Label>
+                    <Badge variant="secondary">{pubSubInfo?.channels.length || 0} channels</Badge>
+                  </div>
+                  {/* Search Channels */}
+                  <div className="relative">
+                    <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search channels..."
+                      value={pubSubChannelSearch}
+                      onChange={(e) => setPubSubChannelSearch(e.target.value)}
+                      className="pl-8"
+                    />
+                  </div>
+                  {pubSubInfo && pubSubInfo.channels.length > 0 ? (
+                    <div className="space-y-2">
+                      {pubSubInfo.channels
+                        .filter((channel) => {
+                          if (!pubSubChannelSearch.trim()) return true;
+                          return channel.name.toLowerCase().includes(pubSubChannelSearch.toLowerCase());
+                        })
+                        .map((channel) => (
+                        <Card key={channel.name} className="p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="font-semibold">{channel.name}</div>
+                              <div className="text-sm text-muted-foreground">
+                                {channel.subscribers} subscriber{channel.subscribers !== 1 ? 's' : ''} • {channel.messageCount} messages
+                                {channel.lastMessageAt && (
+                                  <> • Last: {new Date(channel.lastMessageAt).toLocaleTimeString()}</>
+                                )}
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleSubscribe(channel.name)}
+                            >
+                              Subscribe
+                            </Button>
+                          </div>
+                        </Card>
+                      ))}
+                      {pubSubInfo.channels.filter((channel) => {
+                        if (!pubSubChannelSearch.trim()) return true;
+                        return channel.name.toLowerCase().includes(pubSubChannelSearch.toLowerCase());
+                      }).length === 0 && pubSubChannelSearch.trim() && (
+                        <div className="text-center text-muted-foreground py-4">
+                          No channels found matching "{pubSubChannelSearch}"
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center text-muted-foreground py-4">
+                      No active channels. Publish a message to create a channel.
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Patterns List */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label>Pattern Subscriptions</Label>
+                    <Badge variant="secondary">{pubSubInfo?.patterns.length || 0} patterns</Badge>
+                  </div>
+                  {pubSubInfo && pubSubInfo.patterns.length > 0 ? (
+                    <div className="space-y-2">
+                      {pubSubInfo.patterns.map((pattern) => (
+                        <Card key={pattern.pattern} className="p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex-1">
+                              <div className="font-semibold font-mono">{pattern.pattern}</div>
+                              <div className="text-sm text-muted-foreground">
+                                {pattern.subscribers} subscriber{pattern.subscribers !== 1 ? 's' : ''}
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handlePSubscribe(pattern.pattern)}
+                            >
+                              Subscribe
+                            </Button>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center text-muted-foreground py-4">
+                      No pattern subscriptions
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Subscribe to Pattern */}
+                <div className="space-y-2">
+                  <Label>Subscribe to Pattern</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Pattern (e.g., news.*)"
+                      value={pubSubPattern || ''}
+                      onChange={(e) => setPubSubPattern(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={handlePSubscribe}
+                      disabled={!pubSubPattern}
+                    >
+                      PSubscribe
+                    </Button>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Use * for wildcard matching (e.g., news.* matches news.sports, news.tech, etc.)
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Metrics Tab */}
+          <TabsContent value="metrics" className="mt-4 space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Command Statistics</CardTitle>
+                <CardDescription>Statistics for executed commands</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {realMetrics?.commandStatistics && realMetrics.commandStatistics.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-5 gap-2 p-2 border-b font-semibold text-sm">
+                      <div>Command</div>
+                      <div className="text-right">Calls</div>
+                      <div className="text-right">Total Duration</div>
+                      <div className="text-right">Avg Duration</div>
+                      <div className="text-right">% of Total</div>
+                    </div>
+                    {realMetrics.commandStatistics.map((stat, index) => {
+                      const totalCalls = realMetrics.commandStatistics!.reduce((sum, s) => sum + s.calls, 0);
+                      const percentage = totalCalls > 0 ? ((stat.calls / totalCalls) * 100).toFixed(1) : '0.0';
+                      return (
+                        <div key={index} className="grid grid-cols-5 gap-2 p-2 border-b text-sm">
+                          <div className="font-mono">{stat.command}</div>
+                          <div className="text-right">{stat.calls.toLocaleString()}</div>
+                          <div className="text-right">{(stat.totalDuration / 1000).toFixed(2)}ms</div>
+                          <div className="text-right">{(stat.averageDuration / 1000).toFixed(2)}ms</div>
+                          <div className="text-right">{percentage}%</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center text-muted-foreground py-8">
+                    No command statistics available yet
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Slowlog</CardTitle>
+                <CardDescription>Slow commands (threshold: 10ms)</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {realMetrics?.slowlog && realMetrics.slowlog.length > 0 ? (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {realMetrics.slowlog.slice(0, 20).map((entry) => (
+                      <div key={entry.id} className="p-3 border rounded bg-muted/50">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-mono text-sm font-semibold">
+                            {entry.command} {entry.args.slice(0, 3).join(' ')}
+                            {entry.args.length > 3 && '...'}
+                          </div>
+                          <Badge variant="outline" className="text-xs">
+                            {(entry.duration / 1000).toFixed(2)}ms
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {new Date(entry.timestamp).toLocaleString()} • {entry.client}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center text-muted-foreground py-8">
+                    No slow commands recorded
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="grid grid-cols-2 gap-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Network I/O</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Bytes In</span>
+                      <span className="font-mono">
+                        {realMetrics?.networkBytesIn 
+                          ? (realMetrics.networkBytesIn / 1024).toFixed(2) + ' KB'
+                          : '0 KB'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-muted-foreground">Bytes Out</span>
+                      <span className="font-mono">
+                        {realMetrics?.networkBytesOut 
+                          ? (realMetrics.networkBytesOut / 1024).toFixed(2) + ' KB'
+                          : '0 KB'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between pt-2 border-t">
+                      <span className="text-sm font-semibold">Total</span>
+                      <span className="font-mono font-semibold">
+                        {realMetrics?.networkBytesIn && realMetrics?.networkBytesOut
+                          ? ((realMetrics.networkBytesIn + realMetrics.networkBytesOut) / 1024).toFixed(2) + ' KB'
+                          : '0 KB'}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Connected Clients</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {realMetrics?.connectedClientsDetail && realMetrics.connectedClientsDetail.length > 0 ? (
+                    <div className="space-y-2">
+                      {realMetrics.connectedClientsDetail.map((client, index) => (
+                        <div key={index} className="p-2 border rounded text-sm">
+                          <div className="font-mono">{client.addr}</div>
+                          <div className="text-xs text-muted-foreground mt-1">
+                            Age: {client.age}s • Idle: {client.idle}s • Cmd: {client.cmd || 'N/A'}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center text-muted-foreground py-4">
+                      No clients connected
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           {/* Configuration Tab */}

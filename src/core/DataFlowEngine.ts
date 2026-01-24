@@ -1779,6 +1779,13 @@ export class DataFlowEngine {
         result: result.value,
         redisResult: result.value,
       };
+      
+      // If PUBLISH command, propagate message to other Redis components
+      if (command === 'PUBLISH' && args.length >= 2) {
+        const channel = args[0];
+        const pubMessage = args[1];
+        this.propagatePubSubMessage(node.id, channel, pubMessage);
+      }
     } else {
       message.status = 'failed';
       message.error = result.error || 'Redis command execution failed';
@@ -1786,6 +1793,63 @@ export class DataFlowEngine {
     }
 
     return message;
+  }
+  
+  /**
+   * Propagate Pub/Sub message to other Redis components that are subscribed
+   */
+  private propagatePubSubMessage(sourceNodeId: string, channel: string, message: string): void {
+    // Find all other Redis components
+    const otherRedisNodes = this.nodes.filter(
+      n => n.type === 'redis' && n.id !== sourceNodeId
+    );
+    
+    if (otherRedisNodes.length === 0) {
+      return; // No other Redis components
+    }
+    
+    // Check each Redis component for subscriptions
+    for (const targetNode of otherRedisNodes) {
+      const targetRedisEngine = emulationEngine.getRedisRoutingEngine(targetNode.id);
+      if (!targetRedisEngine) {
+        continue;
+      }
+      
+      // Check if target component has subscribers for this channel
+      if (targetRedisEngine.hasChannelSubscribers(channel)) {
+        // Process incoming Pub/Sub message in target component
+        const subscribersCount = targetRedisEngine.processIncomingPubSubMessage(channel, message);
+        
+        if (subscribersCount > 0) {
+          // Create a message to track the propagation (optional, for metrics)
+          const pubSubMessage: DataMessage = {
+            id: `pubsub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            source: sourceNodeId,
+            target: targetNode.id,
+            payload: {
+              type: 'redis_pubsub',
+              channel,
+              message,
+              subscribersCount,
+            },
+            format: 'json',
+            timestamp: Date.now(),
+            status: 'delivered',
+            metadata: {
+              redisCommand: 'PUBLISH',
+              pubSubChannel: channel,
+              propagated: true,
+            },
+          };
+          
+          // Add to message history for tracking
+          this.messageHistory.push(pubSubMessage);
+          if (this.messageHistory.length > this.MAX_HISTORY) {
+            this.messageHistory.shift();
+          }
+        }
+      }
+    }
   }
 
   /**

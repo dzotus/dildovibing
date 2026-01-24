@@ -641,7 +641,18 @@ export class EmulationEngine {
           this.initializeMongoDBEmulationEngine(node);
         }
         if (node.type === 'redis') {
-          this.initializeRedisRoutingEngine(node);
+          try {
+            this.initializeRedisRoutingEngine(node);
+          } catch (error) {
+            errorCollector.addError(error as Error, {
+              severity: 'critical',
+              source: 'initialization',
+              componentId: node.id,
+              componentLabel: node.data.label,
+              componentType: node.type,
+              context: { operation: 'initializeRedisRoutingEngine' },
+            });
+          }
         }
         if (node.type === 'cassandra') {
           this.initializeCassandraRoutingEngine(node);
@@ -4927,7 +4938,18 @@ export class EmulationEngine {
     // Для Redis используем RedisRoutingEngine
     if (node.type === 'redis') {
       if (!this.redisRoutingEngines.has(node.id)) {
-        this.initializeRedisRoutingEngine(node);
+        try {
+          this.initializeRedisRoutingEngine(node);
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentType: node.type,
+            context: { operation: 'initializeRedisRoutingEngine' },
+          });
+          return; // Skip simulation if initialization failed
+        }
       }
       
       const routingEngine = this.redisRoutingEngines.get(node.id)!;
@@ -9088,7 +9110,17 @@ export class EmulationEngine {
         if (redisNode && redisNode.type === 'redis') {
           // Initialize Redis engine if not already initialized
           if (!this.redisRoutingEngines.has(redisNode.id)) {
-            this.initializeRedisRoutingEngine(redisNode);
+            try {
+              this.initializeRedisRoutingEngine(redisNode);
+            } catch (error) {
+              errorCollector.addError(error as Error, {
+                severity: 'critical',
+                source: 'initialization',
+                componentId: redisNode.id,
+                componentType: redisNode.type,
+                context: { operation: 'initializeRedisRoutingEngine', parentComponent: node.id },
+              });
+            }
           }
           redisEngine = this.redisRoutingEngines.get(redisNode.id);
           redisNodeId = redisNode.id;
@@ -9156,7 +9188,17 @@ export class EmulationEngine {
         if (redisNode && redisNode.type === 'redis') {
           // Initialize Redis engine if not already initialized
           if (!this.redisRoutingEngines.has(redisNode.id)) {
-            this.initializeRedisRoutingEngine(redisNode);
+            try {
+              this.initializeRedisRoutingEngine(redisNode);
+            } catch (error) {
+              errorCollector.addError(error as Error, {
+                severity: 'critical',
+                source: 'initialization',
+                componentId: redisNode.id,
+                componentType: redisNode.type,
+                context: { operation: 'initializeRedisRoutingEngine', parentComponent: node.id },
+              });
+            }
           }
           redisEngine = this.redisRoutingEngines.get(redisNode.id);
           redisNodeId = redisNode.id;

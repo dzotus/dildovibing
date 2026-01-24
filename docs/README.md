@@ -48,6 +48,20 @@
   - Query Planning с использованием индексов, полный набор метрик PostgreSQL
   - Метрики из pg_stat_statements, pg_stat_database, pg_stat_user_tables
 
+- **[MongoDB](./data/mongodb.md)** - Документо-ориентированная NoSQL база данных
+  - Collections, Documents, Indexes (single, compound, text, geospatial, hashed, TTL)
+  - Schema Validation, Aggregation Pipeline, Change Streams
+  - Transactions с read/write concerns, Replica Set, Sharding
+  - Connection Pool, WiredTiger Storage Engine, Oplog
+  - Полный набор метрик MongoDB (operations, connections, cache, replication, sharding)
+
+- **[Redis](./data/redis.md)** - In-memory структура данных (база данных, кэш, брокер сообщений)
+  - Типы данных: String, Hash, List, Set, Sorted Set (ZSet), Stream
+  - Полный набор команд Redis для каждого типа данных
+  - TTL (Time To Live), Memory Management с 8 политиками eviction
+  - Persistence (RDB/AOF), Cluster Mode, Pub/Sub
+  - Метрики в реальном времени (memory, operations, hit rate, slowlog, command statistics)
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -240,6 +254,8 @@
 ### По базам данных
 
 - **PostgreSQL:** [Документация PostgreSQL](./data/postgresql.md)
+- **MongoDB:** [Документация MongoDB](./data/mongodb.md)
+- **Redis:** [Документация Redis](./data/redis.md)
 
 ## Обновления
 
@@ -268,3 +284,5 @@
 - [Apollo Federation Documentation](https://www.apollographql.com/docs/federation/)
 - [BFF Pattern - Sam Newman](https://samnewman.io/patterns/architectural/bff/)
 - [Официальная документация PostgreSQL](https://www.postgresql.org/docs/)
+- [Официальная документация MongoDB](https://docs.mongodb.com/)
+- [Официальная документация Redis](https://redis.io/docs/)
