@@ -1,5 +1,153 @@
 # Patch Notes
 
+## Версия 0.1.8s - Grafana: Routing Engine, Real HTTP Queries, Query Caching, Load Balancing, HTTP Visualization, No Hardcode
+
+### Grafana: Реализация Routing Engine и реальных HTTP запросов
+
+**Критическое улучшение**: Реализован GrafanaRoutingEngine для маршрутизации HTTP запросов от Grafana к datasources (Prometheus, Loki), интеграция с PromQLEvaluator для выполнения реальных PromQL queries над метриками компонентов, кэширование queries, учет реальной latency соединений, балансировка нагрузки между множественными instances, визуализация HTTP запросов на Canvas в реальном времени. Все реализовано без хардкода - значения по умолчанию берутся из профилей, симуляция соответствует реальному поведению Grafana (pull-based модель - Grafana делает HTTP запросы к datasources).
+
+#### 1. GrafanaRoutingEngine ✅
+
+**Улучшение**: Реализован Routing Engine для маршрутизации queries к datasources.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/GrafanaRoutingEngine.ts`:
+  - Класс `GrafanaRoutingEngine` с методами:
+    - `routeQuery()` - маршрутизация query к datasource (Prometheus, Loki)
+    - `routePrometheusQuery()` - выполнение PromQL queries через PromQLEvaluator
+    - `routeLokiQuery()` - выполнение LogQL queries через LokiEmulationEngine
+    - `findPrometheusNode()` / `findLokiNode()` - поиск nodes по URL через ServiceDiscovery
+  - Поддержка instant и range queries
+  - Кэширование результатов instant queries (TTL 5 секунд)
+  - Учет latency соединения между Grafana и datasource
+  - Автоматическая очистка expired cache
+- ✅ Отсутствие хардкода:
+  - Все datasources находятся динамически через ServiceDiscovery
+  - URL парсятся из конфигурации datasource
+  - Поддержка множественных datasources
+  - Placeholder URL (`prometheus://name`) вместо хардкода `localhost:9090` для миграции старого формата
+- ✅ Балансировка нагрузки:
+  - Round-robin алгоритм для распределения запросов между множественными Prometheus instances
+  - Round-robin алгоритм для распределения запросов между множественными Loki instances
+  - Отдельные счетчики для каждого datasource URL
+
+#### 2. Интеграция с PromQLEvaluator ✅
+
+**Улучшение**: Grafana выполняет реальные PromQL queries над метриками компонентов.
+
+**Реализовано**:
+- ✅ В `EmulationEngine.ts`:
+  - Метод `createPrometheusQueryExecutor()` - создает функцию для выполнения PromQL queries
+  - Использует `PromQLEvaluator` для выполнения queries над реальными метриками компонентов
+  - Поддержка instant и range queries
+  - Обработка ошибок выполнения queries
+- ✅ В `GrafanaEmulationEngine.ts`:
+  - Метод `performUpdate()` стал async для поддержки реальных HTTP запросов
+  - Заменена статическая симуляция на реальные запросы через RoutingEngine
+  - Учет cache hits в метриках (`cachedQueries`)
+  - Обработка ошибок datasource
+- ✅ Отсутствие хардкода:
+  - Все queries выполняются динамически через PromQLEvaluator
+  - Метрики получаются из реальных ComponentMetrics
+  - Latency рассчитывается на основе реальных данных
+
+#### 3. Кэширование Queries ✅
+
+**Улучшение**: Реализовано кэширование результатов instant queries для оптимизации.
+
+**Реализовано**:
+- ✅ Кэширование в `GrafanaRoutingEngine`:
+  - Кэш для instant queries (range queries не кэшируются)
+  - TTL 5 секунд для кэшированных результатов
+  - Автоматическая очистка expired entries
+  - Метрика `cachedQueries` в GrafanaMetrics
+- ✅ Cache hit учитывается в latency (очень быстрый ответ ~5ms)
+- ✅ Отсутствие хардкода:
+  - TTL настраивается (сейчас 5 секунд, можно сделать конфигурируемым)
+
+#### 4. Учет Real Latency ✅
+
+**Улучшение**: Latency queries учитывает реальную latency соединения между компонентами.
+
+**Реализовано**:
+- ✅ В `GrafanaRoutingEngine`:
+  - Поиск connection между Grafana и datasource
+  - Учет `connection.data.latency` в общей latency
+  - Формула: `totalLatency = connectionLatency + queryExecutionLatency`
+- ✅ Отсутствие хардкода:
+  - Latency берется из реальных connection metrics
+  - Если connection не найдена, используется 0 (fallback)
+
+#### 5. Убраны хардкоды из Config Panel ✅
+
+**Улучшение**: Все значения по умолчанию теперь берутся из профилей.
+
+**Реализовано**:
+- ✅ В `GrafanaConfigAdvanced.tsx`:
+  - Импортирован `OBSERVABILITY_PROFILES`
+  - Все значения по умолчанию берутся из `profileDefaults`:
+    - `adminUser`, `adminPassword` - из профиля
+    - `defaultDashboard`, `theme`, `authProvider` - из профиля
+    - `enableAuth`, `enableAlerting` - из профиля
+    - `alertNotificationChannels` - из профиля
+  - Убраны дефолтные dashboards (пользователь создает сам)
+  - Datasources используют значения из профиля или пустой массив
+- ✅ Отсутствие хардкода:
+  - Все значения конфигурируемые через профили
+  - Нет статических значений в коде
+
+#### 6. Интеграция в EmulationEngine ✅
+
+**Улучшение**: GrafanaRoutingEngine инициализируется и обновляется в каждом цикле симуляции.
+
+**Реализовано**:
+- ✅ В `EmulationEngine.ts`:
+  - Map `grafanaRoutingEngines` для хранения RoutingEngines
+  - Инициализация RoutingEngine в `initializeGrafanaEngine()`
+  - Установка executors для Prometheus и Loki queries
+  - Обновление nodes и connections в каждом цикле симуляции
+  - Удаление RoutingEngine при удалении ноды
+- ✅ Отсутствие хардкода:
+  - Все настройки берутся из конфигурации компонента
+  - ServiceDiscovery используется для разрешения имен и портов
+
+#### 7. Визуализация HTTP запросов на Canvas ✅
+
+**Улучшение**: HTTP запросы от Grafana к Prometheus/Loki визуализируются на Canvas в реальном времени.
+
+**Реализовано**:
+- ✅ В `DataFlowEngine.ts`:
+  - Добавлен публичный метод `addMessage()` для ручного добавления сообщений в очередь визуализации
+  - Метод автоматически находит connection между source и target
+  - Сообщения добавляются в очередь и визуализируются через ConnectionLine
+- ✅ В `GrafanaRoutingEngine.ts`:
+  - Интеграция с DataFlowEngine через метод `setDataFlowEngine()`
+  - При выполнении Prometheus query создается DataMessage для визуализации запроса
+  - При получении ответа создается DataMessage для визуализации ответа
+  - Аналогично для Loki queries
+  - Metadata содержит информацию о query (URL, query expression, operation type)
+- ✅ В `EmulationEngine.ts`:
+  - Установка DataFlowEngine в GrafanaRoutingEngine при инициализации
+- ✅ Отсутствие хардкода:
+  - Все данные для визуализации берутся из реальных queries
+  - URL формируются динамически на основе query параметров
+  - Размер payload рассчитывается на основе реальных данных
+
+**Изменённые файлы**:
+- `src/core/GrafanaRoutingEngine.ts` (новый)
+  - ✅ Добавлена балансировка нагрузки (round-robin) для Prometheus и Loki instances
+  - ✅ Поддержка placeholder URL для миграции старого формата datasources
+  - ✅ Интеграция с DataFlowEngine для визуализации HTTP запросов
+- `src/core/GrafanaEmulationEngine.ts`
+  - ✅ Исправлен хардкод в `getActiveDatasources()` - используется placeholder URL вместо `localhost:9090`
+- `src/core/DataFlowEngine.ts`
+  - ✅ Добавлен метод `addMessage()` для ручного добавления сообщений в очередь визуализации
+- `src/core/EmulationEngine.ts`
+  - ✅ Установка DataFlowEngine в GrafanaRoutingEngine при инициализации
+- `src/components/config/observability/GrafanaConfigAdvanced.tsx`
+
+---
+
 ## Версия 0.1.8r - Prometheus: Alerting Engine (PromQL Parser, Evaluator, Alert Evaluation, Alertmanager Integration, Recording Rules) и Targets Status View
 
 ### Prometheus: Реализация полноценного Alerting Engine

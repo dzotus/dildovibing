@@ -1,4 +1,5 @@
 import { CanvasNode } from '@/types';
+import { GrafanaRoutingEngine, GrafanaQueryResult } from './GrafanaRoutingEngine';
 
 /**
  * Grafana Panel Query
@@ -131,6 +132,9 @@ export class GrafanaEmulationEngine {
   private lastRefreshTimes: Map<string, number> = new Map(); // Dashboard ID -> last refresh time
   private lastAlertEvaluationTimes: Map<string, number> = new Map(); // Alert ID -> last evaluation time
   
+  // Routing Engine для маршрутизации queries
+  private routingEngine: GrafanaRoutingEngine | null = null;
+  
   // Метрики Grafana
   private grafanaMetrics: GrafanaMetrics = {
     queriesPerSecond: 0,
@@ -159,6 +163,13 @@ export class GrafanaEmulationEngine {
     // Инициализируем времена обновления
     this.initializeRefreshTimes();
     this.initializeAlertEvaluationTimes();
+  }
+
+  /**
+   * Устанавливает Routing Engine
+   */
+  setRoutingEngine(routingEngine: GrafanaRoutingEngine): void {
+    this.routingEngine = routingEngine;
   }
 
   /**
@@ -234,19 +245,19 @@ export class GrafanaEmulationEngine {
    * Выполняет один цикл обновления Grafana
    * Должен вызываться периодически в EmulationEngine
    */
-  performUpdate(
+  async performUpdate(
     currentTime: number,
     prometheusAvailable: boolean = true,
     lokiQueryExecutor?: (query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }
-  ): void {
+  ): Promise<void> {
     if (!this.config) return;
 
-    // Обновляем dashboards
-    this.updateDashboards(currentTime, prometheusAvailable, lokiQueryExecutor);
+    // Обновляем dashboards (async для поддержки реальных HTTP запросов)
+    await this.updateDashboards(currentTime, prometheusAvailable, lokiQueryExecutor);
     
     // Оцениваем alerts
     if (this.config.enableAlerting) {
-      this.evaluateAlerts(currentTime, prometheusAvailable);
+      await this.evaluateAlerts(currentTime, prometheusAvailable);
     }
     
     // Обновляем метрики
@@ -256,11 +267,11 @@ export class GrafanaEmulationEngine {
   /**
    * Обновляет dashboards (выполняет queries)
    */
-  private updateDashboards(
+  private async updateDashboards(
     currentTime: number,
     prometheusAvailable: boolean,
     lokiQueryExecutor?: (query: string, startTime?: number, endTime?: number, limit?: number) => { success: boolean; latency: number; resultsCount: number; error?: string }
-  ): void {
+  ): Promise<void> {
     if (!this.config?.dashboards) return;
     
     const dashboards = this.normalizeDashboards(this.config.dashboards);
@@ -278,19 +289,50 @@ export class GrafanaEmulationEngine {
         // Выполняем queries для всех panels
         for (const panel of dashboard.panels) {
           // Определяем datasource для panel
-          const datasource = panel.datasource;
-          const isLokiQuery = datasource && this.isLokiDatasource(datasource);
+          const datasourceName = panel.datasource;
+          const datasource = this.findDatasource(datasourceName);
+          const isLokiQuery = datasource && datasource.type === 'loki';
           
           for (const query of panel.queries) {
             totalQueries++;
             
-            // Симулируем выполнение query
-            const queryLatency = this.simulateQueryExecution(
-              query,
-              prometheusAvailable,
-              isLokiQuery,
-              lokiQueryExecutor
-            );
+            // Выполняем query через RoutingEngine или статическую симуляцию (fallback)
+            let queryLatency: number;
+            if (this.routingEngine && datasource) {
+              // Используем RoutingEngine для реальных HTTP запросов
+              const isRangeQuery = query.expr.includes('['); // Range query если есть [duration]
+              const timeRange = dashboard.timeRange ? {
+                from: this.parseTimeString(dashboard.timeRange.from),
+                to: this.parseTimeString(dashboard.timeRange.to),
+                step: query.step ? this.parseDuration(query.step) : undefined,
+              } : undefined;
+              
+              const result = await this.routingEngine.routeQuery(
+                query,
+                datasource,
+                timeRange,
+                isRangeQuery
+              );
+              
+              queryLatency = result.latency;
+              
+              if (!result.success) {
+                this.grafanaMetrics.datasourceErrors++;
+              }
+              
+              if (result.cacheHit) {
+                this.grafanaMetrics.cachedQueries++;
+              }
+            } else {
+              // Fallback: статическая симуляция (если RoutingEngine не установлен)
+              queryLatency = this.simulateQueryExecution(
+                query,
+                prometheusAvailable,
+                isLokiQuery,
+                lokiQueryExecutor
+              );
+            }
+            
             totalQueryLatency += queryLatency;
             
             // Добавляем в историю для расчета среднего
@@ -315,9 +357,6 @@ export class GrafanaEmulationEngine {
     if (totalQueries > 0) {
       this.grafanaMetrics.queryLatency = totalQueryLatency / totalQueries;
     }
-    
-    // Обновляем ошибки datasource (только для Prometheus queries)
-    // Loki errors обрабатываются в simulateQueryExecution
   }
 
   /**
@@ -342,9 +381,46 @@ export class GrafanaEmulationEngine {
   }
 
   /**
+   * Находит datasource по имени
+   */
+  private findDatasource(name: string): GrafanaDataSource | null {
+    const datasources = this.getActiveDatasources();
+    return datasources.find(ds => ds.name === name) || null;
+  }
+
+  /**
+   * Парсит time string (например, "now-1h", "now-5m") в timestamp
+   */
+  private parseTimeString(timeStr: string): number {
+    if (timeStr === 'now') {
+      return Date.now();
+    }
+    
+    // Парсим "now-1h", "now-5m" и т.д.
+    const match = timeStr.match(/^now-(\d+)([smhd])$/);
+    if (match) {
+      const value = parseInt(match[1]);
+      const unit = match[2];
+      let ms = 0;
+      
+      switch (unit) {
+        case 's': ms = value * 1000; break;
+        case 'm': ms = value * 60 * 1000; break;
+        case 'h': ms = value * 60 * 60 * 1000; break;
+        case 'd': ms = value * 24 * 60 * 60 * 1000; break;
+      }
+      
+      return Date.now() - ms;
+    }
+    
+    // Если не распарсили, возвращаем текущее время
+    return Date.now();
+  }
+
+  /**
    * Оценивает alerts
    */
-  private evaluateAlerts(currentTime: number, prometheusAvailable: boolean): void {
+  private async evaluateAlerts(currentTime: number, prometheusAvailable: boolean): Promise<void> {
     if (!this.config?.alerts) return;
     
     for (const alert of this.config.alerts) {
@@ -356,14 +432,32 @@ export class GrafanaEmulationEngine {
       if (currentTime - lastEvaluation >= evaluationInterval) {
         this.lastAlertEvaluationTimes.set(alert.id, currentTime);
         
-        // Симулируем evaluation alert query
-        this.simulateQueryExecution(
-          { refId: 'A', expr: alert.condition.query },
-          prometheusAvailable
-        );
+        // Находим Prometheus datasource для alert
+        const datasources = this.getActiveDatasources();
+        const prometheusDs = datasources.find(ds => ds.type === 'prometheus');
         
-        if (!prometheusAvailable) {
-          this.grafanaMetrics.datasourceErrors++;
+        if (this.routingEngine && prometheusDs) {
+          // Используем RoutingEngine для реальных HTTP запросов
+          const result = await this.routingEngine.routeQuery(
+            { refId: 'A', expr: alert.condition.query },
+            prometheusDs,
+            undefined,
+            false // Instant query для alerts
+          );
+          
+          if (!result.success) {
+            this.grafanaMetrics.datasourceErrors++;
+          }
+        } else {
+          // Fallback: статическая симуляция
+          this.simulateQueryExecution(
+            { refId: 'A', expr: alert.condition.query },
+            prometheusAvailable
+          );
+          
+          if (!prometheusAvailable) {
+            this.grafanaMetrics.datasourceErrors++;
+          }
         }
       }
     }
@@ -605,12 +699,13 @@ export class GrafanaEmulationEngine {
   getActiveDatasources(): GrafanaDataSource[] {
     if (!this.config?.datasources) return [];
     
-    // Конвертируем старый формат
+    // Конвертируем старый формат (массив строк) в новый формат
+    // Используем placeholder URL вместо хардкода - RoutingEngine найдет подходящий node
     if (this.config.datasources.length > 0 && typeof this.config.datasources[0] === 'string') {
       return this.config.datasources.map((ds: string) => ({
         name: ds,
         type: 'prometheus' as const,
-        url: 'http://localhost:9090',
+        url: `prometheus://${ds}`, // Placeholder URL - RoutingEngine распознает и найдет подходящий node
         access: 'proxy' as const,
         isDefault: ds === this.config!.datasources![0],
       }));

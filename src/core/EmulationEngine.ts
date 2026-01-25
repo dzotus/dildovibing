@@ -43,8 +43,10 @@ import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/Con
 import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
 import { MongoDBEmulationEngine, MongoDBConfig } from './MongoDBEmulationEngine';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
+import { PromQLEvaluator } from './PromQLEvaluator';
 import { ServiceDiscovery } from '@/services/connection/ServiceDiscovery';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
+import { GrafanaRoutingEngine } from './GrafanaRoutingEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
 import { GraphQLEmulationEngine } from './GraphQLEmulationEngine';
@@ -292,6 +294,9 @@ export class EmulationEngine {
   
   // Grafana emulation engines per node
   private grafanaEngines: Map<string, GrafanaEmulationEngine> = new Map();
+  
+  // Grafana routing engines per node
+  private grafanaRoutingEngines: Map<string, GrafanaRoutingEngine> = new Map();
 
   // GraphQL emulation engines per node
   private graphQLEngines: Map<string, GraphQLEmulationEngine> = new Map();
@@ -1387,6 +1392,7 @@ export class EmulationEngine {
         this.harborEngines.delete(nodeId);
         this.prometheusEngines.delete(nodeId);
         this.grafanaEngines.delete(nodeId);
+        this.grafanaRoutingEngines.delete(nodeId);
         this.graphQLEngines.delete(nodeId);
         this.postgresEmulationEngines.delete(nodeId);
         this.mongodbEmulationEngines.delete(nodeId);
@@ -1590,15 +1596,43 @@ export class EmulationEngine {
     
     // Perform Grafana updates (queries, dashboard refreshes, alert evaluations)
     for (const [nodeId, grafanaEngine] of this.grafanaEngines.entries()) {
-      // Проверяем доступность Prometheus для этого Grafana
-      const grafanaNode = this.nodes.find(n => n.id === nodeId);
-      if (grafanaNode) {
-        const prometheusAvailable = this.isPrometheusAvailableForGrafana(grafanaNode);
-        
-        // Создаем функцию для выполнения LogQL queries через Loki
-        const lokiQueryExecutor = this.createLokiQueryExecutor(grafanaNode);
-        
-        grafanaEngine.performUpdate(now, prometheusAvailable, lokiQueryExecutor);
+      try {
+        // Проверяем доступность Prometheus для этого Grafana
+        const grafanaNode = this.nodes.find(n => n.id === nodeId);
+        if (grafanaNode) {
+          const prometheusAvailable = this.isPrometheusAvailableForGrafana(grafanaNode);
+          
+          // Создаем функцию для выполнения LogQL queries через Loki (fallback для старых версий)
+          const lokiQueryExecutor = this.createLokiQueryExecutor(grafanaNode);
+          
+          // Обновляем nodes и connections в RoutingEngine
+          const routingEngine = this.grafanaRoutingEngines.get(nodeId);
+          if (routingEngine) {
+            routingEngine.updateNodesAndConnections(this.nodes, this.connections);
+          }
+          
+          // Выполняем обновление (async)
+          grafanaEngine.performUpdate(now, prometheusAvailable, lokiQueryExecutor).catch((error) => {
+            errorCollector.addError(error as Error, {
+              severity: 'warning',
+              source: 'component-engine',
+              componentId: nodeId,
+              componentLabel: grafanaNode.data.label,
+              componentType: grafanaNode.type,
+              context: { engine: 'grafana', operation: 'performUpdate' },
+            });
+          });
+        }
+      } catch (error) {
+        const grafanaNode = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: grafanaNode?.data.label,
+          componentType: grafanaNode?.type,
+          context: { engine: 'grafana', operation: 'performUpdate' },
+        });
       }
     }
     
@@ -9701,9 +9735,39 @@ export class EmulationEngine {
    * Initialize Grafana Emulation Engine for Grafana node
    */
   private initializeGrafanaEngine(node: CanvasNode): void {
-    const grafanaEngine = new GrafanaEmulationEngine();
-    grafanaEngine.initializeConfig(node);
-        this.grafanaEngines.set(node.id, grafanaEngine);
+    try {
+      const grafanaEngine = new GrafanaEmulationEngine();
+      grafanaEngine.initializeConfig(node);
+      
+      // Создаем RoutingEngine для маршрутизации queries
+      const routingEngine = new GrafanaRoutingEngine(this.serviceDiscovery, node);
+      routingEngine.updateNodesAndConnections(this.nodes, this.connections);
+      
+      // Устанавливаем DataFlowEngine для визуализации HTTP запросов
+      routingEngine.setDataFlowEngine(dataFlowEngine);
+      
+      // Создаем функцию для выполнения Prometheus queries
+      const prometheusQueryExecutor = this.createPrometheusQueryExecutor(node.id);
+      routingEngine.setPrometheusQueryExecutor(prometheusQueryExecutor);
+      
+      // Создаем функцию для выполнения Loki queries
+      const lokiQueryExecutor = this.createLokiQueryExecutorForRouting(node.id);
+      routingEngine.setLokiQueryExecutor(lokiQueryExecutor);
+      
+      // Устанавливаем RoutingEngine в GrafanaEmulationEngine
+      grafanaEngine.setRoutingEngine(routingEngine);
+      
+      this.grafanaEngines.set(node.id, grafanaEngine);
+      this.grafanaRoutingEngines.set(node.id, routingEngine);
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'initialization',
+        componentId: node.id,
+        componentType: node.type,
+        context: { operation: 'initializeGrafanaEngine' },
+      });
+    }
   }
 
   /**
@@ -10063,6 +10127,157 @@ export class EmulationEngine {
         resultsCount: result.resultsCount,
         error: result.error,
       };
+    };
+  }
+
+  /**
+   * Создает функцию для выполнения Prometheus queries через RoutingEngine
+   */
+  private createPrometheusQueryExecutor(grafanaNodeId: string): (
+    prometheusNodeId: string,
+    query: string,
+    queryType: 'instant' | 'range',
+    timeRange?: { from: number; to: number; step?: number }
+  ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }> {
+    return async (
+      prometheusNodeId: string,
+      query: string,
+      queryType: 'instant' | 'range',
+      timeRange?: { from: number; to: number; step?: number }
+    ): Promise<{ success: boolean; data?: any; latency: number; error?: string }> => {
+      const startTime = Date.now();
+      
+      try {
+        // Получаем Prometheus engine
+        const prometheusEngine = this.prometheusEngines.get(prometheusNodeId);
+        if (!prometheusEngine) {
+          return {
+            success: false,
+            latency: Date.now() - startTime,
+            error: `Prometheus engine not found for node: ${prometheusNodeId}`,
+          };
+        }
+
+        // Получаем scraped metrics и nodes для PromQLEvaluator
+        // PrometheusEmulationEngine хранит scrapedMetrics внутри, но нам нужно получить их
+        // Для симуляции мы используем текущие метрики компонентов
+        const nodesMap = new Map<string, CanvasNode>();
+        for (const node of this.nodes) {
+          nodesMap.set(node.id, node);
+        }
+
+        const scrapedMetricsMap = new Map<string, ComponentMetrics>();
+        for (const [nodeId, metrics] of this.metrics.entries()) {
+          scrapedMetricsMap.set(nodeId, metrics);
+        }
+
+        const targetLabelsMap = new Map<string, Record<string, string>>();
+        // Заполняем targetLabels из Prometheus targets (если доступно)
+        // Для упрощения используем пустые labels
+
+        // Создаем PromQLEvaluator
+        const evaluator = new PromQLEvaluator(scrapedMetricsMap, nodesMap, targetLabelsMap);
+
+        // Выполняем query
+        let result;
+        if (queryType === 'range' && timeRange) {
+          result = evaluator.evaluateRange(query, timeRange.to - timeRange.from, timeRange.to);
+        } else {
+          result = evaluator.evaluate(query);
+        }
+
+        const latency = Date.now() - startTime;
+
+        if (result.success) {
+          return {
+            success: true,
+            data: {
+              status: 'success',
+              data: {
+                resultType: 'vector',
+                result: result.series || [{ labels: {}, value: result.value || 0 }],
+              },
+            },
+            latency,
+          };
+        } else {
+          return {
+            success: false,
+            latency,
+            error: result.error || 'Query evaluation failed',
+          };
+        }
+      } catch (error) {
+        return {
+          success: false,
+          latency: Date.now() - startTime,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+  }
+
+  /**
+   * Создает функцию для выполнения Loki queries через RoutingEngine
+   */
+  private createLokiQueryExecutorForRouting(grafanaNodeId: string): (
+    lokiNodeId: string,
+    query: string,
+    startTime?: number,
+    endTime?: number,
+    limit?: number
+  ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }> {
+    return async (
+      lokiNodeId: string,
+      query: string,
+      startTime?: number,
+      endTime?: number,
+      limit?: number
+    ): Promise<{ success: boolean; data?: any; latency: number; error?: string }> => {
+      const queryStartTime = Date.now();
+      
+      try {
+        // Получаем Loki engine
+        const lokiEngine = this.lokiEngines.get(lokiNodeId);
+        if (!lokiEngine) {
+          return {
+            success: false,
+            latency: Date.now() - queryStartTime,
+            error: `Loki engine not found for node: ${lokiNodeId}`,
+          };
+        }
+
+        // Выполняем query через Loki engine
+        const result = lokiEngine.executeQuery(query, startTime, endTime, limit);
+        
+        const latency = Date.now() - queryStartTime;
+
+        if (result.success) {
+          return {
+            success: true,
+            data: {
+              status: 'success',
+              data: {
+                resultType: 'streams',
+                result: result.result || [],
+              },
+            },
+            latency,
+          };
+        } else {
+          return {
+            success: false,
+            latency,
+            error: result.error || 'Query execution failed',
+          };
+        }
+      } catch (error) {
+        return {
+          success: false,
+          latency: Date.now() - queryStartTime,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     };
   }
 

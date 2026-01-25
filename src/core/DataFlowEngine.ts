@@ -724,6 +724,50 @@ export class DataFlowEngine {
     return allMessages;
   }
 
+  /**
+   * Add a message to the queue for visualization
+   * Used by components to manually create messages for visualization on canvas
+   */
+  public addMessage(message: Omit<DataMessage, 'id' | 'timestamp' | 'status'>): DataMessage {
+    // Find connection between source and target
+    const connection = this.connections.find(
+      c => (c.source === message.source && c.target === message.target) ||
+           (c.source === message.target && c.target === message.source)
+    );
+
+    if (!connection) {
+      // If no connection found, create a message but mark it as failed
+      const fullMessage: DataMessage = {
+        ...message,
+        id: `msg-${++this.messageIdCounter}`,
+        timestamp: Date.now(),
+        status: 'failed',
+        connectionId: '',
+        error: 'No connection found between source and target',
+      };
+      return fullMessage;
+    }
+
+    // Create full message
+    const fullMessage: DataMessage = {
+      ...message,
+      id: `msg-${++this.messageIdCounter}`,
+      timestamp: Date.now(),
+      status: 'pending',
+      connectionId: connection.id,
+    };
+
+    // Add to queue
+    const queue = this.messageQueue.get(connection.id) || [];
+    queue.push(fullMessage);
+    this.messageQueue.set(connection.id, queue);
+
+    // Add to history
+    this.addToHistory(fullMessage);
+
+    return fullMessage;
+  }
+
   // ========== Handler Factory Methods ==========
 
   /**

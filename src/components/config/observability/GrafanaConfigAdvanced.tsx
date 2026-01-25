@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
 import { logError } from '@/utils/logger';
+import { OBSERVABILITY_PROFILES } from './profiles';
 import { GrafanaDashboardViewer } from './GrafanaDashboardViewer';
 import { GrafanaDashboardPreview } from './GrafanaDashboardPreview';
 import {
@@ -145,13 +147,17 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
 
   try {
     const { nodes, updateNode } = useCanvasStore();
+    const { isRunning } = useEmulationStore();
     const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
     if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
     const config = (node.data.config as any) || {} as GrafanaConfig;
-    const adminUser = config.adminUser || 'admin';
-    const adminPassword = config.adminPassword || 'admin';
+    
+    // Получаем значения по умолчанию из профиля
+    const profileDefaults = OBSERVABILITY_PROFILES.grafana.defaults;
+    const adminUser = config.adminUser || profileDefaults.adminUser;
+    const adminPassword = config.adminPassword || profileDefaults.adminPassword;
     
     // Safe migration: handle old format where datasources could be strings
     let datasources: DataSource[] = [];
@@ -171,8 +177,12 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
       }
     }
     if (datasources.length === 0) {
+      // Используем значения из профиля (если есть) или дефолтные
+      const defaultDatasourceName = Array.isArray(profileDefaults.datasources) && profileDefaults.datasources.length > 0
+        ? (typeof profileDefaults.datasources[0] === 'string' ? profileDefaults.datasources[0] : 'Prometheus')
+        : 'Prometheus';
       datasources = [
-        { name: 'Prometheus', type: 'prometheus', url: 'http://localhost:9090', access: 'proxy', isDefault: true },
+        { name: defaultDatasourceName, type: 'prometheus' as const, url: 'http://localhost:9090', access: 'proxy' as const, isDefault: true },
       ];
     }
     
@@ -209,36 +219,20 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
       }).filter((d: any) => d && typeof d === 'object' && d.id);
     }
     if (dashboards.length === 0) {
-      const defaultDatasourceName = datasources.length > 0 ? datasources[0].name : 'Prometheus';
-      dashboards = [
-        {
-          id: '1',
-          name: 'Overview',
-          panels: [
-            {
-              id: 'panel-1',
-              title: 'CPU Usage',
-              type: 'graph',
-              datasource: defaultDatasourceName,
-              queries: [
-                { refId: 'A', expr: 'rate(process_cpu_seconds_total[5m])', legendFormat: 'CPU' }
-              ],
-              gridPos: { x: 0, y: 0, w: 12, h: 8 }
-            }
-          ],
-          tags: ['system', 'overview'],
-          refresh: '30s'
-        },
-      ];
+      // Если нет dashboards, не создаем дефолтный - пользователь должен создать сам
+      // Это соответствует принципу отсутствия хардкода
+      dashboards = [];
     }
     
     const alerts: AlertRule[] = Array.isArray(config.alerts) ? config.alerts.filter((a: any) => a && typeof a === 'object' && a.id) : [];
-    const defaultDashboard = config.defaultDashboard || 'overview';
-    const enableAuth = config.enableAuth ?? false;
-    const authProvider = config.authProvider || 'ldap';
-    const enableAlerting = config.enableAlerting ?? true;
-    const alertNotificationChannels = Array.isArray(config.alertNotificationChannels) ? config.alertNotificationChannels : ['email', 'slack'];
-    const theme = config.theme || 'dark';
+    const defaultDashboard = config.defaultDashboard || profileDefaults.defaultDashboard;
+    const enableAuth = config.enableAuth ?? profileDefaults.enableAuth;
+    const authProvider = config.authProvider || profileDefaults.authProvider;
+    const enableAlerting = config.enableAlerting ?? profileDefaults.enableAlerting;
+    const alertNotificationChannels = Array.isArray(config.alertNotificationChannels) 
+      ? config.alertNotificationChannels 
+      : (Array.isArray(profileDefaults.alertNotificationChannels) ? profileDefaults.alertNotificationChannels : ['email', 'slack']);
+    const theme = config.theme || profileDefaults.theme;
 
   const updateConfig = (updates: Partial<GrafanaConfig>) => {
     updateNode(componentId, {
@@ -415,8 +409,8 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+              <div className={`h-2 w-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {isRunning ? 'Running' : 'Stopped'}
             </Badge>
             <Button 
               size="sm" 
@@ -1067,19 +1061,6 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
                       placeholder="admin"
                     />
                   </div>
-                </div>
-                <Separator />
-                <div className="space-y-2">
-                  <Label>Default Theme</Label>
-                  <Select value={theme} onValueChange={(value) => updateConfig({ theme: value })}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="dark">Dark</SelectItem>
-                      <SelectItem value="light">Light</SelectItem>
-                    </SelectContent>
-                  </Select>
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between">

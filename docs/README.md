@@ -118,6 +118,17 @@
   - PromQL для анализа метрик
   - Метрики самого Prometheus (TSDB, config, targets, alerting)
 
+- **[Grafana](./observability/grafana.md)** - Платформа визуализации и аналитики метрик, логов и трейсов
+  - Множественные DataSources (Prometheus, Loki, InfluxDB, Elasticsearch, PostgreSQL, MySQL)
+  - Dashboards и Panels с различными типами визуализации (graph, table, stat, gauge, piechart, bargraph)
+  - PromQL и LogQL Queries через HTTP API datasources
+  - HTTP Routing с реальными запросами к datasources через GrafanaRoutingEngine
+  - Query Caching для оптимизации производительности (instant queries кэшируются на 5 секунд)
+  - Load Balancing между множественными instances datasources (round-robin)
+  - Alerting с PromQL выражениями и уведомлениями
+  - Dashboard Refresh с автоматическим обновлением по заданному интервалу
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -318,6 +329,7 @@
 - **Elasticsearch:** [Документация Elasticsearch](./data/elasticsearch.md)
 - **S3 Data Lake:** [Документация S3 Data Lake](./data/s3-datalake.md)
 - **Prometheus:** [Документация Prometheus](./observability/prometheus.md)
+- **Grafana:** [Документация Grafana](./observability/grafana.md)
 
 ## Обновления
 
@@ -355,3 +367,7 @@
 - [Официальная документация AWS S3](https://docs.aws.amazon.com/s3/)
 - [Официальная документация Prometheus](https://prometheus.io/docs/)
 - [Prometheus Query Language (PromQL)](https://prometheus.io/docs/prometheus/latest/querying/basics/)
+- [Официальная документация Grafana](https://grafana.com/docs/)
+- [Grafana Data Sources](https://grafana.com/docs/grafana/latest/datasources/)
+- [Grafana Dashboards](https://grafana.com/docs/grafana/latest/dashboards/)
+- [Grafana Alerting](https://grafana.com/docs/grafana/latest/alerting/)
