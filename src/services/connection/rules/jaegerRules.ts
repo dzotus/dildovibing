@@ -18,7 +18,7 @@ export function createJaegerRule(discovery: ServiceDiscovery): ConnectionRule {
     updateSourceConfig: (source, jaeger, connection, metadata) => {
       // Специальная обработка для OpenTelemetry Collector
       if (source.type === 'otel-collector') {
-        return this.updateOTelCollectorConfig(source, jaeger, connection, metadata, discovery);
+        return updateOTelCollectorConfig(source, jaeger, connection, metadata, discovery);
       }
       // Для других компонентов не требуется обновление конфига
       return null;

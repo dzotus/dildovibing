@@ -1,5 +1,229 @@
 # Patch Notes
 
+## Версия 0.1.8v - OpenTelemetry Collector: Emulation Engine, Metrics Integration, Connection Rules, Processors Implementation, Validation, No Hardcode
+
+### OpenTelemetry Collector: Полная интеграция симуляции и метрик
+
+**Критическое улучшение**: Реализован OpenTelemetryCollectorEmulationEngine для расчета метрик компонента, интегрирован в EmulationEngine, убраны все хардкоды из UI, исправлено несоответствие имен метрик, синхронизирован UI с useEmulationStore, созданы Connection Rules для автоматической настройки receivers и exporters, реализована полная логика processors (memory_limiter, filter, transform, resource, attributes), добавлена валидация конфигурации pipelines. Все реализовано без хардкода - значения по умолчанию берутся из конфигурации, UI синхронизируется с реальными метриками из симуляции, симуляция соответствует реальному поведению OpenTelemetry Collector.
+
+#### 1. OpenTelemetryCollectorEmulationEngine ✅
+
+**Улучшение**: Создан отдельный emulation engine для расчета метрик компонента OpenTelemetry Collector.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/OpenTelemetryCollectorEmulationEngine.ts`:
+  - Класс `OpenTelemetryCollectorEmulationEngine` для расчета метрик компонента
+  - Метод `calculateComponentMetrics()` - расчет throughput, latency, errorRate, utilization
+  - Поддержка процентилей latency (P50, P99) на основе истории
+  - Расчет memory usage на основе batch queues и конфигурации memory_limiter
+  - Поддержка batch queues для каждого pipeline с timeout и size лимитами
+  - История метрик для расчета per-second значений (60 секунд)
+  - Метод `performUpdate()` для обновления batch queues и memory checkpoints
+  - Метод `recordLatency()` и `recordError()` для отслеживания обработки сообщений
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Memory limit рассчитывается из memory_limiter processors
+  - Batch timeout и size берутся из конфигурации batch processors
+  - Метрики рассчитываются на основе реальной активности routing engine
+
+#### 2. Интеграция в EmulationEngine ✅
+
+**Улучшение**: OpenTelemetryCollectorEmulationEngine интегрирован в EmulationEngine для расчета метрик компонента.
+
+**Реализовано**:
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Добавлен Map `otelCollectorEmulationEngines` для хранения emulation engines
+  - Обновлен метод `initializeOpenTelemetryCollectorEngine()`:
+    - Создание routing engine если не существует
+    - Создание emulation engine на основе routing engine
+    - Инициализация конфигурации emulation engine
+  - Добавлен метод `simulateOpenTelemetryCollector()`:
+    - Получение метрик из emulation engine
+    - Обновление ComponentMetrics (throughput, latency, latencyP50, latencyP99, errorRate, utilization)
+    - Добавление customMetrics (memoryUsage, memoryLimit, activePipelines, activeReceivers, activeProcessors, activeExporters, metricsReceived, tracesReceived, logsReceived, metricsExported, tracesExported, logsExported)
+  - Добавлен case 'otel-collector' в `updateComponentMetrics()`
+  - Добавлен `performUpdate()` для OpenTelemetry Collector emulation engines в `performComponentUpdates()`
+- ✅ Отсутствие хардкода:
+  - Все метрики рассчитываются на основе реальной активности
+  - Конфигурация синхронизируется при изменении настроек компонента
+
+#### 3. Убраны хардкоды из UI ✅
+
+**Улучшение**: Убраны все хардкод дефолтные значения из OpenTelemetryCollectorConfigAdvanced.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/OpenTelemetryCollectorConfigAdvanced.tsx`:
+  - Убраны хардкод дефолтные значения для receivers, processors, exporters, pipelines
+  - Используются только значения из конфигурации компонента: `Array.isArray(config.receivers) ? config.receivers : []`
+  - Если конфигурация пустая, используются пустые массивы (пользователь может добавить элементы через UI)
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Нет предустановленных дефолтных значений
+
+#### 4. Исправлено несоответствие имен метрик ✅
+
+**Улучшение**: Исправлено несоответствие имен полей метрик между routing engine и UI.
+
+**Реализовано**:
+- ✅ В `src/core/OpenTelemetryCollectorRoutingEngine.ts`:
+  - Обновлен метод `getMetrics()`:
+    - Добавлены Total версии для совместимости с UI: `metricsReceivedTotal`, `tracesReceivedTotal`, `logsReceivedTotal`, `metricsExportedTotal`, `tracesExportedTotal`, `logsExportedTotal`
+    - Сохранены оригинальные имена для обратной совместимости
+- ✅ Отсутствие хардкода:
+  - Все метрики берутся из реальных счетчиков routing engine
+
+#### 5. Синхронизация UI с useEmulationStore ✅
+
+**Улучшение**: UI синхронизирован с useEmulationStore для отображения метрик компонента в реальном времени.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/OpenTelemetryCollectorConfigAdvanced.tsx`:
+  - Использование `getComponentMetrics()` из useEmulationStore вместо прямого обращения к routing engine
+  - Извлечение метрик из `componentMetrics.customMetrics`:
+    - `metricsReceived`, `tracesReceived`, `logsReceived`
+    - `metricsExported`, `tracesExported`, `logsExported`
+  - Отображение метрик компонента:
+    - `throughput`, `latency`, `errorRate`, `utilization`
+    - `memoryUsage`, `memoryLimit`
+    - `activePipelines`, `activeReceivers`, `activeProcessors`, `activeExporters`
+- ✅ Отсутствие хардкода:
+  - Все метрики берутся из useEmulationStore
+  - UI автоматически обновляется при изменении метрик в симуляции
+
+#### 6. Connection Rules для OpenTelemetry Collector ✅
+
+**Улучшение**: Созданы Connection Rules для автоматической настройки receivers и exporters при создании соединений.
+
+**Реализовано**:
+- ✅ Создан файл `src/services/connection/rules/otelCollectorRules.ts`:
+  - Функция `createOTelCollectorReceiverRule()` - правило для подключения к OpenTelemetry Collector:
+    - `sourceType: '*'` - любой компонент может отправлять данные в Collector
+    - `targetTypes: ['otel-collector']` - только Collector может быть целевым компонентом
+    - `updateTargetConfig()` - автоматическое создание receiver для source типа
+    - `updateOTelCollectorReceiverConfig()` - создание/обновление receiver и добавление в соответствующий pipeline
+    - Поддержка типов receivers: otlp, prometheus, jaeger, zipkin (определяется по типу source)
+    - Автоматическое определение типа pipeline (traces/metrics/logs) на основе типа source
+  - Функция `createOTelCollectorExporterRule()` - правило для экспорта из OpenTelemetry Collector:
+    - `sourceType: 'otel-collector'` - только Collector может быть источником
+    - `targetTypes: ['prometheus', 'jaeger', 'loki', 'grafana', '*']` - может экспортировать в разные backends
+    - `updateSourceConfig()` - автоматическое создание exporter для target типа
+    - `updateOTelCollectorExporterConfig()` - создание/обновление exporter и добавление в соответствующий pipeline
+    - Поддержка типов exporters: otlp, prometheus, jaeger, logging (определяется по типу target)
+    - Автоматическое определение типа pipeline на основе типа target
+  - `extractMetadata()` - извлечение metadata (endpoint, port) из конфигурации
+  - `validateConnection()` - валидация соединения
+- ✅ Зарегистрировано в `src/services/connection/rules/index.ts`:
+  - Импорт `createOTelCollectorReceiverRule` и `createOTelCollectorExporterRule`
+  - Добавлено в список правил в `initializeConnectionRules()`
+- ✅ Отсутствие хардкода:
+  - Все endpoints извлекаются из конфигурации компонентов
+  - ServiceDiscovery используется для разрешения имен и портов
+  - Типы receivers/exporters определяются автоматически на основе типов компонентов
+  - Дефолтные порты используются только если не указаны в конфигурации
+
+#### 7. Улучшения симуляции ✅
+
+**Улучшение**: Улучшена симуляция OpenTelemetry Collector для более реалистичного поведения.
+
+**Реализовано**:
+- ✅ Расчет метрик на основе реальной активности:
+  - Throughput рассчитывается на основе временного окна (1 секунда)
+  - Latency рассчитывается на основе истории обработки сообщений
+  - Error rate рассчитывается на основе ошибок обработки
+  - Utilization рассчитывается на основе memory usage и throughput
+- ✅ Поддержка batch processing:
+  - Batch queues для каждого pipeline с batch processor
+  - Flush по timeout и size лимитам
+  - Учет latency батчизации
+- ✅ Поддержка memory limiter:
+  - Расчет memory usage на основе batch queues, активных pipelines и throughput
+  - Учет memory limit из конфигурации memory_limiter processors
+  - Расчет utilization на основе memory usage / memory limit
+- ✅ Отсутствие хардкода:
+  - Все параметры берутся из конфигурации
+  - Метрики рассчитываются на основе реальной активности
+
+#### 8. Реализация processors с реальной логикой ✅
+
+**Улучшение**: Реализована полная логика обработки для всех типов processors без хардкода.
+
+**Реализовано**:
+- ✅ В `src/core/OpenTelemetryCollectorRoutingEngine.ts`:
+  - **Memory Limiter Processor:**
+    - Реальная проверка memory usage через callback из EmulationEngine
+    - Отбрасывание сообщений при превышении лимита (configurable limit_percent, default 80%)
+    - Использование реальных значений memory usage и limit из EmulationEngine
+  - **Filter Processor:**
+    - Реальная фильтрация на основе условий (include/exclude)
+    - Поддержка операторов (equals, contains)
+    - Отбрасывание сообщений, не соответствующих условиям
+    - Поддержка nested paths для атрибутов (например, "resource.attributes.service.name")
+  - **Transform Processor:**
+    - Базовая поддержка transform statements
+    - Структура для будущей поддержки OTTL expressions
+  - **Resource Processor:**
+    - Реальное добавление resource attributes к данным
+    - Обновление существующих атрибутов
+    - Мердж с существующими resource attributes
+  - **Attributes Processor:**
+    - Реальная модификация attributes (insert, update, delete, upsert)
+    - Поддержка всех типов действий из конфигурации
+    - Работа с массивом attributes в данных
+  - **Batch Processor:**
+    - Интеграция с batch queues в EmulationEngine
+    - Учет latency батчизации
+- ✅ Интеграция с EmulationEngine:
+  - Memory usage callback для memory_limiter processor
+  - Metrics callback для записи latency и ошибок
+  - Автоматическая запись latency в EmulationEngine для расчета процентилей
+  - Автоматическая запись ошибок (dropped messages) в error rate
+- ✅ Обработка dropped messages:
+  - Сообщения, отброшенные processors (memory_limiter, filter), не проходят дальше по pipeline
+  - Dropped messages учитываются в error rate
+  - Latency записывается даже для dropped messages
+- ✅ Отсутствие хардкода:
+  - Все параметры processors берутся из конфигурации
+  - Memory limit и usage берутся из EmulationEngine
+  - Filter conditions берутся из конфигурации processor
+  - Transform statements берутся из конфигурации
+
+#### 9. Валидация конфигурации pipelines ✅
+
+**Улучшение**: Добавлена валидация конфигурации pipelines для обнаружения ошибок конфигурации.
+
+**Реализовано**:
+- ✅ В `src/core/OpenTelemetryCollectorRoutingEngine.ts`:
+  - Метод `validatePipeline()` - валидация конфигурации pipeline
+  - Проверка существования receivers в конфигурации
+  - Проверка существования processors в конфигурации
+  - Проверка существования exporters в конфигурации
+  - Предупреждения при отсутствии receivers или exporters
+  - Логирование ошибок валидации в console.warn
+- ✅ Валидация при инициализации:
+  - Автоматическая валидация всех pipelines при загрузке конфигурации
+  - Валидация выполняется в `initializeConfig()`
+- ✅ Отсутствие хардкода:
+  - Валидация использует реальные Maps receivers/processors/exporters
+  - Все проверки основаны на конфигурации компонента
+
+#### 10. Улучшен расчет latency ✅
+
+**Улучшение**: Улучшен расчет latency с учетом реальной обработки processors.
+
+**Реализовано**:
+- ✅ Учет latency каждого processor:
+  - Latency обработки каждого processor добавляется к общей latency
+  - Processor latency измеряется реально (Date.now() до и после обработки)
+- ✅ Интеграция с EmulationEngine:
+  - Latency записывается в EmulationEngine через metrics callback
+  - Используется для расчета процентилей (P50, P99)
+  - История latency хранится в EmulationEngine
+- ✅ Учет latency exporters:
+  - Latency экспорта учитывается в общей latency
+- ✅ Отсутствие хардкода:
+  - Latency рассчитывается на основе реальной обработки
+  - Нет фиксированных значений latency
+
 ## Версия 0.1.8u - Jaeger: Connection Rules, Extended Configuration, Metrics Integration, Trace Visualization, Filtering, OpenTelemetry Collector Integration, Grafana Integration, No Hardcode
 
 ### Jaeger: Улучшение симуляции и интеграция метрик

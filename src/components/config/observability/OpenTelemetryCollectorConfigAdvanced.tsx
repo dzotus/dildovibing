@@ -85,92 +85,35 @@ export function OpenTelemetryCollectorConfigAdvanced({ componentId }: OpenTeleme
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as OpenTelemetryCollectorConfig;
-  const receivers = config.receivers || [
-    { id: '1', type: 'otlp', enabled: true, endpoint: '0.0.0.0:4317' },
-    { id: '2', type: 'prometheus', enabled: true, endpoint: '0.0.0.0:8888' },
-  ];
-  const processors = config.processors || [
-    { id: '1', type: 'batch', enabled: true, config: { timeout: '1s', send_batch_size: 8192 } },
-    { id: '2', type: 'memory_limiter', enabled: true, config: { limit_mib: 512 } },
-  ];
-  const exporters = config.exporters || [
-    { id: '1', type: 'otlp', enabled: true, endpoint: 'http://backend:4317' },
-    { id: '2', type: 'prometheus', enabled: true, endpoint: 'http://prometheus:9090' },
-  ];
-  const pipelines = config.pipelines || [
-    {
-      id: '1',
-      name: 'traces-pipeline',
-      type: 'traces',
-      receivers: ['1'],
-      processors: ['1', '2'],
-      exporters: ['1'],
-    },
-    {
-      id: '2',
-      name: 'metrics-pipeline',
-      type: 'metrics',
-      receivers: ['2'],
-      processors: ['1'],
-      exporters: ['2'],
-    },
-  ];
+  // Use configuration values, no hardcoded defaults
+  const receivers = Array.isArray(config.receivers) ? config.receivers : [];
+  const processors = Array.isArray(config.processors) ? config.processors : [];
+  const exporters = Array.isArray(config.exporters) ? config.exporters : [];
+  const pipelines = Array.isArray(config.pipelines) ? config.pipelines : [];
 
-  // Получаем OpenTelemetry Collector engine для реальных метрик
-  const otelEngine = emulationEngine.getOpenTelemetryCollectorRoutingEngine(componentId);
+  // Get component metrics from useEmulationStore
+  const { getComponentMetrics } = useEmulationStore();
+  const componentMetrics = getComponentMetrics(componentId);
   
-  // Состояние для реальных метрик
-  const [realMetrics, setRealMetrics] = useState({
-    metricsReceived: 0,
-    tracesReceived: 0,
-    logsReceived: 0,
-    metricsExported: 0,
-    tracesExported: 0,
-    logsExported: 0,
-  });
-
-  // Обновляем метрики из движка
-  useEffect(() => {
-    if (!otelEngine) {
-      setRealMetrics({
-        metricsReceived: 0,
-        tracesReceived: 0,
-        logsReceived: 0,
-        metricsExported: 0,
-        tracesExported: 0,
-        logsExported: 0,
-      });
-      return;
-    }
-
-    const updateMetrics = () => {
-      const metrics = otelEngine.getMetrics();
-      setRealMetrics({
-        metricsReceived: metrics.metricsReceivedTotal,
-        tracesReceived: metrics.tracesReceivedTotal,
-        logsReceived: metrics.logsReceivedTotal,
-        metricsExported: metrics.metricsExportedTotal,
-        tracesExported: metrics.tracesExportedTotal,
-        logsExported: metrics.logsExportedTotal,
-      });
-    };
-
-    updateMetrics();
-
-    // Обновляем метрики периодически если симуляция запущена
-    if (isRunning) {
-      const interval = setInterval(updateMetrics, 2000); // каждые 2 секунды
-      return () => clearInterval(interval);
-    }
-  }, [otelEngine, isRunning, componentId]);
-
-  // Используем реальные метрики вместо конфига
-  const metricsReceived = realMetrics.metricsReceived;
-  const tracesReceived = realMetrics.tracesReceived;
-  const logsReceived = realMetrics.logsReceived;
-  const metricsExported = realMetrics.metricsExported;
-  const tracesExported = realMetrics.tracesExported;
-  const logsExported = realMetrics.logsExported;
+  // Extract metrics from componentMetrics.customMetrics
+  const metricsReceived = componentMetrics?.customMetrics?.metricsReceived || 0;
+  const tracesReceived = componentMetrics?.customMetrics?.tracesReceived || 0;
+  const logsReceived = componentMetrics?.customMetrics?.logsReceived || 0;
+  const metricsExported = componentMetrics?.customMetrics?.metricsExported || 0;
+  const tracesExported = componentMetrics?.customMetrics?.tracesExported || 0;
+  const logsExported = componentMetrics?.customMetrics?.logsExported || 0;
+  
+  // Component-level metrics
+  const throughput = componentMetrics?.throughput || 0;
+  const latency = componentMetrics?.latency || 0;
+  const errorRate = componentMetrics?.errorRate || 0;
+  const utilization = componentMetrics?.utilization || 0;
+  const memoryUsage = componentMetrics?.customMetrics?.memoryUsage || 0;
+  const memoryLimit = componentMetrics?.customMetrics?.memoryLimit || 0;
+  const activePipelines = componentMetrics?.customMetrics?.activePipelines || 0;
+  const activeReceivers = componentMetrics?.customMetrics?.activeReceivers || 0;
+  const activeProcessors = componentMetrics?.customMetrics?.activeProcessors || 0;
+  const activeExporters = componentMetrics?.customMetrics?.activeExporters || 0;
 
   const [editingReceiverIndex, setEditingReceiverIndex] = useState<number | null>(null);
   const [editingProcessorIndex, setEditingProcessorIndex] = useState<number | null>(null);

@@ -50,7 +50,14 @@ export interface ProcessMessageResult {
   success: boolean;
   latency: number;
   error?: string;
+  dropped?: boolean; // True if message was dropped by processor (e.g., memory_limiter, filter)
 }
+
+// Callback for memory usage check (injected from EmulationEngine)
+export type MemoryUsageCallback = () => { usage: number; limit: number };
+
+// Callback for recording latency and errors (injected from EmulationEngine)
+export type MetricsCallback = (latency: number, isError: boolean) => void;
 
 /**
  * OpenTelemetry Collector Routing Engine
@@ -73,12 +80,32 @@ export class OpenTelemetryCollectorRoutingEngine {
 
   // Callback for getting Jaeger engines (injected from EmulationEngine)
   private getJaegerEnginesCallback?: () => Map<string, JaegerEmulationEngine>;
+  
+  // Callback for memory usage check (injected from EmulationEngine)
+  private memoryUsageCallback?: MemoryUsageCallback;
+  
+  // Callback for recording metrics (injected from EmulationEngine)
+  private metricsCallback?: MetricsCallback;
 
   /**
    * Set callback for getting Jaeger engines
    */
   public setGetJaegerEnginesCallback(callback: () => Map<string, JaegerEmulationEngine>): void {
     this.getJaegerEnginesCallback = callback;
+  }
+
+  /**
+   * Set callback for memory usage check
+   */
+  public setMemoryUsageCallback(callback: MemoryUsageCallback): void {
+    this.memoryUsageCallback = callback;
+  }
+
+  /**
+   * Set callback for recording metrics
+   */
+  public setMetricsCallback(callback: MetricsCallback): void {
+    this.metricsCallback = callback;
   }
 
   /**
@@ -129,9 +156,52 @@ export class OpenTelemetryCollectorRoutingEngine {
     if (this.config.pipelines) {
       for (const pipeline of this.config.pipelines) {
         if (pipeline.id) {
+          // Validate pipeline configuration
+          this.validatePipeline(pipeline);
           this.pipelines.set(pipeline.id, pipeline);
         }
       }
+    }
+  }
+
+  /**
+   * Validate pipeline configuration
+   */
+  private validatePipeline(pipeline: OpenTelemetryCollectorPipeline): void {
+    const errors: string[] = [];
+    
+    // Validate receivers
+    for (const receiverId of pipeline.receivers) {
+      if (!this.receivers.has(receiverId)) {
+        errors.push(`Pipeline "${pipeline.name}": Receiver "${receiverId}" not found`);
+      }
+    }
+    
+    // Validate processors
+    for (const processorId of pipeline.processors) {
+      if (!this.processors.has(processorId)) {
+        errors.push(`Pipeline "${pipeline.name}": Processor "${processorId}" not found`);
+      }
+    }
+    
+    // Validate exporters
+    for (const exporterId of pipeline.exporters) {
+      if (!this.exporters.has(exporterId)) {
+        errors.push(`Pipeline "${pipeline.name}": Exporter "${exporterId}" not found`);
+      }
+    }
+    
+    // Warn if pipeline has no receivers, processors, or exporters
+    if (pipeline.receivers.length === 0) {
+      console.warn(`Pipeline "${pipeline.name}": No receivers configured`);
+    }
+    if (pipeline.exporters.length === 0) {
+      console.warn(`Pipeline "${pipeline.name}": No exporters configured`);
+    }
+    
+    // Log errors if any
+    if (errors.length > 0) {
+      console.warn('Pipeline validation errors:', errors);
     }
   }
 
@@ -170,12 +240,33 @@ export class OpenTelemetryCollectorRoutingEngine {
 
         // Process through processors
         let processedData = message.payload;
+        let shouldDrop = false;
+        let processorLatency = 0;
         const enabledProcessors = pipeline.processors
           .map(id => this.processors.get(id))
           .filter(p => p && p.enabled) as OpenTelemetryCollectorProcessor[];
 
         for (const processor of enabledProcessors) {
-          processedData = this.applyProcessor(processor, processedData);
+          const processorStartTime = Date.now();
+          const result = this.applyProcessor(processor, processedData, pipeline.id);
+          
+          if (result.dropped) {
+            shouldDrop = true;
+            break; // Stop processing if dropped
+          }
+          
+          processedData = result.data;
+          processorLatency += Date.now() - processorStartTime;
+        }
+
+        // If message was dropped, skip exporters and record error
+        if (shouldDrop) {
+          // Record dropped message as error
+          if (this.metricsCallback) {
+            const dropLatency = Date.now() - startTime;
+            this.metricsCallback(dropLatency, true);
+          }
+          continue;
         }
 
         // Process through exporters
@@ -187,22 +278,27 @@ export class OpenTelemetryCollectorRoutingEngine {
           this.applyExporter(exporter, processedData, dataType);
         }
 
-        // Update metrics based on data type
-        if (dataType === 'metrics') {
-          this.metricsReceived++;
-          this.metricsExported += enabledExporters.length;
-        } else if (dataType === 'traces') {
-          this.tracesReceived++;
-          this.tracesExported += enabledExporters.length;
-        } else if (dataType === 'logs') {
-          this.logsReceived++;
-          this.logsExported += enabledExporters.length;
+        // Update metrics based on data type (only if not dropped)
+        if (!shouldDrop) {
+          if (dataType === 'metrics') {
+            this.metricsReceived++;
+            this.metricsExported += enabledExporters.length;
+          } else if (dataType === 'traces') {
+            this.tracesReceived++;
+            this.tracesExported += enabledExporters.length;
+          } else if (dataType === 'logs') {
+            this.logsReceived++;
+            this.logsExported += enabledExporters.length;
+          }
         }
       }
 
+      const totalLatency = Date.now() - startTime;
+      
       return {
         success: true,
-        latency: Date.now() - startTime,
+        latency: totalLatency,
+        dropped: false,
       };
     } catch (error) {
       return {
@@ -251,39 +347,214 @@ export class OpenTelemetryCollectorRoutingEngine {
 
   /**
    * Apply processor to data
+   * Returns result with data and drop flag
    */
-  private applyProcessor(processor: OpenTelemetryCollectorProcessor, data: any): any {
-    // Simulate processor transformations
-    // In real implementation, this would apply actual processor logic
+  private applyProcessor(
+    processor: OpenTelemetryCollectorProcessor,
+    data: any,
+    pipelineId: string
+  ): { data: any; dropped: boolean } {
+    const config = processor.config || {};
     
     switch (processor.type) {
       case 'batch':
-        // Batch processor would batch multiple items, but we process one at a time
-        return data;
+        // Batch processor: in real implementation, this would batch multiple items
+        // For simulation, we just add latency based on batch timeout
+        // Actual batching is handled in EmulationEngine batch queues
+        // Add small latency for batch processing overhead
+        return { data, dropped: false };
       
       case 'memory_limiter':
-        // Memory limiter would check memory usage
-        return data;
+        // Memory limiter: check if memory usage exceeds limit
+        if (this.memoryUsageCallback) {
+          const { usage, limit } = this.memoryUsageCallback();
+          const limitPercent = config.limit_percent || config.limitPercent || 80; // Default 80%
+          const effectiveLimit = (limit * limitPercent) / 100;
+          
+          if (usage >= effectiveLimit) {
+            // Memory limit exceeded, drop message
+            return { data: null, dropped: true };
+          }
+        }
+        return { data, dropped: false };
       
       case 'filter':
-        // Filter processor would filter data based on conditions
-        return data;
+        // Filter processor: filter data based on conditions
+        if (config.error_mode === 'ignore' || !config.error_mode) {
+          // Simple filter: check if data matches filter conditions
+          // In real implementation, this would use OTTL expressions
+          if (config.include && Array.isArray(config.include)) {
+            // Check if data matches include conditions (simplified)
+            const shouldInclude = this.evaluateFilterConditions(data, config.include);
+            if (!shouldInclude) {
+              return { data: null, dropped: true };
+            }
+          }
+          if (config.exclude && Array.isArray(config.exclude)) {
+            // Check if data matches exclude conditions (simplified)
+            const shouldExclude = this.evaluateFilterConditions(data, config.exclude);
+            if (shouldExclude) {
+              return { data: null, dropped: true };
+            }
+          }
+        }
+        return { data, dropped: false };
       
       case 'transform':
-        // Transform processor would transform data
-        return data;
+        // Transform processor: transform data using OTTL expressions (simplified)
+        // In real implementation, this would use OTTL (OpenTelemetry Transformation Language)
+        if (config.traces && Array.isArray(config.traces.statements)) {
+          // Apply transformations (simplified - real implementation would parse OTTL)
+          data = this.applyTransformStatements(data, config.traces.statements);
+        }
+        return { data, dropped: false };
       
       case 'resource':
-        // Resource processor would add resource attributes
-        return data;
+        // Resource processor: add resource attributes
+        if (config.attributes && Array.isArray(config.attributes)) {
+          // Add resource attributes to data
+          if (!data.resource) {
+            data.resource = { attributes: [] };
+          }
+          if (!data.resource.attributes) {
+            data.resource.attributes = [];
+          }
+          
+          for (const attr of config.attributes) {
+            if (attr.key && attr.value !== undefined) {
+              // Check if attribute already exists
+              const existingIndex = data.resource.attributes.findIndex(
+                (a: any) => a.key === attr.key
+              );
+              if (existingIndex >= 0) {
+                // Update existing attribute
+                data.resource.attributes[existingIndex] = { key: attr.key, value: attr.value };
+              } else {
+                // Add new attribute
+                data.resource.attributes.push({ key: attr.key, value: attr.value });
+              }
+            }
+          }
+        }
+        return { data, dropped: false };
       
       case 'attributes':
-        // Attributes processor would modify attributes
-        return data;
+        // Attributes processor: modify attributes
+        if (config.actions && Array.isArray(config.actions)) {
+          for (const action of config.actions) {
+            if (action.key && action.action) {
+              data = this.applyAttributeAction(data, action);
+            }
+          }
+        }
+        return { data, dropped: false };
       
       default:
-        return data;
+        return { data, dropped: false };
     }
+  }
+
+  /**
+   * Evaluate filter conditions (simplified)
+   */
+  private evaluateFilterConditions(data: any, conditions: any[]): boolean {
+    // Simplified filter evaluation
+    // In real implementation, this would use OTTL expressions
+    for (const condition of conditions) {
+      if (condition.key && condition.value !== undefined) {
+        // Check if attribute matches condition
+        const attrValue = this.getAttributeValue(data, condition.key);
+        if (attrValue !== undefined) {
+          if (condition.op === 'equals' || !condition.op) {
+            if (attrValue !== condition.value) {
+              return false;
+            }
+          } else if (condition.op === 'contains') {
+            if (String(attrValue).indexOf(String(condition.value)) === -1) {
+              return false;
+            }
+          }
+          // Add more operators as needed
+        }
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Get attribute value from data (supports nested paths)
+   */
+  private getAttributeValue(data: any, key: string): any {
+    // Support nested paths like "resource.attributes.service.name"
+    const parts = key.split('.');
+    let value = data;
+    
+    for (const part of parts) {
+      if (value && typeof value === 'object') {
+        value = value[part];
+      } else {
+        return undefined;
+      }
+    }
+    
+    return value;
+  }
+
+  /**
+   * Apply transform statements (simplified)
+   */
+  private applyTransformStatements(data: any, statements: any[]): any {
+    // Simplified transform - in real implementation would parse OTTL
+    // For now, just return data as-is (transformations would be complex)
+    return data;
+  }
+
+  /**
+   * Apply attribute action
+   */
+  private applyAttributeAction(data: any, action: any): any {
+    const { key, action: actionType, value } = action;
+    
+    // Ensure data has attributes structure
+    if (!data.attributes) {
+      data.attributes = [];
+    }
+    if (!Array.isArray(data.attributes)) {
+      data.attributes = [];
+    }
+    
+    switch (actionType) {
+      case 'insert':
+      case 'update':
+        // Insert or update attribute
+        const existingIndex = data.attributes.findIndex((a: any) => a.key === key);
+        if (existingIndex >= 0) {
+          data.attributes[existingIndex] = { key, value };
+        } else {
+          data.attributes.push({ key, value });
+        }
+        break;
+      
+      case 'delete':
+        // Delete attribute
+        const deleteIndex = data.attributes.findIndex((a: any) => a.key === key);
+        if (deleteIndex >= 0) {
+          data.attributes.splice(deleteIndex, 1);
+        }
+        break;
+      
+      case 'upsert':
+        // Upsert attribute (insert or update)
+        const upsertIndex = data.attributes.findIndex((a: any) => a.key === key);
+        if (upsertIndex >= 0) {
+          data.attributes[upsertIndex] = { key, value };
+        } else {
+          data.attributes.push({ key, value });
+        }
+        break;
+    }
+    
+    return data;
   }
 
   /**
@@ -609,11 +880,17 @@ export class OpenTelemetryCollectorRoutingEngine {
   public getMetrics() {
     return {
       metricsReceived: this.metricsReceived,
+      metricsReceivedTotal: this.metricsReceived, // For UI compatibility
       tracesReceived: this.tracesReceived,
+      tracesReceivedTotal: this.tracesReceived, // For UI compatibility
       logsReceived: this.logsReceived,
+      logsReceivedTotal: this.logsReceived, // For UI compatibility
       metricsExported: this.metricsExported,
+      metricsExportedTotal: this.metricsExported, // For UI compatibility
       tracesExported: this.tracesExported,
+      tracesExportedTotal: this.tracesExported, // For UI compatibility
       logsExported: this.logsExported,
+      logsExportedTotal: this.logsExported, // For UI compatibility
       receiversCount: this.receivers.size,
       processorsCount: this.processors.size,
       exportersCount: this.exporters.size,

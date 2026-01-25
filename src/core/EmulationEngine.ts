@@ -53,6 +53,7 @@ import { GraphQLEmulationEngine } from './GraphQLEmulationEngine';
 import { SOAPEmulationEngine } from './SOAPEmulationEngine';
 import { WebSocketEmulationEngine } from './WebSocketEmulationEngine';
 import { OpenTelemetryCollectorRoutingEngine } from './OpenTelemetryCollectorRoutingEngine';
+import { OpenTelemetryCollectorEmulationEngine } from './OpenTelemetryCollectorEmulationEngine';
 import { PagerDutyEmulationEngine, PagerDutyIncident, PagerDutyEngineMetrics } from './PagerDutyEmulationEngine';
 import { alertSystem } from './AlertSystem';
 import { KeycloakEmulationEngine } from './KeycloakEmulationEngine';
@@ -315,6 +316,9 @@ export class EmulationEngine {
   
   // OpenTelemetry Collector routing engines per node
   private otelCollectorEngines: Map<string, OpenTelemetryCollectorRoutingEngine> = new Map();
+  
+  // OpenTelemetry Collector emulation engines per node
+  private otelCollectorEmulationEngines: Map<string, OpenTelemetryCollectorEmulationEngine> = new Map();
 
   // PagerDuty emulation engines per node
   private pagerDutyEngines: Map<string, PagerDutyEmulationEngine> = new Map();
@@ -2031,7 +2035,24 @@ export class EmulationEngine {
     
     // (MLflow updates removed)
     
-    // Process OpenTelemetry Collector batch flush
+    // Process OpenTelemetry Collector emulation updates
+    for (const [nodeId, otelEmulationEngine] of this.otelCollectorEmulationEngines.entries()) {
+      try {
+        otelEmulationEngine.performUpdate(deltaTime);
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'otel-collector', operation: 'performUpdate' },
+        });
+      }
+    }
+    
+    // Process OpenTelemetry Collector batch flush (legacy, kept for compatibility)
     for (const [nodeId, otelEngine] of this.otelCollectorEngines.entries()) {
       try {
         const node = this.nodes.find(n => n.id === nodeId);
@@ -2165,6 +2186,9 @@ export class EmulationEngine {
           break;
         case 'jaeger':
           this.simulateJaeger(node, config, metrics, hasIncomingConnections);
+          break;
+        case 'otel-collector':
+          this.simulateOpenTelemetryCollector(node, config, metrics, hasIncomingConnections);
           break;
         case 'keycloak':
           this.simulateKeycloak(node, config, metrics, hasIncomingConnections);
@@ -7058,6 +7082,46 @@ export class EmulationEngine {
   }
 
   /**
+   * OpenTelemetry Collector emulation
+   */
+  private simulateOpenTelemetryCollector(
+    node: CanvasNode,
+    config: ComponentConfig,
+    metrics: ComponentMetrics,
+    hasIncomingConnections: boolean
+  ): void {
+    const emulationEngine = this.otelCollectorEmulationEngines.get(node.id);
+    
+    if (!emulationEngine) {
+      // If engine not initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.latencyP50 = 0;
+      metrics.latencyP99 = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1; // Minimal utilization when idle
+      return;
+    }
+    
+    // Update config if it changed
+    emulationEngine.initializeConfig(node);
+    
+    // Get metrics from emulation engine
+    const otelMetrics = emulationEngine.calculateComponentMetrics();
+    
+    // Update component metrics
+    metrics.throughput = otelMetrics.throughput;
+    metrics.latency = otelMetrics.latency;
+    metrics.latencyP50 = otelMetrics.latencyP50;
+    metrics.latencyP99 = otelMetrics.latencyP99;
+    metrics.errorRate = otelMetrics.errorRate;
+    metrics.utilization = otelMetrics.utilization;
+    
+    // Add custom metrics
+    metrics.customMetrics = otelMetrics.customMetrics;
+  }
+
+  /**
    * WAF emulation
    */
   private simulateWAF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -9932,6 +9996,7 @@ export class EmulationEngine {
    * Initialize OpenTelemetry Collector Routing Engine for otel-collector node
    */
   private initializeOpenTelemetryCollectorEngine(node: CanvasNode): void {
+    // Create routing engine if not exists
     if (!this.otelCollectorEngines.has(node.id)) {
       const otelEngine = new OpenTelemetryCollectorRoutingEngine();
       // Set callback for getting Jaeger engines
@@ -9944,6 +10009,48 @@ export class EmulationEngine {
       // Ensure callback is set
       otelEngine.setGetJaegerEnginesCallback(() => this.getAllJaegerEngines());
       otelEngine.initializeConfig(node);
+    }
+    
+    // Create emulation engine if not exists
+    if (!this.otelCollectorEmulationEngines.has(node.id)) {
+      const routingEngine = this.otelCollectorEngines.get(node.id)!;
+      const emulationEngine = new OpenTelemetryCollectorEmulationEngine(routingEngine);
+      emulationEngine.initializeConfig(node);
+      
+      // Set memory usage callback for routing engine
+      routingEngine.setMemoryUsageCallback(() => {
+        const metrics = emulationEngine.getMetrics();
+        return {
+          usage: metrics.memoryUsage,
+          limit: metrics.memoryLimit,
+        };
+      });
+      
+      this.otelCollectorEmulationEngines.set(node.id, emulationEngine);
+    } else {
+      // Update config if engine already exists
+      const routingEngine = this.otelCollectorEngines.get(node.id)!;
+      const emulationEngine = this.otelCollectorEmulationEngines.get(node.id)!;
+      emulationEngine.initializeConfig(node);
+      
+      // Update memory usage callback
+      routingEngine.setMemoryUsageCallback(() => {
+        const metrics = emulationEngine.getMetrics();
+        return {
+          usage: metrics.memoryUsage,
+          limit: metrics.memoryLimit,
+        };
+      });
+      
+      // Update metrics callback
+      routingEngine.setMetricsCallback((latency: number, isError: boolean) => {
+        emulationEngine.recordLatency(latency);
+        if (isError) {
+          emulationEngine.recordError();
+        } else {
+          emulationEngine.recordSuccess();
+        }
+      });
     }
   }
 

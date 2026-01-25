@@ -150,6 +150,17 @@
   - Metrics Export в Prometheus или StatsD
   - Полный набор метрик производительности и использования
 
+- **[OpenTelemetry Collector](./observability/opentelemetry-collector.md)** - Vendor-agnostic pipeline для приема, обработки и экспорта телеметрических данных
+  - Receivers для приема данных из различных источников (OTLP, Prometheus, Jaeger, Zipkin, Kafka, File Log)
+  - Processors для обработки и трансформации данных (batch, memory_limiter, filter, transform, resource, attributes)
+  - Exporters для отправки данных в различные backends (OTLP, Prometheus, Jaeger, Zipkin, Logging, File)
+  - Pipelines для маршрутизации данных через receivers → processors → exporters
+  - Data Type Routing для автоматической маршрутизации traces, metrics, logs
+  - Format Conversion для конвертации между форматами (Jaeger → OTLP, Prometheus → OTLP)
+  - Batch Processing для группировки данных в батчи
+  - Memory Limiting для защиты от перегрузки памяти
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -353,6 +364,7 @@
 - **Grafana:** [Документация Grafana](./observability/grafana.md)
 - **Loki:** [Документация Loki](./observability/loki.md)
 - **Jaeger:** [Документация Jaeger](./observability/jaeger.md)
+- **OpenTelemetry Collector:** [Документация OpenTelemetry Collector](./observability/opentelemetry-collector.md)
 
 ## Обновления
 
@@ -401,3 +413,7 @@
 - [Jaeger Architecture](https://www.jaegertracing.io/docs/1.50/architecture/)
 - [Jaeger Sampling](https://www.jaegertracing.io/docs/1.50/sampling/)
 - [Jaeger Storage Backends](https://www.jaegertracing.io/docs/1.50/deployment/#storage-backends)
+- [Официальная документация OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
+- [OpenTelemetry Collector Architecture](https://opentelemetry.io/docs/collector/architecture/)
+- [OpenTelemetry Collector Configuration](https://opentelemetry.io/docs/collector/configuration/)
+- [OpenTelemetry Transformation Language (OTTL)](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl)

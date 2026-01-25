@@ -11,6 +11,7 @@ import { createPrometheusRule } from './prometheusRules';
 import { createGrafanaRule } from './grafanaRules';
 import { createLokiRule } from './lokiRules';
 import { createJaegerRule } from './jaegerRules';
+import { createOTelCollectorReceiverRule, createOTelCollectorExporterRule } from './otelCollectorRules';
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
@@ -43,6 +44,8 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     createGrafanaRule(discovery),
     createLokiRule(discovery),
     createJaegerRule(discovery),
+    createOTelCollectorReceiverRule(discovery),
+    createOTelCollectorExporterRule(discovery),
     
     // Integration - MuleSoft
     createMuleSoftTargetRule(discovery),
