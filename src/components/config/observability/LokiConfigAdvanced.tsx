@@ -1,4 +1,5 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -21,7 +22,8 @@ import {
   Edit2,
   X
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
+import { OBSERVABILITY_PROFILES } from './profiles';
 
 interface LokiConfigProps {
   componentId: string;
@@ -54,6 +56,7 @@ interface LokiConfig {
 
 export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
   const { nodes, updateNode, connections } = useCanvasStore();
+  const { componentMetrics } = useEmulationStore();
   const node = nodes.find((n) => n.id === componentId) as CanvasNode | undefined;
 
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
@@ -61,21 +64,47 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
   // Check if Loki has incoming connections (is receiving logs)
   const hasIncomingConnections = connections.some(conn => conn.target === componentId);
 
+  // Получаем значения по умолчанию из профиля
+  const profileDefaults = OBSERVABILITY_PROFILES.loki?.defaults || {};
+  
   const config = (node.data.config as any) || {} as LokiConfig;
-  const serverUrl = config.serverUrl || 'http://loki:3100';
-  const streams = config.streams || [
-    { name: 'app-logs', labels: { app: 'web', env: 'prod' }, entries: 1250000, size: 2.5, lastEntry: '2s ago' },
-    { name: 'error-logs', labels: { level: 'error', app: 'api' }, entries: 45000, size: 0.8, lastEntry: '5s ago' },
-    { name: 'access-logs', labels: { type: 'access', app: 'nginx' }, entries: 890000, size: 1.8, lastEntry: '1s ago' },
-  ];
-  const queries = config.queries || [
-    { id: '1', query: '{app="web"} |= "error"', duration: 125, results: 1250 },
-    { id: '2', query: 'rate({level="error"}[5m])', duration: 89, results: 45 },
-  ];
-  const totalEntries = config.totalEntries || streams.reduce((sum, s) => sum + s.entries, 0);
-  const totalSize = config.totalSize || streams.reduce((sum, s) => sum + s.size, 0);
-  const ingestionRate = config.ingestionRate || 12500;
-  const queryLatency = config.queryLatency || 95;
+  const serverUrl = config.serverUrl || profileDefaults.serverUrl || 'http://loki:3100';
+  
+  // Получаем реальные метрики из симуляции
+  const metrics = componentMetrics.get(componentId);
+  const customMetrics = metrics?.customMetrics || {};
+  
+  // Используем реальные метрики вместо хардкода
+  const ingestionRate = customMetrics.ingestion_lines_per_second || 0;
+  const queryLatency = customMetrics.average_query_latency || 0;
+  const activeStreams = customMetrics.active_streams || 0;
+  const totalStorageSize = customMetrics.total_storage_size || 0;
+  
+  // Получаем streams из конфига (структура) - без хардкода дефолтных значений
+  const streams = (config.streams && Array.isArray(config.streams)) ? config.streams : [];
+  
+  // Получаем queries из конфига (структура) - без хардкода дефолтных значений
+  const queries = (config.queries && Array.isArray(config.queries)) ? config.queries : [];
+  
+  // Рассчитываем totalEntries и totalSize на основе реальных метрик или streams
+  const totalEntries = useMemo(() => {
+    if (streams.length > 0) {
+      return streams.reduce((sum, s) => sum + (s.entries || 0), 0);
+    }
+    // Если нет streams в конфиге, используем оценку на основе метрик
+    return Math.floor(ingestionRate * 60); // Примерная оценка за минуту
+  }, [streams, ingestionRate]);
+  
+  const totalSize = useMemo(() => {
+    if (totalStorageSize > 0) {
+      // Конвертируем bytes в GB для отображения
+      return totalStorageSize / (1024 * 1024 * 1024);
+    }
+    if (streams.length > 0) {
+      return streams.reduce((sum, s) => sum + (s.size || 0), 0);
+    }
+    return 0;
+  }, [streams, totalStorageSize]);
 
   const [editingStreamIndex, setEditingStreamIndex] = useState<number | null>(null);
   const [editingLabelKey, setEditingLabelKey] = useState<{ streamIndex: number; labelKey: string } | null>(null);
@@ -131,7 +160,13 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
     // Check if label key already exists
     const stream = streams[streamIndex];
     if (stream.labels[key]) {
-      // If key exists, just update the value
+      // If key exists with the same value, do nothing (no need to update)
+      if (stream.labels[key] === value) {
+        // Label already exists with the same value - no action needed
+        setNewLabelKey(null);
+        return;
+      }
+      // If key exists with different value, update it
       updateStreamLabel(streamIndex, key, value);
     } else {
       // If key doesn't exist, add new label
@@ -267,7 +302,7 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
                                     </Button>
                                   </div>
                                   <CardDescription className="text-xs mt-1">
-                                    {stream.entries.toLocaleString()} entries • {stream.size} GB
+                                    {stream.entries?.toLocaleString() || 0} entries • {stream.size?.toFixed(2) || 0} GB
                                     {stream.lastEntry && ` • Last: ${stream.lastEntry}`}
                                   </CardDescription>
                                 </>
@@ -362,50 +397,68 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
                                 )}
                               </div>
                             ))}
-                            {newLabelKey && newLabelKey.streamIndex === index && (
-                              <div className="flex items-center gap-2">
-                                <Input
-                                  value={newLabelKey.key}
-                                  onChange={(e) => setNewLabelKey({ ...newLabelKey, key: e.target.value })}
-                                  placeholder="label-key"
-                                  className="flex-1"
-                                />
-                                <Input
-                                  value={newLabelKey.value}
-                                  onChange={(e) => setNewLabelKey({ ...newLabelKey, value: e.target.value })}
-                                  placeholder="label-value"
-                                  className="flex-1"
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && newLabelKey.key && newLabelKey.value) {
-                                      addStreamLabel(index, newLabelKey.key, newLabelKey.value);
-                                      // Clear form but keep it open for adding more labels
-                                      setNewLabelKey({ streamIndex: index, key: '', value: '' });
-                                    }
-                                  }}
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    if (newLabelKey.key && newLabelKey.value) {
-                                      addStreamLabel(index, newLabelKey.key, newLabelKey.value);
-                                      // Clear form but keep it open for adding more labels
-                                      setNewLabelKey({ streamIndex: index, key: '', value: '' });
-                                    }
-                                  }}
-                                  disabled={!newLabelKey.key || !newLabelKey.value}
-                                >
-                                  <Plus className="h-3 w-3" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => setNewLabelKey(null)}
-                                >
-                                  <X className="h-3 w-3" />
-                                </Button>
-                              </div>
-                            )}
+                            {newLabelKey && newLabelKey.streamIndex === index && (() => {
+                              const stream = streams[index];
+                              const keyExists = stream.labels[newLabelKey.key] !== undefined;
+                              const valueMatches = stream.labels[newLabelKey.key] === newLabelKey.value;
+                              const isDuplicate = keyExists && valueMatches;
+                              
+                              return (
+                                <div className="space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      value={newLabelKey.key}
+                                      onChange={(e) => setNewLabelKey({ ...newLabelKey, key: e.target.value })}
+                                      placeholder="label-key"
+                                      className={`flex-1 ${keyExists ? 'border-yellow-500' : ''}`}
+                                    />
+                                    <Input
+                                      value={newLabelKey.value}
+                                      onChange={(e) => setNewLabelKey({ ...newLabelKey, value: e.target.value })}
+                                      placeholder="label-value"
+                                      className="flex-1"
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && newLabelKey.key && newLabelKey.value && !isDuplicate) {
+                                          addStreamLabel(index, newLabelKey.key, newLabelKey.value);
+                                          // Clear form but keep it open for adding more labels
+                                          setNewLabelKey({ streamIndex: index, key: '', value: '' });
+                                        }
+                                      }}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => {
+                                        if (newLabelKey.key && newLabelKey.value && !isDuplicate) {
+                                          addStreamLabel(index, newLabelKey.key, newLabelKey.value);
+                                          // Clear form but keep it open for adding more labels
+                                          setNewLabelKey({ streamIndex: index, key: '', value: '' });
+                                        }
+                                      }}
+                                      disabled={!newLabelKey.key || !newLabelKey.value || isDuplicate}
+                                      title={isDuplicate ? 'Label with this key and value already exists' : keyExists ? 'Will update existing label value' : 'Add new label'}
+                                    >
+                                      <Plus className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setNewLabelKey(null)}
+                                    >
+                                      <X className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                  {keyExists && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {isDuplicate 
+                                        ? `⚠️ Label "${newLabelKey.key}" already exists with value "${newLabelKey.value}"`
+                                        : `ℹ️ Label "${newLabelKey.key}" exists with value "${stream.labels[newLabelKey.key]}". Will be updated.`
+                                      }
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </CardContent>
@@ -592,7 +645,7 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
                         updateConfig({ serverUrl: value });
                       }
                     }}
-                    placeholder="http://loki:3100"
+                    placeholder={profileDefaults.serverUrl || 'http://loki:3100'}
                     pattern="https?://.*"
                   />
                   <p className="text-xs text-muted-foreground">
@@ -600,6 +653,38 @@ export function LokiConfigAdvanced({ componentId }: LokiConfigProps) {
                     In simulation, logs are received automatically from connected components via data flow connections.
                     The URL is also used by Grafana datasource configuration to find this Loki instance.
                   </p>
+                </div>
+              </CardContent>
+            </Card>
+            
+            {/* Real-time Metrics */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Real-time Metrics</CardTitle>
+                <CardDescription>Current metrics from simulation</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Ingestion Rate</Label>
+                    <div className="text-2xl font-bold">{Math.round(ingestionRate).toLocaleString()}</div>
+                    <p className="text-xs text-muted-foreground">lines/second</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Query Latency</Label>
+                    <div className="text-2xl font-bold">{Math.round(queryLatency)}</div>
+                    <p className="text-xs text-muted-foreground">ms (average)</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Active Streams</Label>
+                    <div className="text-2xl font-bold">{activeStreams.toLocaleString()}</div>
+                    <p className="text-xs text-muted-foreground">streams</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm font-semibold">Storage Size</Label>
+                    <div className="text-2xl font-bold">{totalSize.toFixed(2)}</div>
+                    <p className="text-xs text-muted-foreground">GB</p>
+                  </div>
                 </div>
               </CardContent>
             </Card>

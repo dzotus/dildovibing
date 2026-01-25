@@ -1,5 +1,168 @@
 # Patch Notes
 
+## Версия 0.1.8t - Loki: Rate Limiting, Real-time Metrics, Connection Rules, No Hardcode
+
+### Loki: Улучшение симуляции и устранение хардкода
+
+**Критическое улучшение**: Улучшена симуляция Loki с реализацией правильного rate limiting с временными окнами, расчетом метрик per second на основе временных окон, периодическим retention, устранением хардкода из UI и симуляции, созданием Connection Rules, обновлением профиля. Все реализовано без хардкода - значения по умолчанию берутся из профилей, UI синхронизируется с реальными метриками из симуляции, симуляция соответствует реальному поведению Loki (push API для ingestion, HTTP API для queries).
+
+#### 1. Улучшение LokiEmulationEngine ✅
+
+**Улучшение**: Реализован правильный rate limiting и расчет метрик на основе временных окон.
+
+**Реализовано**:
+- ✅ В `src/core/LokiEmulationEngine.ts`:
+  - **Rate limiting с временными окнами:**
+    - `checkIngestionRateLimit()` - проверка ingestion rate limit с окном 1 секунда
+    - `checkQueryRateLimit()` - проверка query rate limit с окном 1 секунда
+    - Отдельные счетчики для каждого источника (sourceId)
+    - Возврат ошибки `429 Too Many Requests` при превышении лимита
+  - **Расчет метрик per second:**
+    - История ingestion: `ingestionHistory` с временными метками
+    - История queries: `queryHistory` с временными метками
+    - Временное окно: 60 секунд для расчета метрик
+    - `calculateIngestionRate()` - расчет lines/sec и bytes/sec на основе окна
+    - `calculateQueryRate()` - расчет queries/sec на основе окна
+    - Автоматическая очистка старой истории (старше окна)
+  - **Периодический retention:**
+    - `checkAndPerformRetention()` - проверка и выполнение retention каждые 5 минут
+    - `lastRetentionRun` - отслеживание времени последнего выполнения
+    - `RETENTION_INTERVAL_MS = 5 * 60 * 1000` - интервал 5 минут
+- ✅ Отсутствие хардкода:
+  - Все лимиты берутся из конфигурации (`ingestionRateLimit`, `queryRateLimit`)
+  - Метрики рассчитываются на основе реальных данных из временного окна
+  - Retention применяется периодически, а не по требованию
+
+#### 2. Устранение хардкода из EmulationEngine ✅
+
+**Улучшение**: Убран хардкод `avgLogLineSize` и улучшена генерация логов.
+
+**Реализовано**:
+- ✅ В `src/core/EmulationEngine.ts`:
+  - **Убран хардкод avgLogLineSize:**
+    - Получение `avgLogLineSize` из конфига Loki (`lokiConfig.avgLogLineSize`)
+    - Если не задано, расчет на основе реальных streams:
+      - `totalSize / totalEntries` из `lokiEngine.getStreams()`
+    - Дефолтное значение 200 байт (из профиля) только если нет streams
+  - **Улучшена генерация логов:**
+    - Использование реальных метрик компонента (`errorRate`, `utilization`)
+    - Определение уровня логов на основе метрик:
+      - `errorRate > 0.1` → `error`
+      - `utilization > 0.8` → `warn`
+      - Иначе → `info`
+    - Генерация реалистичных сообщений логов с учетом метрик
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации или рассчитываются динамически
+  - Генерация логов учитывает реальное состояние компонента
+
+#### 3. Connection Rules для Loki ✅
+
+**Улучшение**: Созданы Connection Rules для автоматической настройки при создании connections.
+
+**Реализовано**:
+- ✅ Создан файл `src/services/connection/rules/lokiRules.ts`:
+  - Функция `createLokiRule()` - создание правила подключения
+  - `sourceType: '*'` - любой компонент может отправлять логи в Loki
+  - `targetTypes: ['loki']` - только Loki может быть целевым компонентом
+  - `updateSourceConfig: () => null` - не требуется обновление конфига источника
+  - `updateTargetConfig: () => null` - streams создаются автоматически при ingestion
+  - `validateConnection()` - валидация соединения
+- ✅ Зарегистрировано в `src/services/connection/rules/index.ts`:
+  - Импорт `createLokiRule`
+  - Добавлено в список правил в `initializeConnectionRules()`
+- ✅ Отсутствие хардкода:
+  - Все настройки берутся из конфигурации компонентов
+  - ServiceDiscovery используется для разрешения имен и портов
+
+#### 4. Обновление профиля Loki ✅
+
+**Улучшение**: Профиль Loki обновлен с добавлением недостающих полей.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/profiles.ts`:
+  - Добавлены поля в `defaults`:
+    - `serverUrl: 'http://loki:3100'` - URL сервера Loki
+    - `avgLogLineSize: 200` - средний размер строки лога (байты)
+    - `ingestionRateLimit: null` - лимит ingestion (lines/sec, null = unlimited)
+    - `queryRateLimit: null` - лимит queries (queries/sec, null = unlimited)
+  - Добавлена секция `server` с полем `serverUrl`
+  - Добавлена секция `rateLimits` с полями `ingestionRateLimit` и `queryRateLimit`
+  - Обновлена секция `retention` с добавлением поля `avgLogLineSize`
+- ✅ Отсутствие хардкода:
+  - Все значения по умолчанию определены в профиле
+  - Пользователь может настроить все параметры через UI
+
+#### 5. Обновление LokiConfigAdvanced ✅
+
+**Улучшение**: Убран хардкод и добавлена синхронизация с реальными метриками.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/LokiConfigAdvanced.tsx`:
+  - **Убран хардкод:**
+    - Дефолтные streams больше не хардкодятся - используется пустой массив или значения из конфига
+    - Дефолтные queries больше не хардкодятся - используется пустой массив или значения из конфига
+    - Статичные значения заменены на реальные метрики
+  - **Синхронизация с реальными метриками:**
+    - Импорт `useEmulationStore` для получения метрик
+    - Получение метрик из `componentMetrics.get(componentId)`
+    - Использование `customMetrics` для отображения:
+      - `ingestion_lines_per_second` → `ingestionRate`
+      - `average_query_latency` → `queryLatency`
+      - `active_streams` → `activeStreams`
+      - `total_storage_size` → `totalStorageSize` (конвертация в GB)
+    - Расчет `totalEntries` и `totalSize` на основе реальных метрик или streams
+  - **Добавлена панель Real-time Metrics:**
+    - Отображение текущих метрик из симуляции
+    - Ingestion Rate (lines/second)
+    - Query Latency (ms, average)
+    - Active Streams
+    - Storage Size (GB)
+  - **Использование профиля:**
+    - Импорт `OBSERVABILITY_PROFILES`
+    - Получение значений по умолчанию из `profileDefaults`
+    - `serverUrl` использует значение из профиля
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из профиля или реальных метрик
+  - Нет статических значений в коде
+  - UI обновляется в реальном времени на основе симуляции
+
+#### 6. Интеграция retention в симуляцию ✅
+
+**Улучшение**: Retention применяется периодически в каждом цикле симуляции.
+
+**Реализовано**:
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Вызов `lokiEngine.checkAndPerformRetention(Date.now())` в `simulateLoki()`
+  - Retention выполняется автоматически каждые 5 минут
+  - Обновление метрик после retention
+- ✅ Отсутствие хардкода:
+  - Интервал retention настраивается через `RETENTION_INTERVAL_MS`
+  - Retention period берется из конфигурации (`retentionPeriod`)
+
+**Изменённые файлы**:
+- `src/core/LokiEmulationEngine.ts`
+  - ✅ Реализован rate limiting с временными окнами
+  - ✅ Расчет метрик per second на основе временного окна (60 секунд)
+  - ✅ Периодический retention (каждые 5 минут)
+  - ✅ История ingestion и queries для точных метрик
+- `src/core/EmulationEngine.ts`
+  - ✅ Убран хардкод `avgLogLineSize` - берется из конфига или рассчитывается
+  - ✅ Улучшена генерация логов на основе реальных метрик компонентов
+  - ✅ Интеграция периодического retention
+- `src/services/connection/rules/lokiRules.ts` (новый)
+  - ✅ Connection Rules для Loki
+- `src/services/connection/rules/index.ts`
+  - ✅ Регистрация правила Loki
+- `src/components/config/observability/profiles.ts`
+  - ✅ Обновлен профиль Loki с добавлением полей: `serverUrl`, `avgLogLineSize`, `ingestionRateLimit`, `queryRateLimit`
+- `src/components/config/observability/LokiConfigAdvanced.tsx`
+  - ✅ Убран хардкод дефолтных streams и queries
+  - ✅ Синхронизация с реальными метриками из `useEmulationStore`
+  - ✅ Добавлена панель Real-time Metrics
+  - ✅ Использование значений из профиля
+
+---
+
 ## Версия 0.1.8s - Grafana: Routing Engine, Real HTTP Queries, Query Caching, Load Balancing, HTTP Visualization, No Hardcode
 
 ### Grafana: Реализация Routing Engine и реальных HTTP запросов

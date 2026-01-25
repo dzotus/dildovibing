@@ -81,7 +81,27 @@ export class LokiEmulationEngine {
   private config: LokiEmulationConfig | null = null;
   private streams: Map<string, LogStream> = new Map(); // stream key (labels hash) -> stream
   private queryStatuses: Map<string, QueryStatus> = new Map();
-  private lastIngestionTimes: Map<string, number> = new Map(); // source -> last ingestion time
+  
+  // Rate limiting для ingestion
+  private ingestionRateLimiter: Map<string, { count: number; windowStart: number }> = new Map();
+  private readonly RATE_LIMIT_WINDOW_MS = 1000; // 1 second window
+  
+  // Rate limiting для queries
+  private queryRateLimiter: { count: number; windowStart: number } = { count: 0, windowStart: Date.now() };
+  
+  // История ingestion и query latencies
+  private ingestionLatencyHistory: number[] = [];
+  private queryLatencyHistory: number[] = [];
+  private readonly MAX_LATENCY_HISTORY = 100;
+  
+  // История для расчета per second метрик
+  private ingestionHistory: Array<{ timestamp: number; lines: number; bytes: number }> = [];
+  private queryHistory: Array<{ timestamp: number; latency: number }> = [];
+  private readonly METRICS_WINDOW_MS = 60000; // 1 minute window
+  
+  // Retention tracking
+  private lastRetentionRun: number = 0;
+  private readonly RETENTION_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
   
   // Метрики самого Loki
   private lokiMetrics: LokiMetrics = {
@@ -96,11 +116,6 @@ export class LokiEmulationEngine {
     totalStorageSize: 0,
     retentionDeletions: 0,
   };
-
-  // История ingestion и query latencies
-  private ingestionLatencyHistory: number[] = [];
-  private queryLatencyHistory: number[] = [];
-  private readonly MAX_LATENCY_HISTORY = 100;
 
   /**
    * Инициализирует конфигурацию Loki из конфига компонента
@@ -196,19 +211,17 @@ export class LokiEmulationEngine {
     this.lokiMetrics.ingestionRequestsTotal++;
 
     try {
-      // Проверка rate limit
+      // Проверка rate limit с временным окном
       if (this.config.ingestionRateLimit) {
-        const sourceKey = sourceId || 'default';
-        const lastIngestion = this.lastIngestionTimes.get(sourceKey) || 0;
-        const now = Date.now();
-        const timeSinceLastIngestion = now - lastIngestion;
-        
-        // Упрощенная проверка rate limit (в реальности более сложная)
-        if (timeSinceLastIngestion < 1000) {
-          // Если меньше секунды прошло, проверяем лимит
-          // Для упрощения пропускаем детальную проверку
+        if (!this.checkIngestionRateLimit(sourceId || 'default', logs.reduce((sum, l) => sum + l.values.length, 0))) {
+          this.lokiMetrics.ingestionErrorsTotal++;
+          return {
+            success: false,
+            error: '429 Too Many Requests: ingestion rate limit exceeded',
+            ingestedLines: 0,
+            ingestedBytes: 0,
+          };
         }
-        this.lastIngestionTimes.set(sourceKey, now);
       }
 
       let totalLines = 0;
@@ -273,6 +286,18 @@ export class LokiEmulationEngine {
       if (this.ingestionLatencyHistory.length > this.MAX_LATENCY_HISTORY) {
         this.ingestionLatencyHistory.shift();
       }
+      
+      // Добавляем в историю для расчета per second метрик
+      const now = Date.now();
+      this.ingestionHistory.push({
+        timestamp: now,
+        lines: totalLines,
+        bytes: totalBytes,
+      });
+      
+      // Очищаем старую историю (старше окна)
+      const cutoff = now - this.METRICS_WINDOW_MS;
+      this.ingestionHistory = this.ingestionHistory.filter(h => h.timestamp > cutoff);
 
       return {
         success: true,
@@ -310,9 +335,17 @@ export class LokiEmulationEngine {
     this.lokiMetrics.queryRequestsTotal++;
 
     try {
-      // Проверка rate limit
+      // Проверка rate limit для queries
       if (this.config.queryRateLimit) {
-        // Упрощенная проверка rate limit
+        if (!this.checkQueryRateLimit()) {
+          this.lokiMetrics.queryErrorsTotal++;
+          return {
+            success: false,
+            error: '429 Too Many Requests: query rate limit exceeded',
+            latency: 0,
+            resultsCount: 0,
+          };
+        }
       }
 
       // Парсим LogQL query
@@ -327,6 +360,17 @@ export class LokiEmulationEngine {
       if (this.queryLatencyHistory.length > this.MAX_LATENCY_HISTORY) {
         this.queryLatencyHistory.shift();
       }
+      
+      // Добавляем в историю для расчета per second метрик
+      const now = Date.now();
+      this.queryHistory.push({
+        timestamp: now,
+        latency,
+      });
+      
+      // Очищаем старую историю (старше окна)
+      const cutoff = now - this.METRICS_WINDOW_MS;
+      this.queryHistory = this.queryHistory.filter(h => h.timestamp > cutoff);
 
       return {
         success: true,
@@ -571,9 +615,19 @@ export class LokiEmulationEngine {
   }
 
   /**
+   * Проверяет и выполняет retention если нужно (периодически)
+   */
+  checkAndPerformRetention(currentTime: number): void {
+    if (currentTime - this.lastRetentionRun >= this.RETENTION_INTERVAL_MS) {
+      this.performRetention(currentTime);
+      this.lastRetentionRun = currentTime;
+    }
+  }
+
+  /**
    * Применяет retention policy
    */
-  performRetention(currentTime: number): void {
+  private performRetention(currentTime: number): void {
     if (!this.config) return;
 
     const retentionMs = this.parseDuration(this.config.retentionPeriod || '168h');
@@ -660,26 +714,94 @@ export class LokiEmulationEngine {
       ? totalQueryErrors / totalQueryRequests
       : 0;
 
-    // Оценка per second (упрощенная)
-    const ingestionLinesPerSecond = totalIngestionLines > 0 ? totalIngestionLines / 100 : 0; // Примерная оценка
-    const ingestionBytesPerSecond = totalIngestionBytes > 0 ? totalIngestionBytes / 100 : 0;
-    const queriesPerSecond = totalQueryRequests > 0 ? totalQueryRequests / 100 : 0;
+    // Расчет per second на основе временного окна
+    const ingestionRates = this.calculateIngestionRate();
+    const queryRates = this.calculateQueryRate();
 
     // Storage utilization (0-1)
     const maxStorage = (this.config?.maxStreams || 10000) * 100 * 1024 * 1024; // Примерная оценка
     const storageUtilization = Math.min(1, this.lokiMetrics.totalStorageSize / maxStorage);
 
     return {
-      ingestionLinesPerSecond,
-      ingestionBytesPerSecond,
+      ingestionLinesPerSecond: ingestionRates.linesPerSecond,
+      ingestionBytesPerSecond: ingestionRates.bytesPerSecond,
       averageIngestionLatency: avgIngestionLatency,
       ingestionErrorRate,
-      queriesPerSecond,
+      queriesPerSecond: queryRates.queriesPerSecond,
       averageQueryLatency: avgQueryLatency,
       queryErrorRate,
       storageUtilization,
       streamCount: this.streams.size,
     };
+  }
+
+  /**
+   * Рассчитывает ingestion rate на основе временного окна
+   */
+  private calculateIngestionRate(): { linesPerSecond: number; bytesPerSecond: number } {
+    const now = Date.now();
+    const cutoff = now - this.METRICS_WINDOW_MS;
+    
+    const recent = this.ingestionHistory.filter(h => h.timestamp > cutoff);
+    const totalLines = recent.reduce((sum, h) => sum + h.lines, 0);
+    const totalBytes = recent.reduce((sum, h) => sum + h.bytes, 0);
+    
+    const seconds = this.METRICS_WINDOW_MS / 1000;
+    return {
+      linesPerSecond: totalLines / seconds,
+      bytesPerSecond: totalBytes / seconds,
+    };
+  }
+
+  /**
+   * Рассчитывает query rate на основе временного окна
+   */
+  private calculateQueryRate(): { queriesPerSecond: number } {
+    const now = Date.now();
+    const cutoff = now - this.METRICS_WINDOW_MS;
+    
+    const recent = this.queryHistory.filter(h => h.timestamp > cutoff);
+    const totalQueries = recent.length;
+    
+    const seconds = this.METRICS_WINDOW_MS / 1000;
+    return {
+      queriesPerSecond: totalQueries / seconds,
+    };
+  }
+
+  /**
+   * Проверяет ingestion rate limit с временным окном
+   */
+  private checkIngestionRateLimit(sourceId: string, linesCount: number): boolean {
+    if (!this.config?.ingestionRateLimit) return true;
+    
+    const now = Date.now();
+    const key = sourceId || 'default';
+    
+    let limiter = this.ingestionRateLimiter.get(key);
+    if (!limiter || now - limiter.windowStart >= this.RATE_LIMIT_WINDOW_MS) {
+      limiter = { count: 0, windowStart: now };
+      this.ingestionRateLimiter.set(key, limiter);
+    }
+    
+    limiter.count += linesCount;
+    return limiter.count <= this.config.ingestionRateLimit;
+  }
+
+  /**
+   * Проверяет query rate limit с временным окном
+   */
+  private checkQueryRateLimit(): boolean {
+    if (!this.config?.queryRateLimit) return true;
+    
+    const now = Date.now();
+    
+    if (now - this.queryRateLimiter.windowStart >= this.RATE_LIMIT_WINDOW_MS) {
+      this.queryRateLimiter = { count: 0, windowStart: now };
+    }
+    
+    this.queryRateLimiter.count++;
+    return this.queryRateLimiter.count <= this.config.queryRateLimit;
   }
 
   /**

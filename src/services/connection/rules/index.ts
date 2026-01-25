@@ -9,6 +9,7 @@ import { createDatabaseClientRule } from './databaseRules';
 import { createMessagingProducerRule } from './messagingRules';
 import { createPrometheusRule } from './prometheusRules';
 import { createGrafanaRule } from './grafanaRules';
+import { createLokiRule } from './lokiRules';
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
@@ -39,6 +40,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     // Observability
     createPrometheusRule(discovery),
     createGrafanaRule(discovery),
+    createLokiRule(discovery),
     
     // Integration - MuleSoft
     createMuleSoftTargetRule(discovery),

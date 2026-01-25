@@ -8300,6 +8300,9 @@ export class EmulationEngine {
 
     const lokiEngine = this.lokiEngines.get(node.id)!;
     
+    // Проверяем и выполняем retention периодически
+    lokiEngine.checkAndPerformRetention(Date.now());
+    
     // Process ingestion from incoming connections
     if (hasIncomingConnections) {
       this.processLokiIngestion(node, lokiEngine);
@@ -8357,9 +8360,21 @@ export class EmulationEngine {
       const connMetrics = this.connectionMetrics.get(conn.id);
       if (!connMetrics || connMetrics.traffic === 0) continue;
 
+      // Получаем avgLogLineSize из конфига Loki или рассчитываем на основе реальных streams
+      const lokiConfig = node.data.config || {};
+      let avgLogLineSize = (lokiConfig.avgLogLineSize as number) || 200; // дефолт из профиля
+      
+      // Пытаемся рассчитать на основе реальных streams
+      const streams = lokiEngine.getStreams();
+      if (streams.length > 0) {
+        const totalSize = streams.reduce((sum, s) => sum + s.size, 0);
+        const totalEntries = streams.reduce((sum, s) => sum + s.entries.length, 0);
+        if (totalEntries > 0) {
+          avgLogLineSize = totalSize / totalEntries;
+        }
+      }
+      
       // Estimate log lines per second from connection traffic
-      // Assume average log line size of 200 bytes
-      const avgLogLineSize = 200;
       const estimatedLinesPerSecond = connMetrics.traffic / avgLogLineSize;
       
       // Generate log entries based on source component type
@@ -8393,8 +8408,13 @@ export class EmulationEngine {
 
     // Get component metrics to generate realistic logs
     const metrics = this.metrics.get(node.id);
+    const errorRate = metrics?.errorRate || 0;
+    const utilization = metrics?.utilization || 0;
     
-    // Generate log entries (simplified - in real system would be more sophisticated)
+    // Определяем уровень логов на основе метрик компонента
+    const logLevel = errorRate > 0.1 ? 'error' : utilization > 0.8 ? 'warn' : 'info';
+    
+    // Generate log entries на основе реальных метрик
     const numBatches = Math.ceil(linesPerSecond / 100); // Batch size of 100 lines
     const linesPerBatch = Math.floor(linesPerSecond / numBatches) || 1;
     
@@ -8403,7 +8423,6 @@ export class EmulationEngine {
       
       for (let j = 0; j < linesPerBatch; j++) {
         const timestamp = Date.now() * 1000000 + j; // nanoseconds
-        const logLevel = this.getLogLevel(metrics);
         const logMessage = this.generateLogMessage(componentType, componentLabel, logLevel, metrics);
         
         values.push([timestamp.toString(), logMessage]);
@@ -8411,7 +8430,7 @@ export class EmulationEngine {
       
       if (values.length > 0) {
         logs.push({
-          stream: { ...streamLabels, level: this.getLogLevel(metrics) },
+          stream: { ...streamLabels, level: logLevel },
           values,
         });
       }

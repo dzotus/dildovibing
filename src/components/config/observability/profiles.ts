@@ -211,16 +211,33 @@ export const OBSERVABILITY_PROFILES: Record<string, ComponentProfile> = {
     badge: 'Logs',
     docsUrl: 'https://grafana.com/oss/loki/',
     defaults: {
+      serverUrl: 'http://loki:3100',
       retentionPeriod: '168h',
       maxStreams: 10000,
       maxLineSize: 256000,
+      avgLogLineSize: 200,
       enableCompression: true,
       compressionType: 'gzip',
       enableAuth: false,
       enableMultiTenancy: false,
       tenants: [],
+      ingestionRateLimit: null, // lines per second, null = unlimited
+      queryRateLimit: null, // queries per second, null = unlimited
     },
     sections: [
+      {
+        id: 'server',
+        title: 'Server Configuration',
+        fields: [
+          {
+            id: 'serverUrl',
+            label: 'Server URL',
+            type: 'text',
+            placeholder: 'http://loki:3100',
+            description: 'Server URL used by Grafana and other components to connect to Loki',
+          },
+        ],
+      },
       {
         id: 'retention',
         title: 'Retention & Limits',
@@ -247,6 +264,37 @@ export const OBSERVABILITY_PROFILES: Record<string, ComponentProfile> = {
             min: 1024,
             suffix: 'bytes',
             description: 'Maximum size of a single log line',
+          },
+          {
+            id: 'avgLogLineSize',
+            label: 'Average Log Line Size',
+            type: 'number',
+            min: 50,
+            max: 10000,
+            suffix: 'bytes',
+            description: 'Average size of log lines (used for traffic estimation)',
+          },
+        ],
+      },
+      {
+        id: 'rateLimits',
+        title: 'Rate Limits',
+        fields: [
+          {
+            id: 'ingestionRateLimit',
+            label: 'Ingestion Rate Limit',
+            type: 'number',
+            min: 0,
+            suffix: 'lines/sec',
+            description: 'Maximum lines per second (0 or empty = unlimited)',
+          },
+          {
+            id: 'queryRateLimit',
+            label: 'Query Rate Limit',
+            type: 'number',
+            min: 0,
+            suffix: 'queries/sec',
+            description: 'Maximum queries per second (0 or empty = unlimited)',
           },
         ],
       },
