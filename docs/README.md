@@ -78,6 +78,15 @@
   - Кластерная архитектура с шардированием, Merge Operations
   - Метрики в реальном времени (throughput, latency, memory, compression, parts, merges, replication)
 
+- **[Snowflake](./data/snowflake.md)** - Облачная платформа данных с разделением storage и compute
+  - Separation of Storage and Compute для независимого масштабирования
+  - Warehouses (вычислительные ресурсы) с различными размерами и multi-cluster scaling
+  - Auto-Suspend/Auto-Resume для оптимизации стоимости
+  - Databases, Schemas, Tables с иерархической структурой
+  - SQL запросы (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, ALTER)
+  - Query Queuing, Result Caching, Cost Calculation (credits)
+  - Метрики в реальном времени (queries, latency, warehouse utilization, cache hit rate, cost)
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -274,6 +283,7 @@
 - **Redis:** [Документация Redis](./data/redis.md)
 - **Apache Cassandra:** [Документация Apache Cassandra](./data/cassandra.md)
 - **ClickHouse:** [Документация ClickHouse](./data/clickhouse.md)
+- **Snowflake:** [Документация Snowflake](./data/snowflake.md)
 
 ## Обновления
 
@@ -306,3 +316,4 @@
 - [Официальная документация Redis](https://redis.io/docs/)
 - [Официальная документация Apache Cassandra](https://cassandra.apache.org/doc/latest/)
 - [Официальная документация ClickHouse](https://clickhouse.com/docs/)
+- [Официальная документация Snowflake](https://docs.snowflake.com/)

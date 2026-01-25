@@ -26,6 +26,7 @@ import { CassandraRoutingEngine } from './CassandraRoutingEngine';
 import { ClickHouseRoutingEngine, ClickHouseConfig } from './ClickHouseRoutingEngine';
 import { ClickHouseEmulationEngine } from './ClickHouseEmulationEngine';
 import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
+import { getSnowflakeDefaults } from '@/utils/snowflakeDefaults';
 import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
@@ -9523,9 +9524,11 @@ export class EmulationEngine {
     const config = (node.data.config || {}) as any;
     const routingEngine = new SnowflakeRoutingEngine();
 
-    routingEngine.initialize({
-      account: config.account || 'archiphoenix',
-      region: config.region || 'us-east-1',
+    // Используем значения из конфига (они должны быть сгенерированы в UI)
+    // Если конфиг пустой - используем getSnowflakeDefaults как fallback
+    let snowflakeConfig: any = {
+      account: config.account,
+      region: config.region,
       warehouses: config.warehouses?.map((w: any) => ({
         name: w.name,
         size: w.size || 'Small',
@@ -9556,7 +9559,21 @@ export class EmulationEngine {
       enableAutoSuspend: config.enableAutoSuspend,
       autoSuspendSeconds: config.autoSuspendSeconds,
       enableAutoResume: config.enableAutoResume,
-    });
+    };
+
+    // Если конфиг пустой, используем fallback defaults
+    if (!snowflakeConfig.account && !snowflakeConfig.region) {
+      const defaults = getSnowflakeDefaults(node.id);
+      snowflakeConfig.account = defaults.account;
+      snowflakeConfig.region = defaults.region;
+      snowflakeConfig.warehouse = snowflakeConfig.warehouse || defaults.warehouse;
+      snowflakeConfig.database = snowflakeConfig.database || defaults.database;
+      snowflakeConfig.schema = snowflakeConfig.schema || defaults.schema;
+      snowflakeConfig.username = snowflakeConfig.username || defaults.username;
+      snowflakeConfig.role = snowflakeConfig.role || defaults.role;
+    }
+
+    routingEngine.initialize(snowflakeConfig, node.id);
 
     this.snowflakeRoutingEngines.set(node.id, routingEngine);
   }

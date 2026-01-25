@@ -10,7 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { 
   Database, 
   Settings, 
@@ -21,10 +21,25 @@ import {
   Snowflake,
   TrendingUp,
   Users,
-  Key
+  Key,
+  AlertTriangle,
+  BarChart3
 } from 'lucide-react';
+import { 
+  LineChart, 
+  Line, 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend, 
+  ResponsiveContainer 
+} from 'recharts';
 import { Textarea } from '@/components/ui/textarea';
 import { emulationEngine } from '@/core/EmulationEngine';
+import { getSnowflakeDefaults, formatAccountUrl, validateAccountIdentifier, validateRegion } from '@/utils/snowflakeDefaults';
 
 interface SnowflakeConfigProps {
   componentId: string;
@@ -88,15 +103,44 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as SnowflakeConfig;
-  const accountBase = config.account || 'archiphoenix';
-  const region = config.region || 'us-east-1';
-  const cloud = 'aws'; // Default to AWS, could be configurable
-  // Format: account.region.cloud (e.g., archiphoenix.us-east-1.aws)
-  const account = accountBase.includes('.') ? accountBase : `${accountBase}.${region}.${cloud}`;
-  const username = config.username || 'admin';
+  const defaultsGenerated = useRef(false);
+  
+  // Генерируем defaults при первом открытии конфига, если конфиг пустой
+  useEffect(() => {
+    if (!defaultsGenerated.current && !config.account && !config.region && !config.warehouse && !config.database) {
+      defaultsGenerated.current = true;
+      const defaults = getSnowflakeDefaults(componentId);
+      updateNode(componentId, {
+        data: {
+          ...node.data,
+          config: {
+            ...config,
+            account: defaults.account,
+            region: defaults.region,
+            warehouse: defaults.warehouse,
+            database: defaults.database,
+            schema: defaults.schema,
+            username: defaults.username,
+            role: defaults.role,
+          },
+        },
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [componentId]); // Только при первом открытии конфига
+
+  // Извлекаем значения из конфига (после генерации defaults)
+  const accountBase = config.account || '';
+  const region = config.region || '';
+  const cloud: 'aws' | 'azure' | 'gcp' = 'aws'; // Можно сделать конфигурируемым
+  // Format: account.region.cloud (e.g., account.us-east-1.aws)
+  const account = accountBase && region 
+    ? (accountBase.includes('.') ? accountBase : formatAccountUrl(accountBase, region, cloud))
+    : '';
+  const username = config.username || '';
   const password = config.password || '';
-  const warehouse = config.warehouse || 'COMPUTE_WH';
-  const database = config.database || 'SNOWFLAKE';
+  const warehouse = config.warehouse || '';
+  const database = config.database || '';
   const schema = config.schema || 'PUBLIC';
   const role = config.role || 'ACCOUNTADMIN';
   const warehouses = config.warehouses || [];
@@ -154,6 +198,12 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
     updateConfig({ warehouses: newWarehouses });
   };
 
+  // Проверка уникальности warehouse name
+  const isWarehouseNameUnique = (name: string, currentIndex: number): boolean => {
+    if (!name || name.trim().length === 0) return false;
+    return !mergedWarehouses.some((wh, idx) => idx !== currentIndex && wh.name === name.trim());
+  };
+
   const addDatabase = () => {
     const newDatabase: Database = {
       name: 'NEW_DB',
@@ -174,8 +224,65 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
     updateConfig({ databases: newDatabases });
   };
 
+  // Валидация SQL запроса перед выполнением
+  const validateSQLQuery = (sql: string): { valid: boolean; error?: string } => {
+    const trimmed = sql.trim();
+    if (!trimmed) {
+      return { valid: false, error: 'Query cannot be empty' };
+    }
+    
+    const upperQuery = trimmed.toUpperCase();
+    
+    // Проверка базового синтаксиса
+    if (!/^(SELECT|INSERT|UPDATE|DELETE|CREATE|DROP|ALTER|SHOW|DESCRIBE|USE|GRANT|REVOKE)/i.test(trimmed)) {
+      return { valid: false, error: 'Query must start with a valid SQL statement (SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.)' };
+    }
+    
+    // Проверка на закрытие кавычек и скобок
+    const openParens = (trimmed.match(/\(/g) || []).length;
+    const closeParens = (trimmed.match(/\)/g) || []).length;
+    if (openParens !== closeParens) {
+      return { valid: false, error: 'Unmatched parentheses in query' };
+    }
+    
+    const singleQuotes = (trimmed.match(/'/g) || []).length;
+    if (singleQuotes % 2 !== 0) {
+      return { valid: false, error: 'Unmatched single quotes in query' };
+    }
+    
+    const doubleQuotes = (trimmed.match(/"/g) || []).length;
+    if (doubleQuotes % 2 !== 0) {
+      return { valid: false, error: 'Unmatched double quotes in query' };
+    }
+    
+    // Проверка на опасные операции (опционально, для симуляции можно разрешить)
+    // В реальной системе здесь была бы проверка на DROP DATABASE, DROP SCHEMA и т.д.
+    
+    return { valid: true };
+  };
+
   const executeQuery = () => {
     if (!queryText.trim()) return;
+    
+    // Валидация SQL перед выполнением
+    const validation = validateSQLQuery(queryText);
+    if (!validation.valid) {
+      // Показываем ошибку валидации
+      const errorQuery: Query = {
+        id: `query-${Date.now()}`,
+        queryText: queryText,
+        status: 'failed',
+        warehouse,
+        database,
+        schema,
+        duration: 0,
+        rowsReturned: 0,
+      };
+      updateConfig({ queries: [errorQuery, ...queries.slice(0, 9)] });
+      setQueryText('');
+      setShowCreateQuery(false);
+      return;
+    }
     
     const newQuery: Query = {
       id: `query-${Date.now()}`,
@@ -196,6 +303,94 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
   const engineMetrics = snowflakeEngine?.getMetrics();
   const engineWarehouses = snowflakeEngine?.getWarehouses() || [];
   const engineQueries = snowflakeEngine?.getRecentQueries(10) || [];
+  
+  // Get metrics history for charts
+  const metricsHistory = snowflakeEngine?.getMetricsHistory() || [];
+  const costHistory = snowflakeEngine?.getCostHistory() || [];
+  const queryPerformanceHistory = snowflakeEngine?.getQueryPerformanceHistory() || [];
+  
+  // State for alerts
+  const [alerts, setAlerts] = useState<Array<{
+    id: string;
+    type: 'warning' | 'error' | 'info';
+    message: string;
+    timestamp: number;
+  }>>([]);
+  
+  // Check for warehouse utilization alerts
+  useEffect(() => {
+    if (!engineMetrics || !engineWarehouses.length) return;
+    
+    const newAlerts: Array<{
+      id: string;
+      type: 'warning' | 'error' | 'info';
+      message: string;
+      timestamp: number;
+    }> = [];
+    
+    // Check warehouse utilization
+    for (const warehouse of engineWarehouses) {
+      if (warehouse.status === 'running') {
+        const maxQueries = getMaxConcurrentQueries(warehouse);
+        const utilization = maxQueries > 0 ? warehouse.runningQueries / maxQueries : 0;
+        
+        if (utilization > 0.9) {
+          newAlerts.push({
+            id: `util-high-${warehouse.name}`,
+            type: 'error',
+            message: `Warehouse ${warehouse.name} utilization is ${(utilization * 100).toFixed(1)}% - consider scaling up`,
+            timestamp: Date.now()
+          });
+        } else if (utilization > 0.7) {
+          newAlerts.push({
+            id: `util-warning-${warehouse.name}`,
+            type: 'warning',
+            message: `Warehouse ${warehouse.name} utilization is ${(utilization * 100).toFixed(1)}%`,
+            timestamp: Date.now()
+          });
+        }
+      }
+      
+      // Check for queued queries
+      if (warehouse.queuedQueries > 10) {
+        newAlerts.push({
+          id: `queue-${warehouse.name}`,
+          type: 'warning',
+          message: `Warehouse ${warehouse.name} has ${warehouse.queuedQueries} queued queries`,
+          timestamp: Date.now()
+        });
+      }
+    }
+    
+    // Check overall utilization
+    if (engineMetrics.warehouseUtilization > 0.9) {
+      newAlerts.push({
+        id: 'overall-util-high',
+        type: 'error',
+        message: `Overall warehouse utilization is ${(engineMetrics.warehouseUtilization * 100).toFixed(1)}%`,
+        timestamp: Date.now()
+      });
+    }
+    
+    setAlerts(newAlerts);
+  }, [engineMetrics, engineWarehouses]);
+  
+  // Helper function to get max concurrent queries
+  const getMaxConcurrentQueries = (warehouse: Warehouse): number => {
+    const sizeMap: Record<string, number> = {
+      'X-Small': 1,
+      'Small': 2,
+      'Medium': 4,
+      'Large': 8,
+      'X-Large': 16,
+      '2X-Large': 32,
+      '3X-Large': 64,
+      '4X-Large': 128,
+    };
+    const servers = sizeMap[warehouse.size] || 2;
+    const clusters = warehouse.minClusterCount || 1;
+    return servers * clusters * 8; // 8 queries per server
+  };
   
   // Use engine metrics if available, otherwise fall back to config
   const totalRunningQueries = engineMetrics?.runningQueries ?? warehouses.reduce((sum, w) => sum + (w.runningQueries || 0), 0);
@@ -317,6 +512,10 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
               <Activity className="h-4 w-4 mr-2" />
               Queries ({displayQueries.length})
             </TabsTrigger>
+            <TabsTrigger value="metrics">
+              <BarChart3 className="h-4 w-4 mr-2" />
+              Metrics & Analytics
+            </TabsTrigger>
             <TabsTrigger value="connection">
               <Key className="h-4 w-4 mr-2" />
               Connection
@@ -386,7 +585,13 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
                             <Input
                               value={wh.name}
                               onChange={(e) => updateWarehouse(index, 'name', e.target.value)}
+                              className={!isWarehouseNameUnique(wh.name, index) ? 'border-destructive' : ''}
                             />
+                            {!isWarehouseNameUnique(wh.name, index) && (
+                              <p className="text-xs text-destructive">
+                                Warehouse name must be unique
+                              </p>
+                            )}
                           </div>
                           <div className="space-y-2">
                             <Label>Size</Label>
@@ -581,10 +786,16 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
                           onChange={(e) => setQueryText(e.target.value)}
                           placeholder="SELECT * FROM table_name LIMIT 10;"
                           rows={6}
+                          className={queryText.trim() && !validateSQLQuery(queryText).valid ? 'border-destructive' : ''}
                         />
+                        {queryText.trim() && !validateSQLQuery(queryText).valid && (
+                          <p className="text-xs text-destructive">
+                            {validateSQLQuery(queryText).error}
+                          </p>
+                        )}
                       </div>
                       <div className="flex gap-2">
-                        <Button onClick={executeQuery} disabled={!queryText.trim()}>
+                        <Button onClick={executeQuery} disabled={!queryText.trim() || !validateSQLQuery(queryText).valid}>
                           Execute
                         </Button>
                         <Button variant="outline" onClick={() => {
@@ -638,6 +849,218 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
             </Card>
           </TabsContent>
 
+          <TabsContent value="metrics" className="space-y-4">
+            {/* Alerts Section */}
+            {alerts.length > 0 && (
+              <Card className="border-l-4 border-l-yellow-500">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="h-5 w-5 text-yellow-500" />
+                    <CardTitle>Alerts</CardTitle>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {alerts.map((alert) => (
+                      <div
+                        key={alert.id}
+                        className={`p-3 rounded-lg border ${
+                          alert.type === 'error'
+                            ? 'bg-destructive/10 border-destructive/20 text-destructive'
+                            : alert.type === 'warning'
+                            ? 'bg-yellow-500/10 border-yellow-500/20 text-yellow-600 dark:text-yellow-400'
+                            : 'bg-blue-500/10 border-blue-500/20 text-blue-600 dark:text-blue-400'
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+                          <p className="text-sm">{alert.message}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Query Performance Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Query Performance</CardTitle>
+                <CardDescription>Average query time, queries per second, and cache hit rate over time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {queryPerformanceHistory.length === 0 ? (
+                  <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+                    No performance data available. Start the simulation to see metrics.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={queryPerformanceHistory}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={(value) => {
+                          const date = new Date(value);
+                          return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+                        }}
+                      />
+                      <YAxis yAxisId="left" />
+                      <YAxis yAxisId="right" orientation="right" />
+                      <Tooltip
+                        labelFormatter={(value) => {
+                          const date = new Date(value);
+                          return date.toLocaleTimeString();
+                        }}
+                        formatter={(value: any, name: string) => {
+                          if (name === 'avgQueryTime') {
+                            return [`${value.toFixed(2)} ms`, 'Avg Query Time'];
+                          }
+                          if (name === 'queriesPerSecond') {
+                            return [`${value.toFixed(2)}`, 'Queries/sec'];
+                          }
+                          if (name === 'cacheHitRate') {
+                            return [`${(value * 100).toFixed(1)}%`, 'Cache Hit Rate'];
+                          }
+                          return [value, name];
+                        }}
+                      />
+                      <Legend />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="avgQueryTime"
+                        stroke="#8884d8"
+                        strokeWidth={2}
+                        name="Avg Query Time (ms)"
+                        dot={false}
+                      />
+                      <Line
+                        yAxisId="left"
+                        type="monotone"
+                        dataKey="queriesPerSecond"
+                        stroke="#82ca9d"
+                        strokeWidth={2}
+                        name="Queries/sec"
+                        dot={false}
+                      />
+                      <Line
+                        yAxisId="right"
+                        type="monotone"
+                        dataKey="cacheHitRate"
+                        stroke="#ffc658"
+                        strokeWidth={2}
+                        name="Cache Hit Rate"
+                        dot={false}
+                        strokeDasharray="5 5"
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Cost Trends Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Cost Trends</CardTitle>
+                <CardDescription>Total cost (credits) over time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {costHistory.length === 0 ? (
+                  <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+                    No cost data available. Start the simulation to see cost trends.
+                  </div>
+                ) : (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <AreaChart data={costHistory}>
+                      <defs>
+                        <linearGradient id="colorCost" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#8884d8" stopOpacity={0.8} />
+                          <stop offset="95%" stopColor="#8884d8" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="timestamp"
+                        tickFormatter={(value) => {
+                          const date = new Date(value);
+                          return `${date.getHours()}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
+                        }}
+                      />
+                      <YAxis />
+                      <Tooltip
+                        labelFormatter={(value) => {
+                          const date = new Date(value);
+                          return date.toLocaleTimeString();
+                        }}
+                        formatter={(value: any) => [`${value.toFixed(4)} credits`, 'Cost']}
+                      />
+                      <Legend />
+                      <Area
+                        type="monotone"
+                        dataKey="cost"
+                        stroke="#8884d8"
+                        fillOpacity={1}
+                        fill="url(#colorCost)"
+                        name="Total Cost (credits)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                )}
+                {engineMetrics && (
+                  <div className="mt-4 p-3 bg-muted rounded-lg">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium">Current Total Cost:</span>
+                      <span className="text-lg font-bold">{engineMetrics.totalCost.toFixed(4)} credits</span>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Warehouse Utilization Summary */}
+            {engineMetrics && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Warehouse Utilization</CardTitle>
+                  <CardDescription>Current utilization metrics across all warehouses</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium">Overall Utilization</span>
+                        <span className="text-sm font-bold">
+                          {(engineMetrics.warehouseUtilization * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      <Progress value={engineMetrics.warehouseUtilization * 100} className="h-2" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Running Warehouses</p>
+                        <p className="text-2xl font-bold">{engineMetrics.runningWarehouses}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Suspended Warehouses</p>
+                        <p className="text-2xl font-bold">{engineMetrics.suspendedWarehouses}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Cache Hit Rate</p>
+                        <p className="text-2xl font-bold">{(engineMetrics.cacheHitRate * 100).toFixed(1)}%</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Avg Query Time</p>
+                        <p className="text-2xl font-bold">{engineMetrics.avgQueryTime.toFixed(2)} ms</p>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
           <TabsContent value="connection" className="space-y-4">
             <Card>
               <CardHeader>
@@ -650,9 +1073,40 @@ export function SnowflakeConfigAdvanced({ componentId }: SnowflakeConfigProps) {
                     <Label>Account</Label>
                     <Input
                       value={account}
-                      onChange={(e) => updateConfig({ account: e.target.value })}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        // Если введен полный формат, парсим его
+                        if (value.includes('.')) {
+                          const parts = value.split('.');
+                          if (parts.length >= 3) {
+                            updateConfig({ account: parts[0], region: parts[1] });
+                          } else {
+                            updateConfig({ account: value });
+                          }
+                        } else {
+                          updateConfig({ account: value });
+                        }
+                      }}
                       placeholder="account.region.cloud"
                     />
+                    {accountBase && !validateAccountIdentifier(accountBase) && (
+                      <p className="text-xs text-destructive">
+                        Invalid account identifier. Use alphanumeric, hyphens, underscores only.
+                      </p>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Region</Label>
+                    <Input
+                      value={region}
+                      onChange={(e) => updateConfig({ region: e.target.value })}
+                      placeholder="us-east-1"
+                    />
+                    {region && !validateRegion(region) && (
+                      <p className="text-xs text-destructive">
+                        Invalid region. Use a valid Snowflake region.
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label>Username</Label>

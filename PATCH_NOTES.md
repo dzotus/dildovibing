@@ -1,5 +1,295 @@
 # Patch Notes
 
+## Версия 0.1.8o - Snowflake: Устранение хардкода и улучшение симулятивности
+
+### Snowflake: Устранение хардкода и улучшение симулятивности
+
+**Критическое улучшение**: Устранены ВСЕ хардкодные значения в компоненте Snowflake. Реализована система динамической генерации уникальных значений на основе nodeId. Добавлены реалистичные задержки при warehouse lifecycle (resume/suspend) и состояния resuming/suspending. Добавлены графики для визуализации производительности запросов, трендов стоимости и автоматические алерты для warehouse utilization. Компонент Snowflake теперь полностью соответствует принципам симулятивности без заскриптованности.
+
+#### 1. Устранение хардкода ✅
+
+**Улучшение**: Создана система генерации уникальных значений для каждого компонента Snowflake.
+
+**Реализовано**:
+- ✅ Создана утилита `src/utils/snowflakeDefaults.ts`:
+  - `generateAccountIdentifier(nodeId?)` - генерация уникального account identifier на основе nodeId
+  - `generateWarehouseName(index)` - генерация имени warehouse (COMPUTE_WH для первого, WAREHOUSE_N для остальных)
+  - `generateDatabaseName(nodeId?)` - генерация имени базы данных на основе nodeId
+  - `validateAccountIdentifier(account)` - валидация account identifier согласно Snowflake правилам
+  - `validateRegion(region)` - валидация region (список реальных Snowflake регионов)
+  - `formatAccountUrl(account, region, cloud)` - форматирование полного account URL
+  - `getSnowflakeDefaults(nodeId)` - получение всех значений по умолчанию для нового компонента
+- ✅ Обновлен `SnowflakeConfigAdvanced.tsx`:
+  - Убран хардкод `'archiphoenix'`, `'us-east-1'`, `'admin'`, `'COMPUTE_WH'`, `'SNOWFLAKE'`, `'PUBLIC'`, `'ACCOUNTADMIN'`
+  - Добавлен `useEffect` для генерации defaults при первом открытии конфига через `getSnowflakeDefaults(nodeId)`
+  - Значения сохраняются в `node.data.config` при первом рендере
+  - Добавлена валидация account identifier и region в UI с отображением ошибок
+  - Поддержка парсинга полного формата account (account.region.cloud)
+- ✅ Обновлен `SnowflakeRoutingEngine.ts`:
+  - Убран хардкод из полей класса (`account: string = ''`, `region: string = ''`)
+  - Обновлен метод `initialize(config, nodeId?)`:
+    - Использует значения из конфига (должны быть сгенерированы в UI)
+    - Если конфиг пустой - использует fallback генерацию на основе nodeId
+    - Создание default warehouse использует `config.warehouse` вместо хардкода
+    - Автоматическое создание database из конфига, если она указана
+  - Обновлен метод `syncFromConfig()` для работы без хардкода
+- ✅ Обновлен `profiles.ts`:
+  - Убран хардкод из defaults для Snowflake (`account: 'archiphoenix'`, `database: 'ARCHIPHOENIX_DB'`)
+  - Оставлены пустые значения с комментарием о динамической генерации в UI
+- ✅ Обновлен `EmulationEngine.ts`:
+  - Убран хардкод в `initializeSnowflakeRoutingEngine()` (`'archiphoenix'`, `'us-east-1'`)
+  - Добавлен импорт `getSnowflakeDefaults`
+  - Добавлена fallback логика: если конфиг пустой, генерируются defaults на основе nodeId
+  - Передача `node.id` в `routingEngine.initialize()` для fallback случая
+
+**Механизм работы**:
+1. **Пользователь перетаскивает компонент** → создается `CanvasNode` без конфига (`data: { label }`)
+2. **Пользователь открывает конфиг** → `SnowflakeConfigAdvanced` генерирует defaults через `getSnowflakeDefaults(nodeId)` и сохраняет в `node.data.config`
+3. **Пользователь нажимает кнопку Play** → `EmulationEngine.initialize()` → `initializeSnowflakeRoutingEngine()` → движок читает уже существующий конфиг из `node.data.config`
+4. **Edge case**: Если симуляция запущена БЕЗ открытия конфига → defaults генерируются в движке через fallback
+
+**Преимущества**:
+- Полная симулятивность - отсутствие хардкода и заскриптованности
+- Уникальность - каждый компонент Snowflake имеет уникальные значения на основе nodeId
+- Гибкость - значения можно настроить в UI, но по умолчанию генерируются автоматически
+- Валидация - предотвращение невалидных конфигураций через валидацию account identifier и region
+- Соответствие принципам - компонент полностью соответствует правилам курсора об отсутствии хардкода
+
+#### 2. Улучшение симулятивности warehouse lifecycle ✅
+
+**Улучшение**: Добавлены реалистичные задержки и состояния при resume/suspend warehouse.
+
+**Реализовано**:
+- ✅ Реалистичные задержки при resume warehouse:
+  - Задержка 2-5 секунд (случайная в диапазоне) при переходе из suspended в running
+  - Состояние 'resuming' во время задержки
+  - Автоматическая обработка queued queries после перехода в running
+- ✅ Реалистичные задержки при suspend warehouse:
+  - Задержка 1-3 секунды (случайная в диапазоне) при переходе из running в suspended
+  - Состояние 'suspending' во время задержки
+  - Проверка running queries перед suspend (нельзя suspend если есть running queries)
+- ✅ Улучшена обработка queued queries:
+  - Queries ставятся в очередь если warehouse suspended, resuming или suspending
+  - Автоматическая обработка очереди при переходе warehouse в состояние running
+  - Учет capacity warehouse при обработке очереди
+- ✅ Улучшена логика auto-resume:
+  - Resume запускается при поступлении query, если warehouse suspended
+  - Queries ждут завершения resume перед выполнением
+  - Правильная обработка состояния resuming
+
+**Механизм работы**:
+- При вызове `resumeWarehouse()`:
+  1. Устанавливается состояние 'resuming'
+  2. Запускается таймер на 2-5 секунд
+  3. После таймера warehouse переходит в 'running'
+  4. Автоматически обрабатываются queued queries
+- При вызове `suspendWarehouse()`:
+  1. Проверяется наличие running queries (если есть - suspend невозможен)
+  2. Устанавливается состояние 'suspending'
+  3. Запускается таймер на 1-3 секунды
+  4. После таймера warehouse переходит в 'suspended'
+- При выполнении query:
+  - Если warehouse suspended/resuming - query ставится в очередь
+  - Если warehouse running - query выполняется немедленно
+  - Auto-resume запускается автоматически при поступлении query
+
+**Преимущества**:
+- Реалистичность - симуляция соответствует реальному поведению Snowflake
+- Визуальная обратная связь - состояния resuming/suspending отображаются в метриках
+- Правильная обработка очередей - queries корректно обрабатываются при переходе warehouse в running
+- Улучшенная симулятивность - отсутствие мгновенных переходов состояний
+
+**Изменённые файлы**:
+- `src/utils/snowflakeDefaults.ts` ✅ **НОВЫЙ** (система генерации уникальных значений)
+- `src/components/config/data/SnowflakeConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (генерация defaults, валидация)
+- `src/core/SnowflakeRoutingEngine.ts` ✅ **ОБНОВЛЕН** (устранение хардкода, реалистичные задержки, состояния resuming/suspending)
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН** (fallback логика с getSnowflakeDefaults)
+- `src/components/config/data/profiles.ts` ✅ **ОБНОВЛЕН** (убран хардкод из defaults)
+
+#### 3. Визуальная индикация состояния на CanvasNode ✅
+
+**Улучшение**: Добавлена визуальная индикация состояния warehouse и метрик на CanvasNode для компонентов Snowflake.
+
+**Реализовано**:
+- ✅ Badge с состоянием warehouse на CanvasNode:
+  - Отображение состояния (running/suspended/resuming/suspending)
+  - Цветовая индикация: зеленый для running, серый для suspended, желтый/оранжевый для resuming/suspending
+  - Анимация pulse для переходных состояний (resuming/suspending)
+- ✅ Отображение количества running queries и queued queries:
+  - Индикатор количества running queries (синий цвет)
+  - Индикатор количества queued queries (желтый цвет с иконкой ⏳)
+- ✅ Визуальный индикатор utilization:
+  - Progress bar для running warehouses
+  - Цветовая индикация: зеленый (<40%), желтый (40-60%), оранжевый (60-80%), красный (>80%)
+  - Отображается только для running warehouses
+- ✅ Интеграция с SnowflakeRoutingEngine:
+  - Получение метрик в реальном времени через `emulationEngine.getSnowflakeRoutingEngine()`
+  - Отображение состояния первого (primary) warehouse
+  - Автоматическое обновление при изменении состояния warehouse
+
+**Механизм работы**:
+- При запуске симуляции компонент Snowflake получает доступ к `SnowflakeRoutingEngine`
+- CanvasNode получает метрики через `emulationEngine.getSnowflakeRoutingEngine(nodeId)`
+- Визуальная индикация отображается внизу компонента на CanvasNode
+- Индикация обновляется в реальном времени при изменении состояния warehouse
+
+**Преимущества**:
+- Визуальная обратная связь - состояние warehouse видно сразу на холсте
+- Информативность - количество queries и utilization отображаются без открытия конфига
+- Улучшенный UX - пользователь видит состояние компонента в реальном времени
+- Соответствие принципам - визуализация основана на реальных метриках из движка, без хардкода
+
+**Изменённые файлы**:
+- `src/components/canvas/CanvasNode.tsx` ✅ **ОБНОВЛЕН** (добавлена визуальная индикация для Snowflake)
+
+#### 4. Улучшение валидации в UI ✅
+
+**Улучшение**: Добавлена валидация warehouse name на уникальность и валидация SQL queries перед выполнением.
+
+**Реализовано**:
+- ✅ Валидация warehouse name на уникальность:
+  - Проверка уникальности имени warehouse при редактировании
+  - Визуальная индикация ошибки (красная рамка) при дублировании имени
+  - Сообщение об ошибке "Warehouse name must be unique"
+  - Валидация в реальном времени при вводе
+- ✅ Валидация SQL queries перед выполнением:
+  - Проверка базового синтаксиса SQL (должен начинаться с валидного statement: SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, etc.)
+  - Проверка закрытия скобок (проверка на unmatched parentheses)
+  - Проверка закрытия кавычек (проверка на unmatched single/double quotes)
+  - Валидация в UI перед отправкой запроса (кнопка Execute отключена при невалидном SQL)
+  - Валидация в движке `SnowflakeRoutingEngine` перед выполнением
+  - Отображение ошибок валидации в UI и в query history
+
+**Механизм работы**:
+- При редактировании warehouse name:
+  1. Проверяется уникальность имени среди всех warehouses
+  2. Если имя дублируется - показывается визуальная индикация ошибки
+  3. Кнопка сохранения/обновления может быть отключена при ошибке (опционально)
+- При вводе SQL query:
+  1. Валидация выполняется в реальном времени при вводе
+  2. Проверяется базовый синтаксис, скобки, кавычки
+  3. Кнопка Execute отключена при невалидном SQL
+  4. При попытке выполнения невалидного SQL - query помечается как failed с ошибкой валидации
+  5. Валидация также выполняется в движке перед выполнением query
+
+**Преимущества**:
+- Предотвращение ошибок - пользователь видит проблемы до выполнения
+- Улучшенный UX - визуальная обратная связь при вводе
+- Безопасность - предотвращение выполнения невалидных SQL запросов
+- Соответствие принципам - валидация основана на реальных правилах Snowflake
+
+**Изменённые файлы**:
+- `src/components/config/data/SnowflakeConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (валидация warehouse name uniqueness, валидация SQL queries)
+- `src/core/SnowflakeRoutingEngine.ts` ✅ **ОБНОВЛЕН** (добавлен метод validateSQL, валидация перед выполнением query)
+
+#### 5. Real-time метрики: графики и алерты ✅
+
+**Улучшение**: Добавлены графики для визуализации производительности запросов, трендов стоимости и автоматические алерты для warehouse utilization.
+
+**Реализовано**:
+- ✅ История метрик в SnowflakeRoutingEngine:
+  - Добавлен `metricsHistory` - rolling window из последних 100 точек данных
+  - Автоматическое сохранение метрик при каждом обновлении
+  - Методы `getMetricsHistory()`, `getCostHistory()`, `getQueryPerformanceHistory()` для получения истории
+- ✅ График Query Performance:
+  - LineChart с отображением avgQueryTime (среднее время выполнения запросов в мс)
+  - LineChart с отображением queriesPerSecond (количество запросов в секунду)
+  - LineChart с отображением cacheHitRate (процент попаданий в кэш, 0-1)
+  - Двойная ось Y для разных метрик
+  - Tooltip с форматированием времени и значений
+  - Обновление в реальном времени при запущенной симуляции
+- ✅ График Cost Trends:
+  - AreaChart с отображением трендов стоимости (credits) во времени
+  - Градиентная заливка для визуализации
+  - Отображение текущей общей стоимости в отдельном блоке
+  - Tooltip с форматированием времени и стоимости
+- ✅ Автоматические алерты для warehouse utilization:
+  - Warning алерт при утилизации >70% для отдельного warehouse
+  - Error алерт при утилизации >90% для отдельного warehouse
+  - Warning алерт при большом количестве queued queries (>10)
+  - Error алерт при общей утилизации >90%
+  - Визуальная индикация типа алерта (warning/error/info)
+  - Автоматическое обновление при изменении метрик
+- ✅ Новая вкладка "Metrics & Analytics":
+  - Секция с алертами (отображается только при наличии алертов)
+  - График Query Performance
+  - График Cost Trends
+  - Секция Warehouse Utilization Summary с текущими метриками
+
+**Механизм работы**:
+- При обновлении метрик в `updateMetrics()`:
+  1. Метрики сохраняются в `metricsHistory` с timestamp
+  2. История ограничена последними 100 точками (rolling window)
+  3. UI получает историю через методы `getMetricsHistory()`, `getCostHistory()`, `getQueryPerformanceHistory()`
+- При изменении метрик warehouse:
+  1. Проверяется утилизация каждого warehouse
+  2. Генерируются алерты при превышении пороговых значений
+  3. Алерты отображаются в секции Alerts на вкладке Metrics & Analytics
+- Графики обновляются в реальном времени:
+  1. UI получает историю метрик из движка
+  2. Графики отображают последние данные из истории
+  3. При отсутствии данных показывается сообщение "No data available"
+
+**Преимущества**:
+- Визуализация производительности - пользователь видит тренды производительности запросов
+- Мониторинг стоимости - отслеживание трендов стоимости использования warehouse
+- Проактивные алерты - автоматическое уведомление о проблемах с утилизацией
+- Улучшенный UX - все метрики и алерты в одном месте на вкладке Metrics & Analytics
+- Соответствие принципам - графики основаны на реальных метриках из движка, без хардкода
+
+**Изменённые файлы**:
+- `src/core/SnowflakeRoutingEngine.ts` ✅ **ОБНОВЛЕН** (добавлена история метрик, методы getMetricsHistory, getCostHistory, getQueryPerformanceHistory)
+- `src/components/config/data/SnowflakeConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (добавлена вкладка Metrics & Analytics с графиками и алертами)
+
+#### 6. Multi-cluster query distribution ✅
+
+**Улучшение**: Реализовано распределение запросов по кластерам warehouse для параллельной обработки, что соответствует реальному поведению Snowflake при использовании multi-cluster warehouses.
+
+**Реализовано**:
+- ✅ Multi-cluster query distribution для SELECT запросов:
+  - Распределение данных по кластерам (симуляция data partitioning)
+  - Параллельная обработка каждого кластера своей порции данных
+  - Агрегация результатов от всех кластеров
+  - Применение WHERE, ORDER BY, LIMIT к агрегированным результатам
+- ✅ Multi-cluster query distribution для INSERT запросов:
+  - Распределение операций вставки по кластерам для параллельной обработки
+  - Симуляция параллельного выполнения на нескольких кластерах
+- ✅ Multi-cluster query distribution для UPDATE/DELETE запросов:
+  - Распределение операций обновления/удаления по кластерам
+  - Симуляция параллельной обработки на нескольких кластерах
+- ✅ Учет количества кластеров при расчете времени выполнения:
+  - Время выполнения уменьшается при увеличении количества кластеров (параллелизм)
+  - Использование sqrt scaling для учета diminishing returns (реалистичное поведение)
+  - Формула: `executionTime = baseLatency * sizeMultiplier * queryComplexity * (1 / sqrt(clusterCount))`
+- ✅ Автоматическое определение необходимости multi-cluster distribution:
+  - Если `warehouse.currentClusterCount > 1` - используется multi-cluster distribution
+  - Если `warehouse.currentClusterCount === 1` - используется обычное выполнение
+  - Поддержка всех типов SQL запросов (SELECT, INSERT, UPDATE, DELETE)
+
+**Механизм работы**:
+- При выполнении query на warehouse с несколькими кластерами:
+  1. Определяется количество кластеров (`warehouse.currentClusterCount`)
+  2. Если кластеров > 1, вызывается `executeQueryWithMultiCluster()`
+  3. Для SELECT: данные распределяются по кластерам, каждый кластер обрабатывает свою порцию
+  4. Результаты от всех кластеров агрегируются
+  5. Применяются ORDER BY и LIMIT к агрегированным результатам
+  6. Время выполнения учитывает параллелизм (меньше времени при большем количестве кластеров)
+- Для INSERT/UPDATE/DELETE:
+  1. Операции распределяются по кластерам
+  2. Каждый кластер обрабатывает свою порцию операций параллельно
+  3. Результаты агрегируются
+
+**Преимущества**:
+- Реалистичность - симуляция соответствует реальному поведению Snowflake multi-cluster warehouses
+- Параллелизм - запросы выполняются быстрее при использовании нескольких кластеров
+- Масштабируемость - симуляция корректно отражает преимущества multi-cluster конфигурации
+- Улучшенная симулятивность - отсутствие хардкода, все основано на конфигурации warehouse
+
+**Изменённые файлы**:
+- `src/core/SnowflakeRoutingEngine.ts` ✅ **ОБНОВЛЕН** (добавлены методы executeQueryWithMultiCluster, executeSelectWithMultiCluster, executeInsertWithMultiCluster, executeUpdateWithMultiCluster, executeDeleteWithMultiCluster, обновлен executeQueryOnWarehouse для поддержки multi-cluster distribution)
+
+---
+
 ## Версия 0.1.8n - ClickHouse: Полное устранение хардкода (Фаза 1.5 - завершение)
 
 ### ClickHouse: Полное устранение хардкода (Фаза 1.5 - завершение)

@@ -11,10 +11,11 @@ import { COMPONENT_LIBRARY } from '@/data/components';
 import { ContextMenu } from './ContextMenu';
 import { toast } from 'sonner';
 import { deepClone } from '@/lib/deepClone';
-import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff } from 'lucide-react';
+import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff, Database } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getConnectionPoints } from '@/utils/connectionPoints';
 import { useNodeRefs } from '@/contexts/NodeRefsContext';
+import { emulationEngine } from '@/core/EmulationEngine';
 
 interface CanvasNodeProps {
   node: CanvasNodeType;
@@ -88,6 +89,21 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
   const metrics = isRunning ? getComponentMetrics(node.id) : undefined;
   const highlightedNodeId = useUIStore(state => state.highlightedNodeId);
   const isHighlighted = highlightedNodeId === node.id;
+  
+  // Get Snowflake-specific metrics if this is a Snowflake component
+  const snowflakeEngine = useMemo(() => {
+    if (node.type === 'snowflake' && isRunning) {
+      return emulationEngine.getSnowflakeRoutingEngine(node.id);
+    }
+    return undefined;
+  }, [node.type, node.id, isRunning]);
+  
+  const snowflakeMetrics = useMemo(() => {
+    if (!snowflakeEngine) return null;
+    const metrics = snowflakeEngine.getMetrics();
+    const warehouses = snowflakeEngine.getWarehouses();
+    return { metrics, warehouses };
+  }, [snowflakeEngine]);
   
   // Memoize hasConnections check - only recalculate when connections or node.id changes
   const hasConnections = useMemo(
@@ -615,6 +631,65 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
               {node.data.label}
             </div>
           </div>
+          
+          {/* Snowflake-specific visual indicators */}
+          {node.type === 'snowflake' && snowflakeMetrics && (
+            <div className="absolute -bottom-6 left-0 right-0 flex flex-col items-center gap-1">
+              {snowflakeMetrics.warehouses.length > 0 && (() => {
+                const primaryWarehouse = snowflakeMetrics.warehouses[0];
+                const status = primaryWarehouse.status || 'suspended';
+                const runningQueries = primaryWarehouse.runningQueries || 0;
+                const queuedQueries = primaryWarehouse.queuedQueries || 0;
+                const utilization = snowflakeMetrics.metrics.warehouseUtilization || 0;
+                
+                // Status badge colors
+                const statusColors = {
+                  running: 'bg-green-500 text-white',
+                  suspended: 'bg-gray-500 text-white',
+                  resuming: 'bg-yellow-500 text-white animate-pulse',
+                  suspending: 'bg-orange-500 text-white animate-pulse',
+                };
+                
+                return (
+                  <>
+                    <div className="flex items-center gap-1.5 bg-card border border-border rounded px-1.5 py-0.5 shadow-sm">
+                      <Database className="h-3 w-3 text-muted-foreground" />
+                      <span className={cn(
+                        "text-[10px] font-semibold px-1.5 py-0.5 rounded",
+                        statusColors[status] || statusColors.suspended
+                      )}>
+                        {status.toUpperCase()}
+                      </span>
+                      {runningQueries > 0 && (
+                        <span className="text-[10px] text-blue-400 font-medium">
+                          {runningQueries}Q
+                        </span>
+                      )}
+                      {queuedQueries > 0 && (
+                        <span className="text-[10px] text-yellow-400 font-medium">
+                          {queuedQueries}⏳
+                        </span>
+                      )}
+                    </div>
+                    {status === 'running' && utilization > 0 && (
+                      <div className="w-full max-w-[120px] h-1 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full transition-all duration-300",
+                            utilization > 0.8 ? "bg-red-500" :
+                            utilization > 0.6 ? "bg-orange-500" :
+                            utilization > 0.4 ? "bg-yellow-500" :
+                            "bg-green-500"
+                          )}
+                          style={{ width: `${Math.min(100, utilization * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
 
           {/* Connection points - visible on hover or when connecting */}
           {(isHovered || isConnecting) && (() => {

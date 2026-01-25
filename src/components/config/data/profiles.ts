@@ -199,12 +199,14 @@ export const DATA_PROFILES: Record<string, ComponentProfile> = {
     badge: 'Cloud Data',
     docsUrl: 'https://www.snowflake.com/',
     defaults: {
-      account: 'archiphoenix',
-      region: 'us-east-1',
-      warehouse: 'COMPUTE_WH',
-      database: 'ARCHIPHOENIX_DB',
+      // Значения по умолчанию генерируются динамически в SnowflakeConfigAdvanced
+      // через getSnowflakeDefaults(nodeId) при первом открытии конфига
+      account: '',
+      region: '',
+      warehouse: '',
+      database: '',
       schema: 'PUBLIC',
-      username: 'admin',
+      username: '',
       role: 'ACCOUNTADMIN',
       enableAutoSuspend: true,
       autoSuspendSeconds: 60,
