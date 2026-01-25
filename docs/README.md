@@ -87,6 +87,15 @@
   - Query Queuing, Result Caching, Cost Calculation (credits)
   - Метрики в реальном времени (queries, latency, warehouse utilization, cache hit rate, cost)
 
+- **[Elasticsearch](./data/elasticsearch.md)** - Распределенный поисковый и аналитический движок
+  - Кластерная архитектура с узлами, индексами, shards и replicas
+  - Document Routing для распределения документов по shards
+  - Operations: Index, Get, Search, Delete, Update, Bulk
+  - Query DSL (match, term, range, bool, wildcard, exists)
+  - Refresh Interval для настройки доступности документов для поиска
+  - Document Versioning для optimistic concurrency control
+  - Метрики в реальном времени (operations, latency, cluster health, shard states, index metrics)
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -284,6 +293,7 @@
 - **Apache Cassandra:** [Документация Apache Cassandra](./data/cassandra.md)
 - **ClickHouse:** [Документация ClickHouse](./data/clickhouse.md)
 - **Snowflake:** [Документация Snowflake](./data/snowflake.md)
+- **Elasticsearch:** [Документация Elasticsearch](./data/elasticsearch.md)
 
 ## Обновления
 
@@ -317,3 +327,4 @@
 - [Официальная документация Apache Cassandra](https://cassandra.apache.org/doc/latest/)
 - [Официальная документация ClickHouse](https://clickhouse.com/docs/)
 - [Официальная документация Snowflake](https://docs.snowflake.com/)
+- [Официальная документация Elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html)

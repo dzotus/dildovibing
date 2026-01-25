@@ -27,7 +27,16 @@ import { ClickHouseRoutingEngine, ClickHouseConfig } from './ClickHouseRoutingEn
 import { ClickHouseEmulationEngine } from './ClickHouseEmulationEngine';
 import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { getSnowflakeDefaults } from '@/utils/snowflakeDefaults';
-import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
+import { ElasticsearchRoutingEngine } from './elasticsearch/ElasticsearchRoutingEngine';
+import {
+  DEFAULT_CLUSTER_NAME,
+  DEFAULT_INDEX_NAME,
+  DEFAULT_NODE_ADDRESS,
+  DEFAULT_NUMBER_OF_SHARDS,
+  DEFAULT_NUMBER_OF_REPLICAS,
+  DEFAULT_REFRESH_INTERVAL,
+  DEFAULT_USERNAME,
+} from './elasticsearch/constants';
 import { S3RoutingEngine } from './S3RoutingEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
@@ -9586,15 +9595,15 @@ export class EmulationEngine {
     const routingEngine = new ElasticsearchRoutingEngine();
 
     routingEngine.initialize({
-      clusterName: config.clusterName || 'archiphoenix-cluster',
-      nodes: config.nodes || ['localhost:9200'],
+      clusterName: config.clusterName || DEFAULT_CLUSTER_NAME,
+      nodes: config.nodes || [DEFAULT_NODE_ADDRESS],
       indices: config.indices || [],
-      defaultShards: config.shards || 5,
-      defaultReplicas: config.replicas || 1,
-      refreshInterval: config.refreshInterval || '1s',
+      defaultShards: config.shards || DEFAULT_NUMBER_OF_SHARDS,
+      defaultReplicas: config.replicas || DEFAULT_NUMBER_OF_REPLICAS,
+      refreshInterval: config.refreshInterval || DEFAULT_REFRESH_INTERVAL,
       enableSSL: config.enableSSL ?? false,
       enableAuth: config.enableAuth ?? false,
-      username: config.username || 'elastic',
+      username: config.username || DEFAULT_USERNAME,
       password: config.password || '',
     });
 

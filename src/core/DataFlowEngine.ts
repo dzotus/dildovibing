@@ -4,6 +4,7 @@ import { PostgreSQLQueryEngine } from './postgresql/QueryEngine';
 import { PostgreSQLTable, PostgreSQLIndex } from './postgresql/types';
 import { JaegerSpan, TraceContext } from './JaegerEmulationEngine';
 import { ProtocolTransformer } from './ProtocolTransformer';
+import { DEFAULT_INDEX_NAME } from './elasticsearch/constants';
 
 /**
  * Data message format for transmission between components
@@ -1378,7 +1379,7 @@ export class DataFlowEngine {
 
     // Extract operation from payload
     const operation = payload?.operation || payload?.method || 'index';
-    const index = payload?.index || payload?._index || (node.data.config as any)?.index || 'archiphoenix-index';
+    const index = payload?.index || payload?._index || (node.data.config as any)?.index || DEFAULT_INDEX_NAME;
     const id = payload?.id || payload?._id;
     const document = payload?.document || payload?._source || payload?.body || payload;
     const query = payload?.query;
@@ -1430,11 +1431,52 @@ export class DataFlowEngine {
         result = elasticsearchEngine.deleteDocument(index, id, routing);
         break;
 
+      case 'bulk':
+        // Bulk operations - payload can be NDJSON string or array of operations
+        let bulkBody: string;
+        if (typeof payload?.body === 'string') {
+          bulkBody = payload.body;
+        } else if (typeof payload?.bulk === 'string') {
+          bulkBody = payload.bulk;
+        } else if (typeof payload === 'string') {
+          bulkBody = payload;
+        } else if (Array.isArray(payload?.operations)) {
+          // Convert array of operations to NDJSON format
+          bulkBody = payload.operations
+            .map((op: any) => {
+              const actionLine: any = {};
+              const actionType = op.operation || op.action || 'index';
+              actionLine[actionType] = {
+                _index: op.index || op._index || index,
+                _id: op.id || op._id,
+                _routing: op.routing || op._routing,
+              };
+              
+              const lines = [JSON.stringify(actionLine)];
+              if (op.document || op._source || op.doc) {
+                lines.push(JSON.stringify(op.document || op._source || op.doc));
+              }
+              return lines.join('\n');
+            })
+            .join('\n');
+        } else {
+          message.status = 'failed';
+          message.error = 'Bulk operation requires body, bulk, or operations array';
+          return message;
+        }
+        result = elasticsearchEngine.bulk(bulkBody);
+        break;
+
       default:
-        // Try to execute as query string
+        // Try to execute as query string or bulk format
         if (typeof payload === 'string' || payload?.queryString) {
           const queryString = typeof payload === 'string' ? payload : payload.queryString;
-          result = elasticsearchEngine.executeQuery(queryString);
+          // Check if it looks like bulk format (multiple lines, NDJSON)
+          if (queryString.split('\n').length > 1 && queryString.includes('"index"') || queryString.includes('"delete"')) {
+            result = elasticsearchEngine.bulk(queryString);
+          } else {
+            result = elasticsearchEngine.executeQuery(queryString);
+          }
         } else {
           message.status = 'failed';
           message.error = `Unsupported Elasticsearch operation: ${operation}`;
@@ -1452,6 +1494,8 @@ export class DataFlowEngine {
         id: result.id,
         document: result.document,
         hits: result.hits,
+        items: result.items,
+        errors: result.errors,
         took: result.took,
         elasticsearchResult: result,
       };
@@ -1460,6 +1504,8 @@ export class DataFlowEngine {
         elasticsearchOperation: result.operation,
         index: result.index,
         hits: result.hits,
+        items: result.items,
+        errors: result.errors,
         took: result.took,
       };
     } else {

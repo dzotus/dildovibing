@@ -1,5 +1,624 @@
 # Patch Notes
 
+## Версия 0.1.8p - Elasticsearch: Устранение хардкода, расширение DSL, симуляция refresh interval, bulk операции, улучшение метрик, расширение API поддержки и UI/UX улучшения
+
+### Elasticsearch: Устранение хардкода, расширение DSL, симуляция refresh interval, bulk операции, улучшение метрик, расширение API поддержки и UI/UX улучшения
+
+**Критическое улучшение**: Устранены ВСЕ хардкодные значения в компоненте Elasticsearch. Создана структурированная директория `src/core/elasticsearch/` с разделением на константы, типы и основной движок. Реализована симуляция refresh interval - документы не сразу доступны для поиска после индексации. Расширена поддержка Elasticsearch DSL (bool, range, term, wildcard, exists queries). Реализована поддержка bulk операций с парсингом NDJSON формата. Улучшен расчет latency с учетом нагрузки на кластер и сложности запроса. Реализована полная поддержка Cluster API, Index Management API и улучшения Document API (versioning, optimistic concurrency, _source filtering, partial updates). Добавлена визуализация кластера с распределением шардов по узлам. Реализована история операций в реальном времени с фильтрацией. Улучшены Dev Tools с шаблонами запросов. Компонент Elasticsearch теперь полностью соответствует принципам симулятивности без заскриптованности и поддерживает широкий спектр Elasticsearch API endpoints с улучшенным UI/UX.
+
+#### 1. Рефакторинг структуры и устранение хардкода ✅
+
+**Улучшение**: Создана структурированная архитектура компонента Elasticsearch с разделением на модули.
+
+**Реализовано**:
+- ✅ Создана директория `src/core/elasticsearch/`:
+  - `constants.ts` - все константы компонента (defaults, limits, performance, health states, operation types, history limits)
+  - `types.ts` - все типы компонента (ClusterHealth, ElasticsearchNode, Index, Shard, Document, ElasticsearchConfig, ElasticsearchOperation, ElasticsearchMetrics)
+  - `ElasticsearchRoutingEngine.ts` - основной движок (перемещен из `src/core/`)
+- ✅ Создан файл `src/core/elasticsearch/constants.ts`:
+  - Default Values: `DEFAULT_CLUSTER_NAME`, `DEFAULT_INDEX_NAME`, `DEFAULT_NODE_ADDRESS`, `DEFAULT_NUMBER_OF_SHARDS`, `DEFAULT_NUMBER_OF_REPLICAS`, `DEFAULT_REFRESH_INTERVAL`, `DEFAULT_USERNAME`
+  - Limits: `MAX_SHARDS_PER_INDEX`, `MAX_REPLICAS`, `MAX_CLUSTER_NODES`
+  - Performance Constants: `BASE_INDEX_LATENCY_MS`, `BASE_SEARCH_LATENCY_MS`, `BASE_GET_LATENCY_MS`, `LATENCY_PER_SHARD_MS`, `MAX_RESULT_SET_LATENCY_MS`, `ESTIMATED_DOCUMENT_SIZE_BYTES`, и др.
+  - Cluster Health States: `CLUSTER_HEALTH_GREEN`, `CLUSTER_HEALTH_YELLOW`, `CLUSTER_HEALTH_RED`
+  - Shard States: `SHARD_STATE_STARTED`, `SHARD_STATE_RELOCATING`, `SHARD_STATE_INITIALIZING`, `SHARD_STATE_UNASSIGNED`
+  - Operation Types: `OPERATION_INDEX`, `OPERATION_GET`, `OPERATION_SEARCH`, `OPERATION_DELETE`, `OPERATION_BULK`, `OPERATION_UPDATE`
+  - History Limits: `MAX_OPERATION_HISTORY`, `MAX_RECENT_QUERIES`
+  - Metrics Update: `METRICS_TIME_WINDOW_MS`
+  - Node Load Simulation: `MIN_NODE_LOAD`, `MAX_NODE_LOAD`, `DEFAULT_NODE_LOAD`
+- ✅ Создан файл `src/core/elasticsearch/types.ts`:
+  - Вынесены все типы из `ElasticsearchRoutingEngine.ts`
+  - Типы теперь переиспользуются во всех модулях
+- ✅ Обновлен `ElasticsearchRoutingEngine.ts`:
+  - Перемещен в `src/core/elasticsearch/`
+  - Убран хардкод: `'archiphoenix-cluster'`, `'archiphoenix-index'`, `'localhost:9200'`, `'elastic'`, `5`, `1`, `'1s'`, `'green'`, `'yellow'`, `'STARTED'`, `1024`, `500`, `100`, `1000`
+  - Все значения заменены на константы из `constants.ts`
+  - Обновлены методы расчета latency для использования констант
+  - Обновлены методы расчета метрик для использования констант
+- ✅ Обновлен `DataFlowEngine.ts`:
+  - Добавлен импорт `DEFAULT_INDEX_NAME` из `constants.ts`
+  - Убран хардкод `'archiphoenix-index'` в методе `processElasticsearchOperation()`
+- ✅ Обновлен `EmulationEngine.ts`:
+  - Обновлен импорт `ElasticsearchRoutingEngine` на новый путь
+  - Добавлены импорты констант: `DEFAULT_CLUSTER_NAME`, `DEFAULT_NODE_ADDRESS`, `DEFAULT_NUMBER_OF_SHARDS`, `DEFAULT_NUMBER_OF_REPLICAS`, `DEFAULT_REFRESH_INTERVAL`, `DEFAULT_USERNAME`
+  - Убран хардкод в методе `initializeElasticsearchRoutingEngine()`: `'archiphoenix-cluster'`, `['localhost:9200']`, `5`, `1`, `'1s'`, `'elastic'`
+- ✅ Обновлен `ElasticsearchConfigAdvanced.tsx`:
+  - Добавлены импорты всех необходимых констант
+  - Убран хардкод: `'archiphoenix-cluster'`, `['localhost:9200']`, `'archiphoenix-index'`, `5`, `1`, `'1s'`, `'elastic'`, `100`
+  - Все значения заменены на константы из `constants.ts`
+  - Обновлены placeholder'ы в UI для использования констант
+
+**Механизм работы**:
+1. **Константы централизованы** → все значения в `src/core/elasticsearch/constants.ts`
+2. **Типы вынесены** → все типы в `src/core/elasticsearch/types.ts`
+3. **Движок использует константы** → `ElasticsearchRoutingEngine.ts` импортирует константы вместо хардкода
+4. **UI использует константы** → `ElasticsearchConfigAdvanced.tsx` использует константы для defaults и placeholder'ов
+5. **Интеграция использует константы** → `DataFlowEngine.ts` и `EmulationEngine.ts` используют константы
+
+**Преимущества**:
+- Полная симулятивность - отсутствие хардкода и заскриптованности
+- Централизованное управление - все константы в одном месте
+- Легкость поддержки - изменение значений в одном месте
+- Типобезопасность - все типы вынесены в отдельный файл
+- Расширяемость - легко добавлять новые константы и типы
+- Соответствие принципам - компонент полностью соответствует правилам курсора об отсутствии хардкода
+
+**Изменённые файлы**:
+- `src/core/elasticsearch/constants.ts` (новый)
+- `src/core/elasticsearch/types.ts` (новый)
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` (перемещен и обновлен)
+- `src/core/ElasticsearchRoutingEngine.ts` (удален)
+- `src/core/DataFlowEngine.ts` (обновлен)
+- `src/core/EmulationEngine.ts` (обновлен)
+- `src/components/config/data/ElasticsearchConfigAdvanced.tsx` (обновлен)
+
+#### 2. Расширение поддержки Elasticsearch DSL ✅
+
+**Улучшение**: Реализован полноценный парсер Elasticsearch DSL запросов для симуляции.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/elasticsearch/queryParser.ts`:
+  - `parseAndExecuteQuery()` - главная функция для парсинга и выполнения запросов
+  - `executeBoolQuery()` - поддержка bool queries с must, should, must_not, filter, minimum_should_match
+  - `executeMatchQuery()` - улучшенная поддержка match queries (текстовый поиск)
+  - `executeTermQuery()` - поддержка term queries (точное совпадение)
+  - `executeRangeQuery()` - поддержка range queries (gte, gt, lte, lt)
+  - `executeWildcardQuery()` - поддержка wildcard queries (*, ?)
+  - `executeExistsQuery()` - поддержка exists queries (проверка наличия поля)
+  - `getNestedField()` - поддержка вложенных полей через dot notation (например, "user.name")
+  - `parseMinimumShouldMatch()` - парсинг minimum_should_match (число, процент, выражения)
+- ✅ Интегрирован в `ElasticsearchRoutingEngine.search()`:
+  - Заменена простая логика match_all/match на полноценный парсер
+  - Все типы запросов теперь поддерживаются через единый интерфейс
+
+**Механизм работы**:
+1. **Парсинг запроса** → `parseAndExecuteQuery()` анализирует структуру запроса
+2. **Определение типа** → определяется тип запроса (bool, match, term, range, etc.)
+3. **Выполнение** → соответствующий executor обрабатывает запрос против документов
+4. **Фильтрация** → возвращаются только документы, соответствующие запросу
+
+**Преимущества**:
+- Реалистичная симуляция - поддержка основных типов Elasticsearch запросов
+- Расширяемость - легко добавлять новые типы запросов
+- Производительность - эффективная фильтрация документов
+- Соответствие реальному Elasticsearch - поведение максимально приближено к реальному ES
+
+#### 3. Симуляция refresh interval ✅
+
+**Улучшение**: Реализована реалистичная симуляция refresh interval - документы не сразу доступны для поиска после индексации.
+
+**Реализовано**:
+- ✅ Добавлена очередь pending документов:
+  - `pendingDocuments: Map<string, Map<number, PendingDocument[]>>` - документы, ожидающие refresh
+  - `PendingDocument` интерфейс с полями `doc` и `indexedAt`
+- ✅ Реализован парсер refresh interval:
+  - `parseRefreshInterval()` - парсит строки формата "1s", "5m", "1h", "1d", "-1" (отключено)
+  - Поддержка единиц: секунды (s), минуты (m), часы (h), дни (d)
+  - Поддержка отключения refresh через "-1"
+- ✅ Реализована логика refresh:
+  - `refreshIndex()` - перемещает готовые документы из pending в searchable
+  - `checkAndRefreshIndices()` - проверяет все индексы и выполняет refresh при необходимости
+  - Автоматический refresh при вызове `search()` и `updateMetrics()`
+  - Отслеживание времени последнего refresh для каждого индекса
+- ✅ Обновлен метод `indexDocument()`:
+  - Документы попадают в `pendingDocuments` вместо `documents`
+  - Если refresh interval отключен (-1), документы сразу доступны для поиска
+  - Сохранение времени индексации для расчета готовности к refresh
+- ✅ Обновлен метод `search()`:
+  - Вызов `checkAndRefreshIndices()` перед поиском
+  - Поиск выполняется только по searchable документам (не pending)
+  - Pending документы не видны в результатах поиска до refresh
+- ✅ Добавлены метрики refresh operations:
+  - `refreshOperations` - массив операций refresh с timestamp, index, docsRefreshed
+  - Отслеживание количества документов, отрефрешенных за операцию
+
+**Механизм работы**:
+1. **Индексация документа** → документ попадает в `pendingDocuments` с timestamp
+2. **Проверка refresh** → при поиске/обновлении метрик проверяется, прошло ли достаточно времени
+3. **Refresh** → если прошло достаточно времени (или refresh отключен), документ перемещается в `documents`
+4. **Поиск** → поиск выполняется только по `documents`, pending документы не видны
+
+**Преимущества**:
+- Реалистичная симуляция - поведение соответствует реальному Elasticsearch
+- Гибкость - поддержка различных refresh intervals и возможность отключения
+- Производительность - эффективная проверка готовности документов
+- Метрики - отслеживание операций refresh для анализа
+
+#### 4. Улучшение расчета latency ✅
+
+**Улучшение**: Создан отдельный модуль для расчета метрик производительности с учетом различных факторов.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/elasticsearch/metricsCalculator.ts`:
+  - `calculateIndexLatency()` - расчет latency для index операций с учетом:
+    - Количества документов в индексе
+    - Нагрузки на кластер
+    - Размера индекса
+  - `calculateSearchLatency()` - расчет latency для search операций с учетом:
+    - Количества шардов
+    - Количества результатов
+    - Сложности запроса
+    - Нагрузки на кластер
+  - `calculateGetLatency()` - расчет latency для get операций с учетом:
+    - Нагрузки на кластер
+  - `calculateQueryComplexity()` - расчет сложности запроса:
+    - Bool queries добавляют сложность (must, should, must_not, filter)
+    - Range queries добавляют сложность
+    - Wildcard queries добавляют сложность
+    - Aggregations добавляют значительную сложность
+    - Sorting добавляет сложность
+  - `calculateClusterLoad()` - расчет средней нагрузки на кластер из узлов
+- ✅ Интегрирован в `ElasticsearchRoutingEngine`:
+  - Заменены методы `calculateIndexLatency()`, `calculateSearchLatency()`, `calculateGetLatency()`
+  - Используются функции из `metricsCalculator.ts` вместо простых расчетов
+  - Передача факторов (shardCount, resultCount, queryComplexity, clusterLoad) в функции расчета
+
+**Механизм работы**:
+1. **Сбор факторов** → собираются факторы, влияющие на latency (shardCount, clusterLoad, etc.)
+2. **Расчет сложности** → для search запросов рассчитывается сложность через `calculateQueryComplexity()`
+3. **Расчет нагрузки** → рассчитывается средняя нагрузка на кластер через `calculateClusterLoad()`
+4. **Расчет latency** → вызывается соответствующая функция расчета с учетом всех факторов
+5. **Добавление вариативности** → добавляется случайная вариация для реалистичности
+
+**Преимущества**:
+- Реалистичные метрики - latency учитывает реальные факторы производительности
+- Модульность - расчет метрик вынесен в отдельный модуль
+- Расширяемость - легко добавлять новые факторы влияния
+- Точность - более точный расчет latency на основе множества факторов
+
+**Изменённые файлы**:
+- `src/core/elasticsearch/queryParser.ts` (новый)
+- `src/core/elasticsearch/metricsCalculator.ts` (новый)
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` (обновлен - добавлена поддержка refresh interval, интеграция queryParser и metricsCalculator)
+
+#### 5. Поддержка bulk операций ✅
+
+**Улучшение**: Реализована поддержка bulk операций Elasticsearch с парсингом NDJSON формата и batch обработкой.
+
+**Реализовано**:
+- ✅ Добавлен метод `bulk()` в `ElasticsearchRoutingEngine`:
+  - Парсинг NDJSON формата (newline-delimited JSON)
+  - Поддержка операций: `index`, `create`, `update`, `delete`
+  - Batch обработка операций в одном запросе
+  - Оптимизированный расчет latency для bulk операций (сниженная задержка на операцию)
+  - Обработка ошибок для каждой операции отдельно
+  - Подсчет успешных и неуспешных операций
+- ✅ Добавлено отслеживание bulk операций:
+  - `bulkOperations` - массив операций с timestamp, latency, items, errors
+  - `recordBulkOperation()` - метод для записи bulk операций
+  - Учет bulk операций в метриках (indexOperationsPerSecond включает операции из bulk)
+- ✅ Интегрировано в `DataFlowEngine.processElasticsearchOperation()`:
+  - Поддержка операции `'bulk'`
+  - Парсинг bulk body из различных форматов:
+    - NDJSON строка (payload.body, payload.bulk, или сам payload)
+    - Массив операций (payload.operations) - автоматическое преобразование в NDJSON
+  - Автоматическое определение bulk формата при парсинге query string
+- ✅ Обновлены типы:
+  - `ElasticsearchOperation` - добавлены поля `items` и `errors` для bulk операций
+  - Поддержка операции `'bulk'` и `'update'` в типе operation
+
+**Механизм работы**:
+1. **Парсинг NDJSON** → bulk body разбивается на строки и парсится как JSON
+2. **Обработка пар** → каждая пара строк (action line + optional source line) обрабатывается
+3. **Определение операции** → определяется тип операции (index, create, update, delete)
+4. **Выполнение** → вызывается соответствующий метод (indexDocument, deleteDocument)
+5. **Сбор результатов** → собираются результаты всех операций с подсчетом успешных/неуспешных
+6. **Расчет latency** → оптимизированный расчет с учетом batch обработки
+7. **Метрики** → bulk операции учитываются в общих метриках index операций
+
+**Формат bulk запроса**:
+```json
+{ "index": { "_index": "test", "_id": "1" } }
+{ "field": "value" }
+{ "delete": { "_index": "test", "_id": "2" } }
+{ "create": { "_index": "test", "_id": "3" } }
+{ "field": "value2" }
+{ "update": { "_index": "test", "_id": "4" } }
+{ "doc": { "field": "updated" } }
+```
+
+**Преимущества**:
+- Реалистичная симуляция - поддержка стандартного Elasticsearch bulk API
+- Производительность - оптимизированная batch обработка с сниженной latency на операцию
+- Гибкость - поддержка различных форматов входных данных
+- Надежность - обработка ошибок для каждой операции отдельно
+- Метрики - учет bulk операций в общих метриках производительности
+
+**Изменённые файлы**:
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` (обновлен - добавлен метод bulk(), отслеживание bulk операций)
+- `src/core/elasticsearch/types.ts` (обновлен - добавлены поля items и errors в ElasticsearchOperation)
+- `src/core/DataFlowEngine.ts` (обновлен - добавлена поддержка bulk операций в processElasticsearchOperation())
+
+#### 5. Расширение API поддержки ✅
+
+**Улучшение**: Реализована полная поддержка Cluster API, Index Management API и улучшения Document API для максимальной реалистичности симуляции.
+
+**Реализовано**:
+- ✅ **Cluster API** - реализованы методы для управления кластером:
+  - `getClusterHealth()` - GET /_cluster/health (статус кластера, количество узлов, шардов, индексов)
+  - `getClusterStats()` - GET /_cluster/stats (детальная статистика кластера, индексов, узлов, JVM, файловой системы)
+  - `getNodes()` - GET /_nodes (информация об узлах кластера, роли, версии, настройки)
+  - `getNodeStats()` - GET /_nodes/stats (статистика узлов: индексы, поиск, JVM, процесс, файловая система, транспорт)
+  - Все методы возвращают данные в формате, соответствующем реальному Elasticsearch API
+- ✅ **Index Management API** - реализованы методы для управления индексами:
+  - `createIndexViaAPI()` - PUT /{index} (создание индекса с настройками и mappings)
+  - `getIndexInfo()` - GET /{index} (информация об индексе: aliases, mappings, settings)
+  - `deleteIndexViaAPI()` - DELETE /{index} (удаление индекса с очисткой всех данных)
+  - `getIndicesList()` - GET /_cat/indices (список индексов в формате cat API, поддержка JSON и text)
+  - `getIndexMapping()` - GET /{index}/_mapping (получение mapping индекса)
+  - `updateIndexMapping()` - PUT /{index}/_mapping (обновление mapping индекса с merge логикой)
+  - `getIndexSettings()` - GET /{index}/_settings (получение settings индекса)
+- ✅ **Document API улучшения**:
+  - `updateDocument()` - POST /{index}/_update/{id} (partial update документов с поддержкой upsert)
+  - Поддержка `_source` filtering в `getDocument()` (массивы полей для включения или false для исключения)
+  - Versioning для документов (_version, _seq_no, _primary_term) - автоматическое отслеживание версий
+  - Поддержка optimistic concurrency control (if_seq_no, if_primary_term) - проверка версий при обновлении
+  - Улучшена поддержка `_routing` во всех операциях
+- ✅ **Расширен `executeQuery()`**:
+  - Поддержка всех новых API endpoints через HTTP метод + path формат
+  - Парсинг query string для определения типа API call
+  - Автоматическое определение индекса, документа, параметров из path
+  - Поддержка query parameters (format, _source, if_seq_no, if_primary_term)
+- ✅ **Обновлены типы**:
+  - `Document` - добавлены поля `_version`, `_seq_no`, `_primary_term`
+  - `ElasticsearchOperation` - добавлены поля `version`, `_source` для версионирования и source filtering
+- ✅ **Внутренние улучшения**:
+  - Добавлено отслеживание версий документов (`documentVersions`, `documentSeqNos`, `documentPrimaryTerms`)
+  - Глобальный счетчик sequence numbers (`globalSeqNo`)
+  - Автоматическая очистка версий при удалении документов и индексов
+  - Вспомогательные методы `getNestedField()` и `setNestedField()` для работы с вложенными полями
+
+**Механизм работы**:
+1. **Cluster API** → методы возвращают симулированные данные о состоянии кластера в формате Elasticsearch
+2. **Index Management API** → методы управляют индексами через внутренние структуры данных
+3. **Document API** → versioning отслеживается через Map структуры, optimistic concurrency проверяется перед обновлением
+4. **executeQuery()** → парсит HTTP метод + path и вызывает соответствующий метод API
+
+**Примеры использования**:
+```javascript
+// Cluster API
+GET /_cluster/health
+GET /_cluster/stats
+GET /_nodes
+GET /_nodes/stats
+
+// Index Management API
+PUT /my-index
+{
+  "settings": { "number_of_shards": 3 },
+  "mappings": { "properties": { "field": { "type": "text" } } }
+}
+GET /my-index
+DELETE /my-index
+GET /_cat/indices?format=json
+GET /my-index/_mapping
+PUT /my-index/_mapping
+{ "properties": { "new_field": { "type": "keyword" } } }
+GET /my-index/_settings
+
+// Document API улучшения
+POST /my-index/_update/1
+{ "doc": { "field": "updated_value" } }
+GET /my-index/_doc/1?_source=field1,field2
+GET /my-index/_doc/1?_source=false
+POST /my-index/_update/1?if_seq_no=5&if_primary_term=1
+{ "doc": { "field": "value" } }
+```
+
+**Преимущества**:
+- Реалистичная симуляция - полная поддержка основных Elasticsearch API endpoints
+- Соответствие форматам - ответы API соответствуют реальному Elasticsearch
+- Versioning и concurrency - реалистичная симуляция оптимистичного контроля версий
+- Гибкость - поддержка различных форматов запросов и параметров
+- Расширяемость - легко добавлять новые API endpoints
+
+**Изменённые файлы**:
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` (обновлен - добавлены методы Cluster API, Index Management API, Document API улучшения, расширен executeQuery())
+- `src/core/elasticsearch/types.ts` (обновлен - добавлены поля versioning в Document и ElasticsearchOperation)
+
+#### 6. Расширенные метрики (Этап 4.1) ✅
+
+**Улучшение**: Реализованы расширенные метрики по типам операций, индексам, шардам и узлам для детального анализа производительности.
+
+**Реализовано**:
+- ✅ **Расширен интерфейс `ElasticsearchMetrics`** в `types.ts`:
+  - Добавлен `OperationTypeMetrics` - метрики по типам операций:
+    - `operationsPerSecond` - операции в секунду
+    - `averageLatency` - средняя задержка
+    - `p50Latency` - 50-й процентиль задержки
+    - `p99Latency` - 99-й процентиль задержки
+    - `errorRate` - процент ошибок
+    - `totalOperations` - общее количество операций
+    - `totalErrors` - общее количество ошибок
+  - Добавлен `IndexMetrics` - метрики по индексам:
+    - `indexName`, `docs`, `size`, `shards`, `replicas`, `health`
+    - `indexOperationsPerSecond`, `searchOperationsPerSecond`
+    - `averageIndexLatency`, `averageSearchLatency`
+    - `refreshOperationsPerSecond`, `pendingDocuments`
+  - Добавлен `ShardMetrics` - метрики по шардам:
+    - `index`, `shard`, `primary`, `node`, `state`
+    - `docs`, `size`, `operationsPerSecond`, `averageLatency`
+  - Добавлен `NodeMetrics` - метрики по узлам:
+    - `address`, `status`, `load`, `shards`
+    - `operationsPerSecond`, `averageLatency`
+    - `memoryUsage`, `cpuUsage` (симулируются на основе load)
+  - Обновлен `ElasticsearchMetrics`:
+    - Добавлено поле `operationMetrics` с метриками для всех типов операций (index, search, get, delete, bulk, update)
+    - Добавлено поле `indexMetrics` - массив метрик по индексам
+    - Добавлено поле `shardMetrics` - массив метрик по шардам
+    - Добавлено поле `nodeMetrics` - массив метрик по узлам
+- ✅ **Обновлен метод `updateMetrics()`** в `ElasticsearchRoutingEngine.ts`:
+  - Добавлен метод `calculateOperationMetrics()` - расчет метрик по типам операций с процентилями
+  - Добавлен метод `calculatePercentile()` - расчет процентилей (p50, p99) из отсортированного массива
+  - Реализован расчет метрик по типам операций:
+    - `index` - из `indexOperations`
+    - `search` - из `searchOperations`
+    - `get` - из `getOperations`
+    - `delete` - из `deleteOperations`
+    - `update` - из `updateOperations`
+    - `bulk` - из `bulkOperations` (с учетом items и errors)
+  - Реализован расчет метрик по индексам:
+    - Распределение операций пропорционально размеру индекса (для симуляции)
+    - Учет pending документов из `pendingDocuments`
+    - Учет refresh операций из `refreshOperations`
+  - Реализован расчет метрик по шардам:
+    - Операции и latency для каждого шарда
+    - Состояние, размер, количество документов
+  - Реализован расчет метрик по узлам:
+    - Операции и latency для каждого узла
+    - Симуляция memoryUsage и cpuUsage на основе load
+    - Количество шардов на узле
+- ✅ **Обновлены методы record*Operation**:
+  - `recordIndexOperation()` - теперь принимает параметр `success` для отслеживания успешности
+  - `recordSearchOperation()` - теперь принимает параметр `success`
+  - `recordGetOperation()` - теперь принимает параметр `success`
+  - Добавлен `recordDeleteOperation()` - отслеживание delete операций с success
+  - Добавлен `recordUpdateOperation()` - отслеживание update операций с success
+- ✅ **Обновлены методы операций**:
+  - `indexDocument()` - вызывает `recordIndexOperation(latency, true)`
+  - `getDocument()` - вызывает `recordGetOperation(latency, docFound)` с проверкой наличия документа
+  - `search()` - вызывает `recordSearchOperation(latency, hits, true)`
+  - `deleteDocument()` - вызывает `recordDeleteOperation(latency, deleted)` с проверкой удаления
+  - `updateDocument()` - вызывает `recordUpdateOperation(latency, true)` вместо `recordIndexOperation()`
+- ✅ **Добавлены массивы для трекинга операций**:
+  - `deleteOperations` - массив delete операций с timestamp, latency, success
+  - `updateOperations` - массив update операций с timestamp, latency, success
+  - Обновлены типы существующих массивов для включения поля `success`
+
+**Механизм работы**:
+1. **Отслеживание операций** → все операции записываются в соответствующие массивы с timestamp, latency и success
+2. **Расчет метрик** → `updateMetrics()` фильтрует операции по временному окну и рассчитывает метрики
+3. **Процентили** → `calculatePercentile()` сортирует latencies и вычисляет p50 и p99
+4. **Распределение по индексам** → операции распределяются пропорционально размеру индекса (для симуляции)
+5. **Метрики по шардам/узлам** → рассчитываются на основе операций и состояния кластера
+
+**Преимущества**:
+- Детальный анализ - метрики по каждому типу операций, индексу, шарду и узлу
+- Процентили - p50 и p99 для анализа производительности
+- Error rate - отслеживание процента ошибок для каждого типа операций
+- Реалистичность - симуляция memoryUsage и cpuUsage на основе load
+- Расширяемость - легко добавлять новые метрики
+
+**Изменённые файлы**:
+- `src/core/elasticsearch/types.ts` (обновлен - расширен ElasticsearchMetrics, добавлены OperationTypeMetrics, IndexMetrics, ShardMetrics, NodeMetrics)
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` (обновлен - расширен updateMetrics(), добавлены calculateOperationMetrics(), calculatePercentile(), recordDeleteOperation(), recordUpdateOperation(), обновлены все record*Operation методы)
+
+#### 7. Интеграция метрик в UI ✅
+
+**Улучшение**: Добавлена полноценная визуализация метрик Elasticsearch в реальном времени с графиками и детальными секциями.
+
+**Реализовано**:
+- ✅ **Добавлена вкладка "Metrics"** в `ElasticsearchConfigAdvanced.tsx`:
+  - Новая вкладка между "Dev Tools" и "Cluster"
+  - Иконка BarChart3 для визуального обозначения
+  - Адаптивная сетка вкладок (grid-cols-6)
+- ✅ **Графики метрик в реальном времени** (Recharts):
+  - **Operations Per Second** (LineChart):
+    - Index Ops/s и Search Ops/s на одном графике
+    - Обновление в реальном времени
+    - Badge с текущими значениями
+  - **Latency Over Time** (AreaChart):
+    - Index, Search и Get latency на одном графике
+    - Разные цвета для каждого типа операции
+    - Badge с текущими средними значениями
+  - **Latency Percentiles** (LineChart):
+    - P50 и P99 для Index и Search операций
+    - Пунктирные линии для P50, сплошные для P99
+    - Визуальное разделение по типам операций
+  - **Error Rates** (AreaChart):
+    - Процент ошибок для Index и Search операций
+    - Красный и оранжевый цвета для визуального выделения
+    - Обновление в реальном времени
+- ✅ **Секция метрик по типам операций** (Operation Type Metrics):
+  - Карточки для каждого типа операции (index, search, get, delete, bulk, update)
+  - Отображение Ops/s, Avg Latency, P50, P99, Error Rate, Total Operations
+  - Адаптивная сетка (grid-cols-2 md:grid-cols-3)
+  - Separator между заголовком и метриками
+  - Выделение Error Rate красным цветом при наличии ошибок
+- ✅ **Секция метрик по индексам** (Index Metrics):
+  - Детальные карточки для каждого индекса
+  - Отображение Health с цветными индикаторами
+  - Documents, Size (в GB), Shards, Replicas
+  - Index Ops/s, Search Ops/s, Avg Index Latency, Avg Search Latency
+  - Pending Documents (выделение желтым цветом)
+  - Адаптивная сетка метрик (grid-cols-2 md:grid-cols-4)
+- ✅ **Секция метрик по шардам** (Shard Metrics):
+  - Таблица с метриками по каждому шарду
+  - Колонки: Index, Shard, Type (Primary/Replica), Node, State, Docs, Size, Ops/s, Avg Latency
+  - Badge для Type и State с соответствующими вариантами
+  - Ограничение отображения до 20 шардов с указанием общего количества
+  - Overflow-x-auto для горизонтальной прокрутки на маленьких экранах
+- ✅ **Секция метрик по узлам** (Node Metrics):
+  - Карточки для каждого узла кластера
+  - Отображение адреса узла и статуса (up/down)
+  - Load, Shards, Ops/s, Avg Latency
+  - Memory Usage и CPU Usage с Progress bars
+  - Адаптивная сетка (grid-cols-1 md:grid-cols-2)
+- ✅ **Обновление метрик в реальном времени**:
+  - `useEffect` с интервалом 1 секунда для обновления метрик
+  - Получение метрик через `elasticsearchEngine.getMetrics()`
+  - Сохранение истории метрик (последние 100 точек данных)
+  - `useMemo` для оптимизации подготовки данных для графиков
+- ✅ **Обработка отсутствия метрик**:
+  - Сообщение с иконкой Activity при отсутствии engine
+  - Подсказка о необходимости запуска эмуляции
+  - Graceful fallback для всех графиков и секций
+
+**Механизм работы**:
+1. **Получение метрик** → `useEffect` каждую секунду получает метрики из engine
+2. **Сохранение истории** → метрики сохраняются в `metricsHistory` (последние 100 точек)
+3. **Подготовка данных** → `useMemo` преобразует историю в формат для графиков
+4. **Рендеринг** → Recharts компоненты отображают графики с данными
+5. **Обновление** → графики автоматически обновляются при изменении метрик
+
+**Преимущества**:
+- Визуализация в реальном времени - все метрики обновляются каждую секунду
+- Детальный анализ - метрики по типам операций, индексам, шардам и узлам
+- Профессиональный UI - графики с использованием Recharts
+- Адаптивность - все секции адаптируются под размер экрана
+- Производительность - оптимизация через useMemo и ограничение истории
+
+**Изменённые файлы**:
+- `src/components/config/data/ElasticsearchConfigAdvanced.tsx` (обновлен - добавлена вкладка Metrics с графиками и секциями метрик, добавлены импорты recharts, useState для истории метрик, useEffect для обновления, useMemo для подготовки данных)
+
+#### 8. UI/UX улучшения: Визуализация кластера, история операций и улучшение Dev Tools ✅
+
+**Улучшение**: Добавлена визуализация кластера с распределением шардов по узлам, история операций в реальном времени и улучшенные Dev Tools с шаблонами запросов.
+
+**Реализовано**:
+- ✅ **Создан компонент `ElasticsearchClusterView.tsx`**:
+  - Визуализация узлов кластера с метриками (load, memory, CPU)
+  - Отображение распределения шардов по узлам
+  - Индикаторы здоровья узлов и кластера (green/yellow/red)
+  - Индикаторы нагрузки на узлы (Progress bars для load, memory, CPU)
+  - Детальная информация по каждому узлу:
+    - Статус (up/down) с цветовой индикацией
+    - Количество primary и replica шардов
+    - Метрики производительности (Ops/s, Avg Latency)
+    - Memory Usage и CPU Usage с Progress bars
+    - Список шардов на узле (первые 20 с индикацией общего количества)
+  - Обзор кластера (общее количество узлов, шардов, primary, replicas)
+  - Визуализация распределения шардов по узлам (Progress bars)
+- ✅ **Создан компонент `ElasticsearchOperationsHistory.tsx`**:
+  - Отображение истории операций в реальном времени
+  - Фильтрация по типу операции (index, search, get, delete, bulk, update)
+  - Фильтрация по индексу
+  - Поиск по операциям (по типу, индексу, ID, latency)
+  - Детали операции:
+    - Timestamp с миллисекундами
+    - Тип операции с цветовой индикацией
+    - Статус (Success/Error) с цветовой индикацией
+    - Latency, Hits, Items, Errors
+    - Индекс и ID документа (если доступны)
+  - Автообновление истории операций (каждую секунду)
+  - ScrollArea для прокрутки длинного списка операций
+  - Обработка пустого состояния с подсказками
+- ✅ **Добавлен метод `getOperationHistory()` в `ElasticsearchRoutingEngine.ts`**:
+  - Возвращает историю всех операций (index, search, get, delete, bulk, update)
+  - Объединяет операции из всех массивов (indexOperations, searchOperations, getOperations, deleteOperations, updateOperations, bulkOperations)
+  - Сортировка по timestamp (новые операции первыми)
+  - Ограничение количества операций (по умолчанию 100)
+  - Включает все детали операций (timestamp, operation, index, id, latency, success, hits, items, errors)
+- ✅ **Улучшены Dev Tools**:
+  - Добавлены шаблоны запросов (14 шаблонов):
+    - Match All, Match, Bool, Range, Term
+    - Index Document, Get Document, Delete Document
+    - Bulk, Cluster Health, Cluster Stats
+    - List Indices, Index Info
+  - Кнопки для быстрого выбора шаблонов
+  - Визуальное выделение выбранного шаблона
+  - ✅ **Создан компонент `ElasticsearchQueryEditor.tsx` с CodeMirror**:
+    - **Автодополнение для Elasticsearch API endpoints** (19 endpoints):
+      - Search: GET/POST /_search
+      - Cluster: GET /_cluster/health, GET /_cluster/stats, GET /_nodes, GET /_nodes/stats
+      - Cat API: GET /_cat/indices, GET /_cat/indices?v
+      - Index Management: PUT/GET/DELETE /{index}, GET /{index}/_mapping, PUT /{index}/_mapping, GET /{index}/_settings
+      - Document API: POST /{index}/_doc, PUT/GET/DELETE /{index}/_doc/{id}, POST /{index}/_update/{id}
+      - Bulk: POST /_bulk
+    - **Автодополнение для Elasticsearch Query DSL** (20 keywords):
+      - Query types: match_all, match, term, terms, range, bool, wildcard, exists, prefix, regexp, fuzzy, multi_match, match_phrase, nested, geo_distance, script
+      - Bool clauses: must, should, must_not, filter
+    - **Автодополнение для JSON свойств** (8 properties):
+      - query, aggs, sort, from, size, _source, highlight, min_score
+    - Активация автодополнения при вводе (activateOnTyping: true)
+    - Максимум 20 опций в автодополнении
+  - ✅ **Подсветка синтаксиса JSON**:
+    - Подсветка через @codemirror/lang-json
+    - Темная тема (oneDark) для лучшей читаемости кода
+    - Номера строк для навигации
+    - Автозакрытие скобок и кавычек
+    - Подсветка совпадений при выделении текста
+    - Подсветка парных скобок (bracket matching)
+    - Сворачивание кода (foldGutter)
+  - ✅ **Улучшенный UI редактора**:
+    - Минимальная высота 300px для удобного редактирования
+    - Моноширинный шрифт (Monaco, Menlo, Ubuntu Mono, Consolas)
+    - Размер шрифта 14px для читаемости
+    - Padding 12px для комфортного редактирования
+    - Скругленные углы (borderRadius: 6px)
+    - Отображение ошибок валидации внизу редактора
+    - Интеграция с существующей системой валидации запросов
+- ✅ **Интеграция в `ElasticsearchConfigAdvanced.tsx`**:
+  - Добавлена новая вкладка "History" для истории операций
+  - Обновлена вкладка "Cluster" с использованием `ElasticsearchClusterView`
+  - Обновлена вкладка "Dev Tools" с шаблонами запросов
+  - Адаптивная сетка вкладок (grid-cols-7)
+  - Автообновление истории операций через `useEffect` с интервалом 1 секунда
+  - Получение истории операций через `elasticsearchEngine.getOperationHistory(100)`
+
+**Механизм работы**:
+1. **Визуализация кластера**:
+   - Получение узлов и шардов из `elasticsearchEngine`
+   - Группировка шардов по узлам
+   - Расчет метрик для каждого узла из `engineMetrics.nodeMetrics`
+   - Отображение карточек узлов с детальной информацией
+2. **История операций**:
+   - `useEffect` каждую секунду получает историю через `elasticsearchEngine.getOperationHistory(100)`
+   - Фильтрация операций по выбранным фильтрам (тип операции, индекс, поиск)
+   - Отображение отфильтрованных операций в ScrollArea
+   - Автоматическое обновление при новых операциях
+3. **Dev Tools**:
+   - Выбор шаблона через кнопки
+   - Вставка шаблона в textarea
+   - Валидация и выполнение запроса
+   - Сохранение результата в историю запросов
+
+**Преимущества**:
+- Визуализация кластера - наглядное представление топологии и состояния кластера
+- История операций - полный контроль над всеми операциями в реальном времени
+- Шаблоны запросов - быстрое создание типовых запросов без ручного ввода
+- Улучшенный UX - интуитивный интерфейс с фильтрацией и поиском
+- Реалистичность - визуализация соответствует реальным инструментам Elasticsearch
+
+**Изменённые файлы**:
+- `src/components/config/data/ElasticsearchClusterView.tsx` ✅ **НОВЫЙ** (визуализация кластера)
+- `src/components/config/data/ElasticsearchOperationsHistory.tsx` ✅ **НОВЫЙ** (история операций)
+- `src/components/config/data/ElasticsearchQueryEditor.tsx` ✅ **НОВЫЙ** (редактор запросов с автодополнением и подсветкой синтаксиса)
+- `src/core/elasticsearch/ElasticsearchRoutingEngine.ts` ✅ **ОБНОВЛЕН** (добавлен метод getOperationHistory())
+- `src/components/config/data/ElasticsearchConfigAdvanced.tsx` ✅ **ОБНОВЛЕН** (интеграция новых компонентов, улучшение Dev Tools с CodeMirror, добавлена вкладка History)
+- `package.json` ✅ **ОБНОВЛЕН** (добавлены зависимости: @uiw/react-codemirror, @codemirror/lang-json, @codemirror/autocomplete, @codemirror/theme-one-dark)
+
+---
+
 ## Версия 0.1.8o - Snowflake: Устранение хардкода и улучшение симулятивности
 
 ### Snowflake: Устранение хардкода и улучшение симулятивности

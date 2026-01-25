@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Progress } from '@/components/ui/progress';
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   Search, 
   Database, 
@@ -24,12 +24,40 @@ import {
   RefreshCcw,
   Code,
   Layers,
-  AlertCircle
+  AlertCircle,
+  BarChart3
 } from 'lucide-react';
+import { 
+  LineChart, 
+  Line, 
+  AreaChart, 
+  Area, 
+  BarChart, 
+  Bar,
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend, 
+  ResponsiveContainer 
+} from 'recharts';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { emulationEngine } from '@/core/EmulationEngine';
 import { showSuccess, showError } from '@/utils/toast';
+import { ElasticsearchClusterView } from './ElasticsearchClusterView';
+import { ElasticsearchOperationsHistory } from './ElasticsearchOperationsHistory';
+import { ElasticsearchQueryEditor } from './ElasticsearchQueryEditor';
+import {
+  DEFAULT_CLUSTER_NAME,
+  DEFAULT_INDEX_NAME,
+  DEFAULT_NODE_ADDRESS,
+  DEFAULT_NUMBER_OF_SHARDS,
+  DEFAULT_NUMBER_OF_REPLICAS,
+  DEFAULT_REFRESH_INTERVAL,
+  DEFAULT_USERNAME,
+  MAX_RECENT_QUERIES,
+} from '@/core/elasticsearch/constants';
 
 interface ElasticsearchConfigProps {
   componentId: string;
@@ -83,15 +111,15 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
   if (!node) return <div className="p-4 text-muted-foreground">Component not found</div>;
 
   const config = (node.data.config as any) || {} as ElasticsearchConfig;
-  const clusterName = config.clusterName || 'archiphoenix-cluster';
-  const nodesList = config.nodes || ['localhost:9200'];
-  const index = config.index || 'archiphoenix-index';
-  const shards = config.shards || 5;
-  const replicas = config.replicas || 1;
-  const refreshInterval = config.refreshInterval || '1s';
+  const clusterName = config.clusterName || DEFAULT_CLUSTER_NAME;
+  const nodesList = config.nodes || [DEFAULT_NODE_ADDRESS];
+  const index = config.index || DEFAULT_INDEX_NAME;
+  const shards = config.shards || DEFAULT_NUMBER_OF_SHARDS;
+  const replicas = config.replicas || DEFAULT_NUMBER_OF_REPLICAS;
+  const refreshInterval = config.refreshInterval || DEFAULT_REFRESH_INTERVAL;
   const enableSSL = config.enableSSL ?? false;
   const enableAuth = config.enableAuth ?? false;
-  const username = config.username || 'elastic';
+  const username = config.username || DEFAULT_USERNAME;
   const password = config.password || '';
   const indices = config.indices || [];
   const queries = config.queries || [];
@@ -120,6 +148,22 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
   const [queryText, setQueryText] = useState('');
   const [queryError, setQueryError] = useState<string>('');
   const [refreshIntervalError, setRefreshIntervalError] = useState<string>('');
+  const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+  const [metricsHistory, setMetricsHistory] = useState<Array<{
+    timestamp: number;
+    metrics: typeof engineMetrics;
+  }>>([]);
+  const [operationHistory, setOperationHistory] = useState<Array<{
+    timestamp: number;
+    operation: 'index' | 'get' | 'search' | 'delete' | 'bulk' | 'update';
+    index?: string;
+    id?: string;
+    latency: number;
+    success: boolean;
+    hits?: number;
+    items?: number;
+    errors?: number;
+  }>>([]);
 
   const handleRefresh = () => {
     const elasticsearchEngine = (emulationEngine as any).elasticsearchRoutingEngines?.get(componentId);
@@ -131,7 +175,7 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
     // Get latest metrics and state from engine
     const metrics = elasticsearchEngine.getMetrics();
     const engineIndices = elasticsearchEngine.getIndices();
-    const recentQueries = elasticsearchEngine.getRecentQueries(100);
+    const recentQueries = elasticsearchEngine.getRecentQueries(MAX_RECENT_QUERIES);
     
     // Update indices in config with runtime state
     const updatedIndices = engineIndices.map((engineIdx: any) => {
@@ -360,6 +404,84 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
     showSuccess('Query deleted');
   };
 
+  // Query templates
+  const queryTemplates = {
+    'match_all': `GET /_search
+{
+  "query": {
+    "match_all": {}
+  }
+}`,
+    'match': `GET /_search
+{
+  "query": {
+    "match": {
+      "field": "value"
+    }
+  }
+}`,
+    'bool': `GET /_search
+{
+  "query": {
+    "bool": {
+      "must": [
+        { "match": { "field1": "value1" } }
+      ],
+      "should": [
+        { "match": { "field2": "value2" } }
+      ],
+      "must_not": [
+        { "term": { "status": "deleted" } }
+      ]
+    }
+  }
+}`,
+    'range': `GET /_search
+{
+  "query": {
+    "range": {
+      "timestamp": {
+        "gte": "2024-01-01",
+        "lte": "2024-12-31"
+      }
+    }
+  }
+}`,
+    'term': `GET /_search
+{
+  "query": {
+    "term": {
+      "status": "active"
+    }
+  }
+}`,
+    'index_document': `POST /${index}/_doc
+{
+  "field1": "value1",
+  "field2": "value2"
+}`,
+    'get_document': `GET /${index}/_doc/{id}`,
+    'delete_document': `DELETE /${index}/_doc/{id}`,
+    'bulk': `POST /_bulk
+{ "index": { "_index": "${index}", "_id": "1" } }
+{ "field1": "value1" }
+{ "index": { "_index": "${index}", "_id": "2" } }
+{ "field1": "value2" }`,
+    'cluster_health': `GET /_cluster/health`,
+    'cluster_stats': `GET /_cluster/stats`,
+    'indices_list': `GET /_cat/indices?v`,
+    'index_info': `GET /${index}`,
+  };
+
+  const applyTemplate = (templateKey: string) => {
+    const template = queryTemplates[templateKey as keyof typeof queryTemplates];
+    if (template) {
+      setQueryText(template);
+      setSelectedTemplate(templateKey);
+      setQueryError('');
+    }
+  };
+
   const getHealthColor = (health: string) => {
     switch (health) {
       case 'green':
@@ -372,6 +494,56 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
         return 'bg-gray-500';
     }
   };
+
+  // Update metrics history in real-time
+  useEffect(() => {
+    if (!elasticsearchEngine || !engineMetrics) return;
+
+    const interval = setInterval(() => {
+      const currentMetrics = elasticsearchEngine.getMetrics();
+      setMetricsHistory((prev) => {
+        const newHistory = [
+          ...prev,
+          {
+            timestamp: Date.now(),
+            metrics: currentMetrics,
+          },
+        ];
+        // Keep only last 100 data points
+        return newHistory.slice(-100);
+      });
+      
+      // Update operation history
+      const history = elasticsearchEngine.getOperationHistory(100);
+      setOperationHistory(history);
+    }, 1000); // Update every second
+
+    return () => clearInterval(interval);
+  }, [elasticsearchEngine, engineMetrics]);
+
+  // Prepare chart data from metrics history
+  const chartData = useMemo(() => {
+    return metricsHistory.map((entry) => {
+      const m = entry.metrics;
+      return {
+        time: new Date(entry.timestamp).toLocaleTimeString(),
+        indexOps: m?.indexOperationsPerSecond || 0,
+        searchOps: m?.searchOperationsPerSecond || 0,
+        avgIndexLatency: m?.averageIndexLatency || 0,
+        avgSearchLatency: m?.averageSearchLatency || 0,
+        avgGetLatency: m?.averageGetLatency || 0,
+        totalDocs: m?.totalDocs || 0,
+        totalSize: m?.totalSize || 0,
+        activeShards: m?.activeShards || 0,
+        indexOpsP50: m?.operationMetrics?.index?.p50Latency || 0,
+        indexOpsP99: m?.operationMetrics?.index?.p99Latency || 0,
+        searchOpsP50: m?.operationMetrics?.search?.p50Latency || 0,
+        searchOpsP99: m?.operationMetrics?.search?.p99Latency || 0,
+        indexErrorRate: m?.operationMetrics?.index?.errorRate || 0,
+        searchErrorRate: m?.operationMetrics?.search?.errorRate || 0,
+      };
+    });
+  }, [metricsHistory]);
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -448,7 +620,7 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="indices" className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="indices" className="gap-2">
               <FileText className="h-4 w-4" />
               Indices
@@ -457,9 +629,17 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
               <Code className="h-4 w-4" />
               Dev Tools
             </TabsTrigger>
+            <TabsTrigger value="metrics" className="gap-2">
+              <BarChart3 className="h-4 w-4" />
+              Metrics
+            </TabsTrigger>
             <TabsTrigger value="cluster" className="gap-2">
               <Database className="h-4 w-4" />
               Cluster
+            </TabsTrigger>
+            <TabsTrigger value="history" className="gap-2">
+              <Activity className="h-4 w-4" />
+              History
             </TabsTrigger>
             <TabsTrigger value="security" className="gap-2">
               <Shield className="h-4 w-4" />
@@ -615,14 +795,113 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                   <Card className="mb-4 border-primary">
                     <CardHeader>
                       <CardTitle>Execute Query</CardTitle>
+                      <CardDescription>Use templates or write custom queries</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                      {/* Query Templates */}
+                      <div className="space-y-2">
+                        <Label>Query Templates</Label>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'match_all' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('match_all')}
+                          >
+                            Match All
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'match' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('match')}
+                          >
+                            Match
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'bool' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('bool')}
+                          >
+                            Bool
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'range' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('range')}
+                          >
+                            Range
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'term' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('term')}
+                          >
+                            Term
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'index_document' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('index_document')}
+                          >
+                            Index Doc
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'get_document' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('get_document')}
+                          >
+                            Get Doc
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'delete_document' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('delete_document')}
+                          >
+                            Delete Doc
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'bulk' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('bulk')}
+                          >
+                            Bulk
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'cluster_health' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('cluster_health')}
+                          >
+                            Cluster Health
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'cluster_stats' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('cluster_stats')}
+                          >
+                            Cluster Stats
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'indices_list' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('indices_list')}
+                          >
+                            List Indices
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant={selectedTemplate === 'index_info' ? 'default' : 'outline'}
+                            onClick={() => applyTemplate('index_info')}
+                          >
+                            Index Info
+                          </Button>
+                        </div>
+                      </div>
                       <div className="space-y-2">
                         <Label>Query (JSON or Elasticsearch API)</Label>
-                        <Textarea
+                        <ElasticsearchQueryEditor
                           value={queryText}
-                          onChange={(e) => {
-                            setQueryText(e.target.value);
+                          onChange={(value) => {
+                            setQueryText(value);
+                            setSelectedTemplate('');
                             if (queryError) setQueryError('');
                           }}
                           onBlur={() => {
@@ -634,15 +913,9 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                             }
                           }}
                           placeholder='GET /_search\n{\n  "query": {\n    "match_all": {}\n  }\n}'
-                          rows={8}
-                          className={`font-mono text-sm ${queryError ? 'border-destructive' : ''}`}
+                          error={queryError}
+                          className="min-h-[300px]"
                         />
-                        {queryError && (
-                          <div className="flex items-center gap-1 text-sm text-destructive">
-                            <AlertCircle className="h-4 w-4" />
-                            <span>{queryError}</span>
-                          </div>
-                        )}
                       </div>
                       <div className="flex gap-2">
                         <Button onClick={executeQuery} disabled={!queryText.trim() || !!queryError}>
@@ -653,6 +926,7 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                           setShowQueryEditor(false);
                           setQueryText('');
                           setQueryError('');
+                          setSelectedTemplate('');
                         }}>
                           Cancel
                         </Button>
@@ -705,122 +979,574 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
             </Card>
           </TabsContent>
 
-          {/* Cluster Tab */}
-          <TabsContent value="cluster" className="space-y-4 mt-4">
-            <Card>
-              <CardHeader>
-                <CardTitle>Cluster Configuration</CardTitle>
-                <CardDescription>Elasticsearch cluster connection and topology</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid grid-cols-3 gap-4">
+          {/* Metrics Tab */}
+          <TabsContent value="metrics" className="space-y-4 mt-4">
+            {!engineMetrics ? (
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Activity className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>Metrics will appear when emulation is running</p>
+                    <p className="text-sm mt-2">Start emulation to see real-time metrics</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                {/* Performance Metrics Charts */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Performance Metrics</CardTitle>
+                    <CardDescription>Real-time operation metrics and latency</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-6">
+                    {/* Operations Per Second */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-base font-semibold">Operations Per Second</Label>
+                        <div className="flex gap-2">
+                          <Badge variant="outline">
+                            Index: {engineMetrics.indexOperationsPerSecond.toFixed(1)}/s
+                          </Badge>
+                          <Badge variant="outline">
+                            Search: {engineMetrics.searchOperationsPerSecond.toFixed(1)}/s
+                          </Badge>
+                        </div>
+                      </div>
+                      {chartData.length > 0 ? (
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="time" />
+                              <YAxis label={{ value: 'Ops/s', angle: -90, position: 'insideLeft' }} />
+                              <Tooltip />
+                              <Legend />
+                              <Line 
+                                type="monotone" 
+                                dataKey="indexOps" 
+                                stroke="#8884d8" 
+                                name="Index Ops/s"
+                                strokeWidth={2}
+                              />
+                              <Line 
+                                type="monotone" 
+                                dataKey="searchOps" 
+                                stroke="#82ca9d" 
+                                name="Search Ops/s"
+                                strokeWidth={2}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      ) : (
+                        <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+                          No metrics data yet
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Latency Over Time */}
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-base font-semibold">Latency Over Time</Label>
+                        <div className="flex gap-2">
+                          <Badge variant="outline">
+                            Index: {engineMetrics.averageIndexLatency.toFixed(1)}ms
+                          </Badge>
+                          <Badge variant="outline">
+                            Search: {engineMetrics.averageSearchLatency.toFixed(1)}ms
+                          </Badge>
+                          <Badge variant="outline">
+                            Get: {engineMetrics.averageGetLatency.toFixed(1)}ms
+                          </Badge>
+                        </div>
+                      </div>
+                      {chartData.length > 0 ? (
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="time" />
+                              <YAxis label={{ value: 'Latency (ms)', angle: -90, position: 'insideLeft' }} />
+                              <Tooltip />
+                              <Legend />
+                              <Area 
+                                type="monotone" 
+                                dataKey="avgIndexLatency" 
+                                stroke="#8884d8" 
+                                fill="#8884d8" 
+                                fillOpacity={0.3}
+                                name="Index Latency (ms)"
+                              />
+                              <Area 
+                                type="monotone" 
+                                dataKey="avgSearchLatency" 
+                                stroke="#82ca9d" 
+                                fill="#82ca9d" 
+                                fillOpacity={0.3}
+                                name="Search Latency (ms)"
+                              />
+                              <Area 
+                                type="monotone" 
+                                dataKey="avgGetLatency" 
+                                stroke="#ffc658" 
+                                fill="#ffc658" 
+                                fillOpacity={0.3}
+                                name="Get Latency (ms)"
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      ) : (
+                        <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+                          No metrics data yet
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Latency Percentiles */}
+                    {chartData.length > 0 && (
+                      <div className="space-y-2">
+                        <Label className="text-base font-semibold">Latency Percentiles (P50/P99)</Label>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="time" />
+                              <YAxis label={{ value: 'Latency (ms)', angle: -90, position: 'insideLeft' }} />
+                              <Tooltip />
+                              <Legend />
+                              <Line 
+                                type="monotone" 
+                                dataKey="indexOpsP50" 
+                                stroke="#8884d8" 
+                                name="Index P50"
+                                strokeWidth={2}
+                                strokeDasharray="5 5"
+                              />
+                              <Line 
+                                type="monotone" 
+                                dataKey="indexOpsP99" 
+                                stroke="#8884d8" 
+                                name="Index P99"
+                                strokeWidth={2}
+                              />
+                              <Line 
+                                type="monotone" 
+                                dataKey="searchOpsP50" 
+                                stroke="#82ca9d" 
+                                name="Search P50"
+                                strokeWidth={2}
+                                strokeDasharray="5 5"
+                              />
+                              <Line 
+                                type="monotone" 
+                                dataKey="searchOpsP99" 
+                                stroke="#82ca9d" 
+                                name="Search P99"
+                                strokeWidth={2}
+                              />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error Rates */}
+                    {chartData.length > 0 && (
+                      <div className="space-y-2">
+                        <Label className="text-base font-semibold">Error Rates</Label>
+                        <div className="h-64">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartData}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="time" />
+                              <YAxis label={{ value: 'Error Rate (%)', angle: -90, position: 'insideLeft' }} />
+                              <Tooltip />
+                              <Legend />
+                              <Area 
+                                type="monotone" 
+                                dataKey="indexErrorRate" 
+                                stroke="#ef4444" 
+                                fill="#ef4444" 
+                                fillOpacity={0.3}
+                                name="Index Error Rate (%)"
+                              />
+                              <Area 
+                                type="monotone" 
+                                dataKey="searchErrorRate" 
+                                stroke="#f59e0b" 
+                                fill="#f59e0b" 
+                                fillOpacity={0.3}
+                                name="Search Error Rate (%)"
+                              />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Operation Type Metrics */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Operation Type Metrics</CardTitle>
+                    <CardDescription>Detailed metrics by operation type</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                      {Object.entries(engineMetrics.operationMetrics || {}).map(([opType, opMetrics]: [string, any]) => (
+                        <Card key={opType} className="border-border">
+                          <CardHeader className="pb-3">
+                            <CardTitle className="text-sm font-medium capitalize">{opType} Operations</CardTitle>
+                          </CardHeader>
+                          <CardContent className="space-y-2">
+                            <div className="text-2xl font-bold">{opMetrics.operationsPerSecond.toFixed(1)}</div>
+                            <p className="text-xs text-muted-foreground">Ops/s</p>
+                            <Separator />
+                            <div className="space-y-1 text-sm">
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Avg Latency:</span>
+                                <span className="font-semibold">{opMetrics.averageLatency.toFixed(1)}ms</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">P50:</span>
+                                <span className="font-semibold">{opMetrics.p50Latency.toFixed(1)}ms</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">P99:</span>
+                                <span className="font-semibold">{opMetrics.p99Latency.toFixed(1)}ms</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Error Rate:</span>
+                                <span className={`font-semibold ${opMetrics.errorRate > 0 ? 'text-destructive' : ''}`}>
+                                  {(opMetrics.errorRate * 100).toFixed(2)}%
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Total:</span>
+                                <span className="font-semibold">{opMetrics.totalOperations.toLocaleString()}</span>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Index Metrics */}
+                {engineMetrics.indexMetrics && engineMetrics.indexMetrics.length > 0 && (
                   <Card>
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm font-medium">Cluster Health</CardTitle>
+                    <CardHeader>
+                      <CardTitle>Index Metrics</CardTitle>
+                      <CardDescription>Metrics per index</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <div className="flex items-center gap-2">
-                        <div className={`h-3 w-3 rounded-full ${
-                          clusterHealth === 'green' ? 'bg-green-500' :
-                          clusterHealth === 'yellow' ? 'bg-yellow-500' : 'bg-red-500'
-                        }`} />
-                        <span className="text-lg font-semibold uppercase">{clusterHealth}</span>
+                      <div className="space-y-4">
+                        {engineMetrics.indexMetrics.map((idxMetrics: any) => (
+                          <Card key={idxMetrics.indexName} className="border-border">
+                            <CardHeader className="pb-3">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className={`h-2 w-2 rounded-full ${getHealthColor(idxMetrics.health)}`} />
+                                  <CardTitle className="text-base">{idxMetrics.indexName}</CardTitle>
+                                </div>
+                                <Badge variant={idxMetrics.health === 'green' ? 'default' : idxMetrics.health === 'yellow' ? 'secondary' : 'destructive'}>
+                                  {idxMetrics.health}
+                                </Badge>
+                              </div>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                <div>
+                                  <span className="text-muted-foreground">Documents:</span>
+                                  <div className="font-semibold">{idxMetrics.docs.toLocaleString()}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Size:</span>
+                                  <div className="font-semibold">{(idxMetrics.size / 1024 / 1024 / 1024).toFixed(2)} GB</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Shards:</span>
+                                  <div className="font-semibold">{idxMetrics.shards}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Replicas:</span>
+                                  <div className="font-semibold">{idxMetrics.replicas}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Index Ops/s:</span>
+                                  <div className="font-semibold">{idxMetrics.indexOperationsPerSecond.toFixed(1)}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Search Ops/s:</span>
+                                  <div className="font-semibold">{idxMetrics.searchOperationsPerSecond.toFixed(1)}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Avg Index Latency:</span>
+                                  <div className="font-semibold">{idxMetrics.averageIndexLatency.toFixed(1)}ms</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Avg Search Latency:</span>
+                                  <div className="font-semibold">{idxMetrics.averageSearchLatency.toFixed(1)}ms</div>
+                                </div>
+                                {idxMetrics.pendingDocuments > 0 && (
+                                  <div>
+                                    <span className="text-muted-foreground">Pending Docs:</span>
+                                    <div className="font-semibold text-yellow-600">{idxMetrics.pendingDocuments}</div>
+                                  </div>
+                                )}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
                       </div>
                     </CardContent>
                   </Card>
+                )}
+
+                {/* Shard Metrics */}
+                {engineMetrics.shardMetrics && engineMetrics.shardMetrics.length > 0 && (
                   <Card>
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm font-medium">Active Shards</CardTitle>
+                    <CardHeader>
+                      <CardTitle>Shard Metrics</CardTitle>
+                      <CardDescription>Metrics per shard</CardDescription>
                     </CardHeader>
                     <CardContent>
-                      <span className="text-2xl font-bold">{activeShards}</span>
-                    </CardContent>
-                  </Card>
-                  <Card>
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-sm font-medium">Relocating</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <span className="text-2xl font-bold">{relocatingShards}</span>
-                    </CardContent>
-                  </Card>
-                </div>
-                <Separator />
-                <div className="space-y-2">
-                  <Label htmlFor="cluster-name">Cluster Name</Label>
-                  <Input
-                    id="cluster-name"
-                    value={clusterName}
-                    onChange={(e) => updateConfig({ clusterName: e.target.value })}
-                    placeholder="my-cluster"
-                  />
-                </div>
-                <Separator />
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <Label>
-                      Node Addresses <span className="text-destructive">*</span>
-                    </Label>
-                    <Button size="sm" onClick={addNode} variant="outline">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Add Node
-                    </Button>
-                  </div>
-                  {nodesList.length === 0 && fieldErrors.nodes && (
-                    <div className="flex items-center gap-1 text-sm text-destructive p-2 border border-destructive rounded">
-                      <AlertCircle className="h-4 w-4" />
-                      <span>{fieldErrors.nodes}</span>
-                    </div>
-                  )}
-                  <div className="space-y-2">
-                    {nodesList.map((nodeAddr, index) => (
-                      <div key={index} className="flex items-center gap-2">
-                        <Input
-                          value={nodeAddr}
-                          onChange={(e) => {
-                            updateNodeAddress(index, e.target.value);
-                            if (fieldErrors.nodes) {
-                              validateNodes();
-                            }
-                          }}
-                          onBlur={validateNodes}
-                          placeholder="localhost:9200"
-                          className={`flex-1 ${fieldErrors.nodes ? 'border-destructive' : ''}`}
-                        />
-                        {nodesList.length > 1 && (
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={() => removeNode(index)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left p-2">Index</th>
+                              <th className="text-left p-2">Shard</th>
+                              <th className="text-left p-2">Type</th>
+                              <th className="text-left p-2">Node</th>
+                              <th className="text-left p-2">State</th>
+                              <th className="text-right p-2">Docs</th>
+                              <th className="text-right p-2">Size</th>
+                              <th className="text-right p-2">Ops/s</th>
+                              <th className="text-right p-2">Avg Latency</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {engineMetrics.shardMetrics.slice(0, 20).map((shardMetrics: any, idx: number) => (
+                              <tr key={idx} className="border-b">
+                                <td className="p-2">{shardMetrics.index}</td>
+                                <td className="p-2">{shardMetrics.shard}</td>
+                                <td className="p-2">
+                                  <Badge variant={shardMetrics.primary ? 'default' : 'outline'}>
+                                    {shardMetrics.primary ? 'Primary' : 'Replica'}
+                                  </Badge>
+                                </td>
+                                <td className="p-2">{shardMetrics.node}</td>
+                                <td className="p-2">
+                                  <Badge variant={
+                                    shardMetrics.state === 'STARTED' ? 'default' :
+                                    shardMetrics.state === 'RELOCATING' ? 'secondary' :
+                                    shardMetrics.state === 'INITIALIZING' ? 'secondary' : 'destructive'
+                                  }>
+                                    {shardMetrics.state}
+                                  </Badge>
+                                </td>
+                                <td className="p-2 text-right">{shardMetrics.docs.toLocaleString()}</td>
+                                <td className="p-2 text-right">{(shardMetrics.size / 1024 / 1024).toFixed(2)} MB</td>
+                                <td className="p-2 text-right">{shardMetrics.operationsPerSecond.toFixed(1)}</td>
+                                <td className="p-2 text-right">{shardMetrics.averageLatency.toFixed(1)}ms</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        {engineMetrics.shardMetrics.length > 20 && (
+                          <p className="text-xs text-muted-foreground mt-2 text-center">
+                            Showing first 20 of {engineMetrics.shardMetrics.length} shards
+                          </p>
                         )}
                       </div>
-                    ))}
-                  </div>
-                  {fieldErrors.nodes && nodesList.length > 0 && (
-                    <div className="flex items-center gap-1 text-sm text-destructive">
-                      <AlertCircle className="h-3 w-3" />
-                      <span>{fieldErrors.nodes}</span>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {/* Node Metrics */}
+                {engineMetrics.nodeMetrics && engineMetrics.nodeMetrics.length > 0 && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Node Metrics</CardTitle>
+                      <CardDescription>Metrics per cluster node</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {engineMetrics.nodeMetrics.map((nodeMetrics: any) => (
+                          <Card key={nodeMetrics.address} className="border-border">
+                            <CardHeader className="pb-3">
+                              <div className="flex items-center justify-between">
+                                <CardTitle className="text-base">{nodeMetrics.address}</CardTitle>
+                                <Badge variant={nodeMetrics.status === 'up' ? 'default' : 'destructive'}>
+                                  {nodeMetrics.status}
+                                </Badge>
+                              </div>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                              <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                  <span className="text-muted-foreground">Load:</span>
+                                  <div className="font-semibold">{(nodeMetrics.load * 100).toFixed(1)}%</div>
+                                  <Progress value={nodeMetrics.load * 100} className="h-2 mt-1" />
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Shards:</span>
+                                  <div className="font-semibold">{nodeMetrics.shards}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Ops/s:</span>
+                                  <div className="font-semibold">{nodeMetrics.operationsPerSecond.toFixed(1)}</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Avg Latency:</span>
+                                  <div className="font-semibold">{nodeMetrics.averageLatency.toFixed(1)}ms</div>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Memory:</span>
+                                  <div className="font-semibold">{(nodeMetrics.memoryUsage * 100).toFixed(1)}%</div>
+                                  <Progress value={nodeMetrics.memoryUsage * 100} className="h-2 mt-1" />
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">CPU:</span>
+                                  <div className="font-semibold">{(nodeMetrics.cpuUsage * 100).toFixed(1)}%</div>
+                                  <Progress value={nodeMetrics.cpuUsage * 100} className="h-2 mt-1" />
+                                </div>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                )}
+              </>
+            )}
+          </TabsContent>
+
+          {/* Cluster Tab */}
+          <TabsContent value="cluster" className="space-y-4 mt-4">
+            {elasticsearchEngine ? (
+              <>
+                <ElasticsearchClusterView
+                  nodes={Array.from((elasticsearchEngine as any).nodes?.values() || [])}
+                  shards={Array.from((elasticsearchEngine as any).shards?.values() || []).flat()}
+                  metrics={engineMetrics}
+                  clusterHealth={clusterHealth}
+                />
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Cluster Configuration</CardTitle>
+                    <CardDescription>Elasticsearch cluster connection settings</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="cluster-name">Cluster Name</Label>
+                      <Input
+                        id="cluster-name"
+                        value={clusterName}
+                        onChange={(e) => updateConfig({ clusterName: e.target.value })}
+                        placeholder="my-cluster"
+                      />
                     </div>
-                  )}
-                </div>
-                <div className="flex gap-2 pt-4 border-t">
-                  <Button
-                    onClick={() => {
-                      if (validateConnectionFields()) {
-                        showSuccess('Параметры подключения сохранены');
-                      } else {
-                        showError('Пожалуйста, укажите хотя бы один корректный узел (host:port)');
-                      }
-                    }}
-                  >
-                    Сохранить настройки
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+                    <Separator />
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label>
+                          Node Addresses <span className="text-destructive">*</span>
+                        </Label>
+                        <Button size="sm" onClick={addNode} variant="outline">
+                          <Plus className="h-4 w-4 mr-2" />
+                          Add Node
+                        </Button>
+                      </div>
+                      {nodesList.length === 0 && fieldErrors.nodes && (
+                        <div className="flex items-center gap-1 text-sm text-destructive p-2 border border-destructive rounded">
+                          <AlertCircle className="h-4 w-4" />
+                          <span>{fieldErrors.nodes}</span>
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        {nodesList.map((nodeAddr, index) => (
+                          <div key={index} className="flex items-center gap-2">
+                            <Input
+                              value={nodeAddr}
+                              onChange={(e) => {
+                                updateNodeAddress(index, e.target.value);
+                                if (fieldErrors.nodes) {
+                                  validateNodes();
+                                }
+                              }}
+                              onBlur={validateNodes}
+                              placeholder={DEFAULT_NODE_ADDRESS}
+                              className={`flex-1 ${fieldErrors.nodes ? 'border-destructive' : ''}`}
+                            />
+                            {nodesList.length > 1 && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => removeNode(index)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {fieldErrors.nodes && nodesList.length > 0 && (
+                        <div className="flex items-center gap-1 text-sm text-destructive">
+                          <AlertCircle className="h-3 w-3" />
+                          <span>{fieldErrors.nodes}</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2 pt-4 border-t">
+                      <Button
+                        onClick={() => {
+                          if (validateConnectionFields()) {
+                            showSuccess('Параметры подключения сохранены');
+                          } else {
+                            showError('Пожалуйста, укажите хотя бы один корректный узел (host:port)');
+                          }
+                        }}
+                      >
+                        Сохранить настройки
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              </>
+            ) : (
+              <Card>
+                <CardContent className="pt-6">
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Database className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>Cluster visualization will appear when emulation is running</p>
+                    <p className="text-sm mt-2">Start emulation to see cluster topology</p>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          {/* History Tab */}
+          <TabsContent value="history" className="space-y-4 mt-4">
+            <ElasticsearchOperationsHistory
+              operationHistory={operationHistory}
+              onRefresh={() => {
+                if (elasticsearchEngine) {
+                  const history = elasticsearchEngine.getOperationHistory(100);
+                  setOperationHistory(history);
+                }
+              }}
+              autoRefresh={true}
+              refreshInterval={1000}
+            />
           </TabsContent>
 
           {/* Security Tab */}
@@ -865,7 +1591,7 @@ export function ElasticsearchConfigAdvanced({ componentId }: ElasticsearchConfig
                           id="username"
                           value={username}
                           onChange={(e) => updateConfig({ username: e.target.value })}
-                          placeholder="elastic"
+                          placeholder={DEFAULT_USERNAME}
                         />
                       </div>
                       <div className="space-y-2">
