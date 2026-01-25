@@ -3,6 +3,20 @@
  * Handles SQL operations, table management, MergeTree simulation, and cluster metrics
  */
 
+import { ClickHouseCompressionCalculator, CompressionType } from './clickhouse/CompressionCalculator';
+import { ClickHouseDataSizeCalculator } from './clickhouse/DataSizeCalculator';
+import { ClickHouseLatencyCalculator } from './clickhouse/LatencyCalculator';
+import { ClickHouseTableStorage } from './clickhouse/TableStorage';
+import { ClickHouseTableEngine, TableEngineConfig } from './clickhouse/TableEngine';
+import { MergeTreeEngine } from './clickhouse/engines/MergeTreeEngine';
+import { ReplacingMergeTreeEngine } from './clickhouse/engines/ReplacingMergeTreeEngine';
+import { SummingMergeTreeEngine } from './clickhouse/engines/SummingMergeTreeEngine';
+import { AggregatingMergeTreeEngine } from './clickhouse/engines/AggregatingMergeTreeEngine';
+import { ReplicatedMergeTreeEngine } from './clickhouse/engines/ReplicatedMergeTreeEngine';
+import { DistributedEngine } from './clickhouse/engines/DistributedEngine';
+import { ClickHouseSQLParser } from './clickhouse/SQLParser';
+import { ClickHouseKeeper } from './clickhouse/Keeper';
+
 export interface ClickHouseTable {
   name: string;
   database: string;
@@ -28,9 +42,57 @@ export interface ClickHouseTablePart {
 export interface ClickHouseConfig {
   cluster?: string;
   replication?: boolean;
+  clusterNodes?: number; // количество узлов в кластере
+  shards?: number; // количество шардов
+  replicas?: number; // количество реплик на шард
+  keeperNodes?: string[]; // узлы ClickHouse Keeper
   tables?: ClickHouseTable[];
   maxMemoryUsage?: number; // bytes
   compression?: 'LZ4' | 'ZSTD' | 'LZ4HC' | 'None';
+  // Конфигурируемые параметры для симуляции (избегание хардкода)
+  networkBandwidthMBps?: number; // пропускная способность сети в MB/s (по умолчанию 100 MB/s = ~100KB/ms)
+  keeperBaseLatency?: number; // базовая задержка Keeper в ms (по умолчанию 10ms)
+  keeperOperationLatencies?: { // задержки операций Keeper в ms
+    INSERT?: number;
+    MERGE?: number;
+    MUTATION?: number;
+    REPLICATE?: number;
+  };
+  baseOperationLatencies?: { // базовые задержки операций в ms
+    SELECT?: number;
+    INSERT?: number;
+    ALTER?: number;
+    CREATE?: number;
+    DROP?: number;
+  };
+  averageArrayLength?: number; // средний размер массива для оценки размера данных (по умолчанию 10)
+  sampleSize?: number; // размер выборки для анализа данных (по умолчанию 100)
+  // Дополнительные конфигурируемые параметры для симуляции (избегание хардкода)
+  latencyFactors?: { // факторы производительности для расчета latency
+    compressionDecompressionMsPerMB?: number; // время декомпрессии на MB (по умолчанию 2ms/MB)
+    networkLatencyPerNodeMs?: number; // network latency на узел кластера (по умолчанию 5ms)
+    columnarReadFactor?: number; // фактор колоночного чтения (по умолчанию 0.3)
+    indexSpeedupFactor?: number; // фактор ускорения от индексов (по умолчанию 0.5)
+    partsOverheadMsPerPart?: number; // overhead на каждый part (по умолчанию 0.1ms)
+    defaultColumnsCount?: number; // количество колонок по умолчанию для SELECT * (по умолчанию 10)
+    writeTimeMsPer10KRows?: number; // время записи на 10K строк (по умолчанию 2ms)
+    compressionTimeMsPer100KRows?: number; // время сжатия на 100K строк (по умолчанию 1ms)
+  };
+  replicationLatency?: { // задержки для репликации
+    networkLatencyPerReplicaMs?: number; // задержка на реплику (по умолчанию 5ms)
+    partsLatencyMsPerPart?: number; // задержка на part (по умолчанию 2ms)
+  };
+  distributionLatency?: { // задержки для распределенных запросов
+    baseLatencyMs?: number; // базовая задержка (по умолчанию 5ms)
+    networkLatencyPerShardMs?: number; // задержка на шард (по умолчанию 3ms)
+    replicaLatencyMs?: number; // задержка на реплику (по умолчанию 1ms)
+  };
+  keeperConfig?: { // конфигурация Keeper
+    quorumSize?: number; // минимальное количество реплик для quorum (по умолчанию 2)
+    heartbeatIntervalMs?: number; // интервал heartbeat (по умолчанию 5000ms)
+    operationTimeoutMs?: number; // таймаут операции (по умолчанию 30000ms)
+    networkLatencyPerNodeMs?: number; // задержка на узел (по умолчанию 2ms)
+  };
 }
 
 export interface QueryResult {
@@ -70,11 +132,71 @@ export interface ClickHouseMetrics {
 export class ClickHouseRoutingEngine {
   private cluster: string = 'archiphoenix-cluster';
   private replication: boolean = false;
+  private clusterNodes: number = 1; // количество узлов в кластере
+  private shards: number = 1; // количество шардов
+  private replicas: number = 1; // количество реплик на шард
+  private keeperNodes: string[] = []; // узлы ClickHouse Keeper
   private tables: Map<string, ClickHouseTable> = new Map(); // key: "database.table"
-  private tableData: Map<string, any[]> = new Map(); // key: "database.table", храним как строки для простоты, но эмулируем колоночное хранение
+  private tableStorage: Map<string, ClickHouseTableStorage> = new Map(); // key: "database.table", колоночное хранение данных
   private tableParts: Map<string, ClickHouseTablePart[]> = new Map(); // key: "database.table"
+  private tableEngines: Map<string, ClickHouseTableEngine> = new Map(); // key: "database.table", движки таблиц
   private maxMemoryUsage: number = 10 * 1024 * 1024 * 1024; // 10GB default
   private compression: 'LZ4' | 'ZSTD' | 'LZ4HC' | 'None' = 'LZ4';
+  
+  // Конфигурируемые параметры для симуляции (избегание хардкода)
+  private networkBandwidthMBps: number = 100; // пропускная способность сети в MB/s (по умолчанию 100 MB/s)
+  private keeperBaseLatency: number = 10; // базовая задержка Keeper в ms
+  private keeperOperationLatencies: { INSERT: number; MERGE: number; MUTATION: number; REPLICATE: number } = {
+    INSERT: 2,
+    MERGE: 10,
+    MUTATION: 8,
+    REPLICATE: 5,
+  };
+  private baseOperationLatencies: { SELECT: number; INSERT: number; ALTER: number; CREATE: number; DROP: number } = {
+    SELECT: 5,
+    INSERT: 10,
+    ALTER: 50,
+    CREATE: 20,
+    DROP: 15,
+  };
+  private averageArrayLength: number = 10; // средний размер массива для оценки размера данных
+  private sampleSize: number = 100; // размер выборки для анализа данных
+  
+  // Дополнительные конфигурируемые параметры для симуляции (избегание хардкода)
+  private latencyFactors: {
+    compressionDecompressionMsPerMB: number;
+    networkLatencyPerNodeMs: number;
+    columnarReadFactor: number;
+    indexSpeedupFactor: number;
+    partsOverheadMsPerPart: number;
+    defaultColumnsCount: number;
+    writeTimeMsPer10KRows: number;
+    compressionTimeMsPer100KRows: number;
+  };
+  private replicationLatency: {
+    networkLatencyPerReplicaMs: number;
+    partsLatencyMsPerPart: number;
+  };
+  private distributionLatency: {
+    baseLatencyMs: number;
+    networkLatencyPerShardMs: number;
+    replicaLatencyMs: number;
+  };
+  private keeperConfig: {
+    quorumSize: number;
+    heartbeatIntervalMs: number;
+    operationTimeoutMs: number;
+    networkLatencyPerNodeMs: number;
+  };
+  
+  // Calculators для динамических расчетов
+  private compressionCalculator: ClickHouseCompressionCalculator;
+  private dataSizeCalculator: ClickHouseDataSizeCalculator;
+  private latencyCalculator: ClickHouseLatencyCalculator;
+  private sqlParser: ClickHouseSQLParser;
+  
+  // ClickHouse Keeper для координации реплик
+  private keeper: ClickHouseKeeper;
   
   // Metrics
   private metrics: ClickHouseMetrics = {
@@ -85,7 +207,7 @@ export class ClickHouseRoutingEngine {
     writtenRowsPerSecond: 0,
     totalRows: 0,
     totalSize: 0,
-    compressionRatio: 5.0,
+    compressionRatio: 1.0, // будет рассчитываться динамически
     activeQueries: 0,
     memoryUsage: 0,
     memoryUsagePercent: 0,
@@ -101,26 +223,162 @@ export class ClickHouseRoutingEngine {
   private lastMetricsUpdate: number = Date.now();
   private activeQueriesSet: Set<string> = new Set();
 
+  constructor() {
+    // Инициализируем калькуляторы
+    this.compressionCalculator = new ClickHouseCompressionCalculator();
+    this.dataSizeCalculator = new ClickHouseDataSizeCalculator();
+    this.latencyCalculator = new ClickHouseLatencyCalculator();
+    this.sqlParser = new ClickHouseSQLParser();
+    
+    // Инициализируем ClickHouse Keeper для координации реплик
+    this.keeper = new ClickHouseKeeper();
+  }
+
   /**
    * Initialize with ClickHouse configuration
    */
   public initialize(config: ClickHouseConfig): void {
     this.cluster = config.cluster || 'archiphoenix-cluster';
     this.replication = config.replication || false;
+    this.clusterNodes = config.clusterNodes || (config.replication ? 3 : 1);
+    this.shards = config.shards || 1;
+    this.replicas = config.replicas || (config.replication ? 3 : 1);
+    this.keeperNodes = config.keeperNodes || [];
     this.maxMemoryUsage = config.maxMemoryUsage || 10 * 1024 * 1024 * 1024;
+    
+    // Инициализируем узлы Keeper
+    if (this.keeperNodes.length > 0) {
+      for (let i = 0; i < this.keeperNodes.length; i++) {
+        const node = this.keeperNodes[i];
+        // Парсим host:port или используем дефолтный порт
+        const [host, portStr] = node.includes(':') ? node.split(':') : [node, '2181'];
+        const port = parseInt(portStr, 10) || 2181;
+        this.keeper.addNode(`keeper-${i}`, host, port);
+      }
+    } else if (this.replication || this.replicas > 1) {
+      // Если репликация включена, но узлы Keeper не указаны, создаем дефолтные
+      this.keeper.addNode('keeper-1', 'localhost', 2181);
+      if (this.replicas > 2) {
+        this.keeper.addNode('keeper-2', 'localhost', 2182);
+        this.keeper.addNode('keeper-3', 'localhost', 2183);
+      }
+    }
     this.compression = config.compression || 'LZ4';
+    
+    // Инициализируем конфигурируемые параметры (избегание хардкода)
+    this.networkBandwidthMBps = config.networkBandwidthMBps || 100;
+    this.keeperBaseLatency = config.keeperBaseLatency || 10;
+    if (config.keeperOperationLatencies) {
+      this.keeperOperationLatencies = {
+        INSERT: config.keeperOperationLatencies.INSERT ?? 2,
+        MERGE: config.keeperOperationLatencies.MERGE ?? 10,
+        MUTATION: config.keeperOperationLatencies.MUTATION ?? 8,
+        REPLICATE: config.keeperOperationLatencies.REPLICATE ?? 5,
+      };
+    }
+    if (config.baseOperationLatencies) {
+      this.baseOperationLatencies = {
+        SELECT: config.baseOperationLatencies.SELECT ?? 5,
+        INSERT: config.baseOperationLatencies.INSERT ?? 10,
+        ALTER: config.baseOperationLatencies.ALTER ?? 50,
+        CREATE: config.baseOperationLatencies.CREATE ?? 20,
+        DROP: config.baseOperationLatencies.DROP ?? 15,
+      };
+    }
+    this.averageArrayLength = config.averageArrayLength || 10;
+    this.sampleSize = config.sampleSize || 100;
+    
+    // Инициализируем дополнительные конфигурируемые параметры
+    this.latencyFactors = {
+      compressionDecompressionMsPerMB: config.latencyFactors?.compressionDecompressionMsPerMB ?? 2,
+      networkLatencyPerNodeMs: config.latencyFactors?.networkLatencyPerNodeMs ?? 5,
+      columnarReadFactor: config.latencyFactors?.columnarReadFactor ?? 0.3,
+      indexSpeedupFactor: config.latencyFactors?.indexSpeedupFactor ?? 0.5,
+      partsOverheadMsPerPart: config.latencyFactors?.partsOverheadMsPerPart ?? 0.1,
+      defaultColumnsCount: config.latencyFactors?.defaultColumnsCount ?? 10,
+      writeTimeMsPer10KRows: config.latencyFactors?.writeTimeMsPer10KRows ?? 2,
+      compressionTimeMsPer100KRows: config.latencyFactors?.compressionTimeMsPer100KRows ?? 1,
+    };
+    this.replicationLatency = {
+      networkLatencyPerReplicaMs: config.replicationLatency?.networkLatencyPerReplicaMs ?? 5,
+      partsLatencyMsPerPart: config.replicationLatency?.partsLatencyMsPerPart ?? 2,
+    };
+    this.distributionLatency = {
+      baseLatencyMs: config.distributionLatency?.baseLatencyMs ?? 5,
+      networkLatencyPerShardMs: config.distributionLatency?.networkLatencyPerShardMs ?? 3,
+      replicaLatencyMs: config.distributionLatency?.replicaLatencyMs ?? 1,
+    };
+    this.keeperConfig = {
+      quorumSize: config.keeperConfig?.quorumSize ?? 2,
+      heartbeatIntervalMs: config.keeperConfig?.heartbeatIntervalMs ?? 5000,
+      operationTimeoutMs: config.keeperConfig?.operationTimeoutMs ?? 30000,
+      networkLatencyPerNodeMs: config.keeperConfig?.networkLatencyPerNodeMs ?? 2,
+    };
+    
+    // Обновляем калькуляторы с конфигурируемыми параметрами
+    this.latencyCalculator = new ClickHouseLatencyCalculator({
+      baseSelectLatency: this.baseOperationLatencies.SELECT,
+      baseInsertLatency: this.baseOperationLatencies.INSERT,
+      baseAlterLatency: this.baseOperationLatencies.ALTER,
+      baseCreateLatency: this.baseOperationLatencies.CREATE,
+      baseDropLatency: this.baseOperationLatencies.DROP,
+      compressionDecompressionMsPerMB: this.latencyFactors.compressionDecompressionMsPerMB,
+      networkLatencyPerNodeMs: this.latencyFactors.networkLatencyPerNodeMs,
+      columnarReadFactor: this.latencyFactors.columnarReadFactor,
+      indexSpeedupFactor: this.latencyFactors.indexSpeedupFactor,
+      partsOverheadMsPerPart: this.latencyFactors.partsOverheadMsPerPart,
+      defaultColumnsCount: this.latencyFactors.defaultColumnsCount,
+      writeTimeMsPer10KRows: this.latencyFactors.writeTimeMsPer10KRows,
+      compressionTimeMsPer100KRows: this.latencyFactors.compressionTimeMsPer100KRows,
+    });
+    this.dataSizeCalculator = new ClickHouseDataSizeCalculator({
+      averageArrayLength: this.averageArrayLength,
+    });
+    
+    // Обновляем Keeper с конфигурируемыми параметрами
+    this.keeper = new ClickHouseKeeper({
+      baseLatency: this.keeperBaseLatency,
+      operationLatencies: this.keeperOperationLatencies,
+      quorumSize: this.keeperConfig.quorumSize,
+      heartbeatInterval: this.keeperConfig.heartbeatIntervalMs,
+      operationTimeout: this.keeperConfig.operationTimeoutMs,
+      networkLatencyPerNode: this.keeperConfig.networkLatencyPerNodeMs,
+    });
 
     // Initialize tables
     this.tables.clear();
-    this.tableData.clear();
+    this.tableStorage.clear();
     this.tableParts.clear();
+    this.tableEngines.clear();
     
     if (config.tables) {
       for (const table of config.tables) {
         const tableKey = `${table.database || 'default'}.${table.name}`;
         this.tables.set(tableKey, { ...table });
-        this.tableData.set(tableKey, []);
+        
+        // Initialize columnar storage
+        if (table.columns && table.columns.length > 0) {
+          const storage = new ClickHouseTableStorage({
+            columns: table.columns,
+            compressionType: this.compression,
+            hasIndexes: true,
+            sampleSize: this.sampleSize,
+          });
+          this.tableStorage.set(tableKey, storage);
+        } else {
+          // Fallback: create storage with empty columns (will be updated later)
+          const storage = new ClickHouseTableStorage({
+            columns: [],
+            compressionType: this.compression,
+            hasIndexes: true,
+          });
+          this.tableStorage.set(tableKey, storage);
+        }
+        
         this.tableParts.set(tableKey, []);
+        
+        // Initialize table engine
+        this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
       }
     }
 
@@ -139,6 +397,22 @@ export class ClickHouseRoutingEngine {
       this.replication = config.replication;
     }
 
+    if (config.clusterNodes !== undefined) {
+      this.clusterNodes = config.clusterNodes;
+    }
+
+    if (config.shards !== undefined) {
+      this.shards = config.shards;
+    }
+
+    if (config.replicas !== undefined) {
+      this.replicas = config.replicas;
+    }
+
+    if (config.keeperNodes !== undefined) {
+      this.keeperNodes = config.keeperNodes;
+    }
+
     if (config.maxMemoryUsage) {
       this.maxMemoryUsage = config.maxMemoryUsage;
     }
@@ -146,27 +420,176 @@ export class ClickHouseRoutingEngine {
     if (config.compression) {
       this.compression = config.compression;
     }
+    
+    // Синхронизируем конфигурируемые параметры (избегание хардкода)
+    if (config.networkBandwidthMBps !== undefined) {
+      this.networkBandwidthMBps = config.networkBandwidthMBps;
+    }
+    if (config.keeperBaseLatency !== undefined) {
+      this.keeperBaseLatency = config.keeperBaseLatency;
+      this.keeper.updateBaseLatency(this.keeperBaseLatency);
+    }
+    if (config.keeperOperationLatencies) {
+      this.keeperOperationLatencies = {
+        INSERT: config.keeperOperationLatencies.INSERT ?? this.keeperOperationLatencies.INSERT,
+        MERGE: config.keeperOperationLatencies.MERGE ?? this.keeperOperationLatencies.MERGE,
+        MUTATION: config.keeperOperationLatencies.MUTATION ?? this.keeperOperationLatencies.MUTATION,
+        REPLICATE: config.keeperOperationLatencies.REPLICATE ?? this.keeperOperationLatencies.REPLICATE,
+      };
+      this.keeper.updateOperationLatencies(this.keeperOperationLatencies);
+    }
+    if (config.baseOperationLatencies) {
+      this.baseOperationLatencies = {
+        SELECT: config.baseOperationLatencies.SELECT ?? this.baseOperationLatencies.SELECT,
+        INSERT: config.baseOperationLatencies.INSERT ?? this.baseOperationLatencies.INSERT,
+        ALTER: config.baseOperationLatencies.ALTER ?? this.baseOperationLatencies.ALTER,
+        CREATE: config.baseOperationLatencies.CREATE ?? this.baseOperationLatencies.CREATE,
+        DROP: config.baseOperationLatencies.DROP ?? this.baseOperationLatencies.DROP,
+      };
+      this.latencyCalculator = new ClickHouseLatencyCalculator({
+        baseSelectLatency: this.baseOperationLatencies.SELECT,
+        baseInsertLatency: this.baseOperationLatencies.INSERT,
+        baseAlterLatency: this.baseOperationLatencies.ALTER,
+        baseCreateLatency: this.baseOperationLatencies.CREATE,
+        baseDropLatency: this.baseOperationLatencies.DROP,
+      });
+    }
+    if (config.averageArrayLength !== undefined) {
+      this.averageArrayLength = config.averageArrayLength;
+      this.dataSizeCalculator = new ClickHouseDataSizeCalculator({
+        averageArrayLength: this.averageArrayLength,
+      });
+    }
+    if (config.sampleSize !== undefined) {
+      this.sampleSize = config.sampleSize;
+    }
+    
+    // Синхронизируем дополнительные конфигурируемые параметры
+    if (config.latencyFactors) {
+      this.latencyFactors = {
+        compressionDecompressionMsPerMB: config.latencyFactors.compressionDecompressionMsPerMB ?? this.latencyFactors.compressionDecompressionMsPerMB,
+        networkLatencyPerNodeMs: config.latencyFactors.networkLatencyPerNodeMs ?? this.latencyFactors.networkLatencyPerNodeMs,
+        columnarReadFactor: config.latencyFactors.columnarReadFactor ?? this.latencyFactors.columnarReadFactor,
+        indexSpeedupFactor: config.latencyFactors.indexSpeedupFactor ?? this.latencyFactors.indexSpeedupFactor,
+        partsOverheadMsPerPart: config.latencyFactors.partsOverheadMsPerPart ?? this.latencyFactors.partsOverheadMsPerPart,
+        defaultColumnsCount: config.latencyFactors.defaultColumnsCount ?? this.latencyFactors.defaultColumnsCount,
+        writeTimeMsPer10KRows: config.latencyFactors.writeTimeMsPer10KRows ?? this.latencyFactors.writeTimeMsPer10KRows,
+        compressionTimeMsPer100KRows: config.latencyFactors.compressionTimeMsPer100KRows ?? this.latencyFactors.compressionTimeMsPer100KRows,
+      };
+      // Обновляем LatencyCalculator с новыми параметрами
+      this.latencyCalculator = new ClickHouseLatencyCalculator({
+        baseSelectLatency: this.baseOperationLatencies.SELECT,
+        baseInsertLatency: this.baseOperationLatencies.INSERT,
+        baseAlterLatency: this.baseOperationLatencies.ALTER,
+        baseCreateLatency: this.baseOperationLatencies.CREATE,
+        baseDropLatency: this.baseOperationLatencies.DROP,
+        compressionDecompressionMsPerMB: this.latencyFactors.compressionDecompressionMsPerMB,
+        networkLatencyPerNodeMs: this.latencyFactors.networkLatencyPerNodeMs,
+        columnarReadFactor: this.latencyFactors.columnarReadFactor,
+        indexSpeedupFactor: this.latencyFactors.indexSpeedupFactor,
+        partsOverheadMsPerPart: this.latencyFactors.partsOverheadMsPerPart,
+        defaultColumnsCount: this.latencyFactors.defaultColumnsCount,
+        writeTimeMsPer10KRows: this.latencyFactors.writeTimeMsPer10KRows,
+        compressionTimeMsPer100KRows: this.latencyFactors.compressionTimeMsPer100KRows,
+      });
+    }
+    if (config.replicationLatency) {
+      this.replicationLatency = {
+        networkLatencyPerReplicaMs: config.replicationLatency.networkLatencyPerReplicaMs ?? this.replicationLatency.networkLatencyPerReplicaMs,
+        partsLatencyMsPerPart: config.replicationLatency.partsLatencyMsPerPart ?? this.replicationLatency.partsLatencyMsPerPart,
+      };
+    }
+    if (config.distributionLatency) {
+      this.distributionLatency = {
+        baseLatencyMs: config.distributionLatency.baseLatencyMs ?? this.distributionLatency.baseLatencyMs,
+        networkLatencyPerShardMs: config.distributionLatency.networkLatencyPerShardMs ?? this.distributionLatency.networkLatencyPerShardMs,
+        replicaLatencyMs: config.distributionLatency.replicaLatencyMs ?? this.distributionLatency.replicaLatencyMs,
+      };
+    }
+    if (config.keeperConfig) {
+      this.keeperConfig = {
+        quorumSize: config.keeperConfig.quorumSize ?? this.keeperConfig.quorumSize,
+        heartbeatIntervalMs: config.keeperConfig.heartbeatIntervalMs ?? this.keeperConfig.heartbeatIntervalMs,
+        operationTimeoutMs: config.keeperConfig.operationTimeoutMs ?? this.keeperConfig.operationTimeoutMs,
+        networkLatencyPerNodeMs: config.keeperConfig.networkLatencyPerNodeMs ?? this.keeperConfig.networkLatencyPerNodeMs,
+      };
+      // Обновляем Keeper с новыми параметрами (создаем новый экземпляр, так как параметры readonly)
+      this.keeper = new ClickHouseKeeper({
+        baseLatency: this.keeperBaseLatency,
+        operationLatencies: this.keeperOperationLatencies,
+        quorumSize: this.keeperConfig.quorumSize,
+        heartbeatInterval: this.keeperConfig.heartbeatIntervalMs,
+        operationTimeout: this.keeperConfig.operationTimeoutMs,
+        networkLatencyPerNode: this.keeperConfig.networkLatencyPerNodeMs,
+      });
+    }
 
     if (config.tables) {
       // Update tables from config
       for (const table of config.tables) {
         const tableKey = `${table.database || 'default'}.${table.name}`;
         const existingTable = this.tables.get(tableKey);
-        const existingRows = this.tableData.get(tableKey) || [];
+        const existingStorage = this.tableStorage.get(tableKey);
         
         if (existingTable) {
           // Update existing table metadata, preserve data from runtime
+          const rowCount = existingStorage ? existingStorage.getRowCount() : 0;
+          
+          // Рассчитываем размер динамически на основе колоночного хранения
+          const calculatedSize = table.columns && rowCount > 0
+            ? this.dataSizeCalculator.calculateTableSize({
+                columns: table.columns,
+                rows: rowCount,
+                compressionType: this.compression,
+                hasIndexes: true,
+              })
+            : existingTable.size || 0;
+          
           this.tables.set(tableKey, {
             ...table,
-            rows: existingTable.rows || existingRows.length || 0,
-            size: existingTable.size || (existingRows.length * 512) || 0, // Rough estimate: 512 bytes per row
+            rows: rowCount,
+            size: calculatedSize,
           });
+          
+          // Update storage if columns changed
+          if (table.columns && table.columns.length > 0) {
+            if (existingStorage) {
+              existingStorage.updateConfig({
+                columns: table.columns,
+                compressionType: this.compression,
+                hasIndexes: true,
+              });
+            } else {
+              const storage = new ClickHouseTableStorage({
+                columns: table.columns,
+                compressionType: this.compression,
+                hasIndexes: true,
+              });
+              this.tableStorage.set(tableKey, storage);
+            }
+          }
+
+          // Update or create table engine
+          if (!this.tableEngines.has(tableKey)) {
+            this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
+          }
         } else {
           // New table - initialize empty
           this.tables.set(tableKey, { ...table, rows: 0, size: 0 });
-          if (!this.tableData.has(tableKey)) {
-            this.tableData.set(tableKey, []);
+          
+          if (!this.tableStorage.has(tableKey)) {
+            const storage = new ClickHouseTableStorage({
+              columns: table.columns || [],
+              compressionType: this.compression,
+              hasIndexes: true,
+            });
+            this.tableStorage.set(tableKey, storage);
             this.tableParts.set(tableKey, []);
+          }
+
+          // Initialize table engine
+          if (!this.tableEngines.has(tableKey)) {
+            this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
           }
         }
       }
@@ -239,20 +662,22 @@ export class ClickHouseRoutingEngine {
   }
 
   /**
-   * Execute SELECT query
+   * Execute SELECT query with columnar storage and column pruning
    */
   private executeSelect(query: string, startTime: number): QueryResult {
-    // Simple SELECT parsing: SELECT *|columns FROM database.table [WHERE ...] [GROUP BY ...] [ORDER BY ...] [LIMIT n]
-    const fromMatch = query.match(/FROM\s+([\w.]+)/i);
-    if (!fromMatch) {
+    // Use SQL parser for proper parsing
+    const parseResult = this.sqlParser.parseSelect(query);
+    
+    if (!parseResult.success || !parseResult.result) {
       return {
         success: false,
-        error: 'Invalid SELECT query: missing FROM clause',
+        error: parseResult.error || 'Invalid SELECT query',
         latency: Date.now() - startTime,
       };
     }
 
-    const tableName = fromMatch[1].trim();
+    const parsed = parseResult.result;
+    const tableName = parsed.from;
     const tableKey = this.normalizeTableKey(tableName);
     
     const table = this.tables.get(tableKey);
@@ -264,87 +689,138 @@ export class ClickHouseRoutingEngine {
       };
     }
 
-    const rows = this.tableData.get(tableKey) || [];
-    
-    // Parse columns
-    const selectMatch = query.match(/SELECT\s+(.+?)\s+FROM/i);
-    const columns = selectMatch ? selectMatch[1].trim().split(',').map(c => c.trim()) : ['*'];
-    
-    // Parse WHERE
-    let filteredRows = [...rows];
-    const whereMatch = query.match(/WHERE\s+(.+?)(?:\s+GROUP\s+BY|\s+ORDER\s+BY|\s+LIMIT|$)/i);
-    if (whereMatch) {
-      const whereClause = whereMatch[1].trim();
-      // Simple equality: column = value
-      const eqMatch = whereClause.match(/(\w+)\s*=\s*['"]?([^'"\s]+)['"]?/);
-      if (eqMatch) {
-        const column = eqMatch[1];
-        const value = eqMatch[2];
-        filteredRows = rows.filter(row => String(row[column]) === value);
-      }
+    const storage = this.tableStorage.get(tableKey);
+    if (!storage) {
+      return {
+        success: false,
+        error: `Table storage for ${tableName} is not initialized`,
+        latency: Date.now() - startTime,
+      };
     }
 
-    // Parse GROUP BY (simplified - just count groups)
-    const groupByMatch = query.match(/GROUP\s+BY\s+(\w+)/i);
-    if (groupByMatch) {
-      const groupColumn = groupByMatch[1];
-      const groups = new Map();
-      filteredRows.forEach(row => {
-        const key = String(row[groupColumn] || 'null');
+    // Parse columns for column pruning
+    const columnNames = parsed.columns.includes('*') ? undefined : parsed.columns;
+    
+    // Parse PREWHERE clause (executed before WHERE for optimization)
+    let prewhereFilterFunction: ((row: Record<string, any>) => boolean) | undefined;
+    if (parsed.prewhere) {
+      prewhereFilterFunction = this.buildFilterFunction(parsed.prewhere);
+    }
+    
+    // Parse WHERE clause
+    let filterFunction: ((row: Record<string, any>) => boolean) | undefined;
+    if (parsed.where) {
+      filterFunction = this.buildFilterFunction(parsed.where);
+    }
+    
+    // Combine PREWHERE and WHERE filters
+    const combinedFilter = prewhereFilterFunction && filterFunction
+      ? (row: Record<string, any>) => prewhereFilterFunction!(row) && filterFunction!(row)
+      : prewhereFilterFunction || filterFunction;
+
+    // Use parsed ORDER BY, LIMIT, SAMPLE, FINAL
+    const orderBy = parsed.orderBy && parsed.orderBy.length > 0 ? parsed.orderBy[0].column : undefined;
+    const orderDirection = parsed.orderBy && parsed.orderBy.length > 0 ? parsed.orderBy[0].direction : undefined;
+    const limit = parsed.limit;
+    const sample = parsed.sample;
+    const final = parsed.final || false;
+
+    // Get or create table engine
+    let engine = this.tableEngines.get(tableKey);
+    if (!engine) {
+      this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
+      engine = this.tableEngines.get(tableKey)!;
+    }
+
+    // Use engine for SELECT with column pruning, SAMPLE, and FINAL support
+    let resultRows: Record<string, any>[];
+    
+    // Check for GROUP BY
+    if (parsed.groupBy && parsed.groupBy.length > 0) {
+      // For GROUP BY, use engine to read rows with SAMPLE and FINAL support
+      const allRows = engine.select({
+        columnNames: columnNames,
+        filter: combinedFilter,
+        sample,
+        final,
+        storage,
+      });
+      
+      const groupColumns = parsed.groupBy;
+      const groups = new Map<string, number>();
+      allRows.forEach(row => {
+        const key = groupColumns.map(col => String(row[col] || 'null')).join('|');
         groups.set(key, (groups.get(key) || 0) + 1);
       });
-      filteredRows = Array.from(groups.entries()).map(([key, count]) => ({
-        [groupColumn]: key,
-        count: count,
-      }));
-    }
-
-    // Parse ORDER BY
-    const orderByMatch = query.match(/ORDER\s+BY\s+(\w+)(?:\s+(ASC|DESC))?/i);
-    if (orderByMatch) {
-      const orderColumn = orderByMatch[1];
-      const direction = (orderByMatch[2] || 'ASC').toUpperCase();
-      filteredRows.sort((a, b) => {
-        const aVal = a[orderColumn];
-        const bVal = b[orderColumn];
-        if (direction === 'DESC') {
-          return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
-        }
-        return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      });
-    }
-
-    // Parse LIMIT
-    const limitMatch = query.match(/LIMIT\s+(\d+)/i);
-    const limit = limitMatch ? parseInt(limitMatch[1], 10) : undefined;
-    if (limit !== undefined && limit > 0) {
-      filteredRows = filteredRows.slice(0, limit);
-    }
-
-    // Calculate latency based on query complexity and data size
-    const latency = this.calculateQueryLatency(query, table, filteredRows.length);
-
-    // Filter columns if not SELECT *
-    let resultRows = filteredRows;
-    if (!columns.includes('*') && columns.length > 0) {
-      resultRows = filteredRows.map(row => {
-        const result: any = {};
-        columns.forEach(col => {
-          if (row.hasOwnProperty(col)) {
-            result[col] = row[col];
-          }
+      
+      resultRows = Array.from(groups.entries()).map(([key, count]) => {
+        const values = key.split('|');
+        const result: Record<string, any> = { count };
+        groupColumns.forEach((col, idx) => {
+          result[col] = values[idx];
         });
         return result;
       });
+      
+      // Apply ORDER BY and LIMIT to grouped results
+      if (orderBy) {
+        resultRows.sort((a, b) => {
+          const aVal = a[orderBy];
+          const bVal = b[orderBy];
+          if (orderDirection === 'DESC') {
+            return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+          }
+          return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+        });
+      }
+      
+      if (limit !== undefined && limit > 0) {
+        resultRows = resultRows.slice(0, limit);
+      }
+    } else {
+      // Regular SELECT with column pruning, SAMPLE, and FINAL support
+      resultRows = engine.select({
+        columnNames: columnNames, // Column pruning: read only requested columns
+        filter: combinedFilter,
+        orderBy: orderBy,
+        orderDirection: orderDirection,
+        limit: limit,
+        sample,
+        final,
+        storage,
+      });
     }
+
+    // Calculate latency using LatencyCalculator
+    // For column pruning, calculate data size based on columns read
+    const columnsRead = columnNames ? columnNames.length : (table.columns?.length || 0);
+    const queryComplexity = this.latencyCalculator.estimateQueryComplexity(query);
+    const parts = this.tableParts.get(tableKey) || [];
+    
+    // Calculate data size for columns read (column pruning optimization)
+    const dataSizeForColumns = columnNames && table.columns
+      ? storage.getSizeForColumns(columnNames)
+      : table.size;
+    
+    const latency = this.latencyCalculator.calculateLatency({
+      operationType: 'SELECT',
+      rowsScanned: storage.getRowCount(),
+      columnsRead: columnsRead > 0 ? columnsRead : undefined,
+      queryComplexity,
+      partsCount: parts.length,
+      hasIndexes: true,
+      compressionEnabled: this.compression !== 'None',
+      clusterNodes: this.clusterNodes,
+      tableSize: dataSizeForColumns, // Use size of columns read (column pruning)
+    });
 
     return {
       success: true,
       latency,
       rows: resultRows,
       rowCount: resultRows.length,
-      columns: columns.includes('*') ? Object.keys(rows[0] || {}) : columns,
-      dataRead: rows.length,
+      columns: columnNames || (table.columns?.map(c => c.name) || []),
+      dataRead: storage.getRowCount(),
     };
   }
 
@@ -384,13 +860,25 @@ export class ClickHouseRoutingEngine {
       };
     }
 
+    // Get or create storage
+    let storage = this.tableStorage.get(tableKey);
+    if (!storage) {
+      // Create storage if it doesn't exist
+      storage = new ClickHouseTableStorage({
+        columns: table.columns || [],
+        compressionType: this.compression,
+        hasIndexes: true,
+        sampleSize: this.sampleSize,
+      });
+      this.tableStorage.set(tableKey, storage);
+    }
+
     // Simple parsing - assume single row for now
     const valuesStr = valuesMatch[1].trim();
     const values = this.parseValues(valuesStr);
 
-    // Add row to table
-    const rows = this.tableData.get(tableKey) || [];
-    const newRow: any = {};
+    // Build row object
+    const newRow: Record<string, any> = {};
     
     // Parse columns if specified
     const columnsMatch = query.match(/\(([^)]+)\)\s+VALUES/i);
@@ -400,26 +888,53 @@ export class ClickHouseRoutingEngine {
       columns.forEach((col, idx) => {
         newRow[col] = values[idx];
       });
+    } else if (table.columns && table.columns.length > 0) {
+      // Use table column definitions
+      table.columns.forEach((col, idx) => {
+        if (idx < values.length) {
+          newRow[col.name] = values[idx];
+        }
+      });
     } else {
-      // Assume all values are for all columns in order
+      // Fallback: assume all values are for all columns in order
       values.forEach((val, idx) => {
         newRow[`column_${idx}`] = val;
       });
     }
 
-    rows.push(newRow);
-    this.tableData.set(tableKey, rows);
-    
-    // Update table metadata
-    table.rows = rows.length;
-    table.size = rows.length * 512; // Rough estimate
+    // Get or create table engine
+    let engine = this.tableEngines.get(tableKey);
+    if (!engine) {
+      this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
+      engine = this.tableEngines.get(tableKey)!;
+    }
+
+    // Insert row using engine
+    const newParts = engine.insert({
+      rows: [newRow],
+      storage,
+      compressionType: this.compression,
+    });
+
+    // Update table parts
+    const existingParts = this.tableParts.get(tableKey) || [];
+    existingParts.push(...newParts);
+    this.tableParts.set(tableKey, existingParts);
+
+    // Update table metadata - размер рассчитывается динамически в storage
+    table.rows = storage.getRowCount();
+    table.size = storage.getTotalSize();
     this.tables.set(tableKey, table);
 
-    // Calculate latency
-    const latency = 10 + Math.random() * 5; // 10-15ms for insert
-
-    // Simulate part creation for MergeTree
-    this.simulatePartCreation(tableKey);
+    // Calculate latency using LatencyCalculator
+    const parts = this.tableParts.get(tableKey) || [];
+    const latency = this.latencyCalculator.calculateLatency({
+      operationType: 'INSERT',
+      rowsWritten: 1,
+      partsCount: parts.length,
+      compressionEnabled: this.compression !== 'None',
+      clusterNodes: this.clusterNodes,
+    });
 
     this.updateMetrics();
 
@@ -435,46 +950,86 @@ export class ClickHouseRoutingEngine {
    * Execute CREATE TABLE query
    */
   private executeCreateTable(query: string, startTime: number): QueryResult {
-    // Simple CREATE TABLE parsing
-    const tableMatch = query.match(/CREATE\s+TABLE\s+([\w.]+)/i);
-    if (!tableMatch) {
-      return {
-        success: false,
-        error: 'Invalid CREATE TABLE query',
-        latency: Date.now() - startTime,
-      };
-    }
-
-    const tableName = tableMatch[1].trim();
-    const tableKey = this.normalizeTableKey(tableName);
+    // Use SQL parser for proper parsing
+    const parseResult = this.sqlParser.parseCreateTable(query);
     
-    if (this.tables.has(tableKey)) {
+    if (!parseResult.success || !parseResult.result) {
       return {
         success: false,
-        error: `Table ${tableName} already exists`,
+        error: parseResult.error || 'Invalid CREATE TABLE query',
         latency: Date.now() - startTime,
       };
     }
 
-    // Parse engine (default: MergeTree)
-    const engineMatch = query.match(/ENGINE\s*=\s*(\w+)/i);
-    const engine = engineMatch ? engineMatch[1] : 'MergeTree';
+    const parsed = parseResult.result;
+    const tableKey = this.normalizeTableKey(
+      parsed.database ? `${parsed.database}.${parsed.table}` : parsed.table
+    );
+    
+    // Check IF NOT EXISTS
+    if (this.tables.has(tableKey)) {
+      if (parsed.ifNotExists) {
+        // Table already exists, but IF NOT EXISTS was specified - return success
+        return {
+          success: true,
+          latency: Date.now() - startTime,
+        };
+      }
+      return {
+        success: false,
+        error: `Table ${parsed.database ? `${parsed.database}.` : ''}${parsed.table} already exists`,
+        latency: Date.now() - startTime,
+      };
+    }
+
+    // Validate column types
+    for (const column of parsed.columns) {
+      if (!this.sqlParser.validateType(column.type)) {
+        return {
+          success: false,
+          error: `Invalid type for column ${column.name}: ${column.type}`,
+          latency: Date.now() - startTime,
+        };
+      }
+    }
 
     // Parse database (default: default)
-    const [database, name] = tableKey.split('.');
+    const database = parsed.database || 'default';
+    const name = parsed.table;
     
     const newTable: ClickHouseTable = {
       name,
-      database: database || 'default',
-      engine,
+      database,
+      engine: parsed.engine,
+      columns: parsed.columns.map(c => ({ name: c.name, type: c.type })),
       rows: 0,
       size: 0,
       partitions: 0,
     };
 
     this.tables.set(tableKey, newTable);
-    this.tableData.set(tableKey, []);
+    
+    // Initialize columnar storage with parsed columns
+    const storage = new ClickHouseTableStorage({
+      columns: parsed.columns.map(c => ({ name: c.name, type: c.type })),
+      compressionType: this.compression,
+      hasIndexes: parsed.engineParams?.primaryKey !== undefined || parsed.engineParams?.orderBy !== undefined,
+      sampleSize: this.sampleSize,
+    });
+    this.tableStorage.set(tableKey, storage);
     this.tableParts.set(tableKey, []);
+
+    // Initialize table engine with parsed columns and engine params
+    const engineConfig: TableEngineConfig = {
+      orderBy: parsed.engineParams?.orderBy,
+      partitionBy: parsed.engineParams?.partitionBy,
+      primaryKey: parsed.engineParams?.primaryKey,
+      sampleBy: parsed.engineParams?.sampleBy,
+      ttl: parsed.engineParams?.ttl,
+      settings: parsed.engineParams?.settings,
+    };
+    
+    this.initializeTableEngine(tableKey, parsed.engine, parsed.columns.map(c => ({ name: c.name, type: c.type })), engineConfig);
 
     this.updateMetrics();
 
@@ -509,8 +1064,9 @@ export class ClickHouseRoutingEngine {
     }
 
     this.tables.delete(tableKey);
-    this.tableData.delete(tableKey);
+    this.tableStorage.delete(tableKey);
     this.tableParts.delete(tableKey);
+    this.tableEngines.delete(tableKey);
 
     this.updateMetrics();
 
@@ -554,28 +1110,70 @@ export class ClickHouseRoutingEngine {
 
   /**
    * Calculate query latency based on complexity and data size
+   * @deprecated Используйте latencyCalculator.calculateLatency вместо этого метода
    */
   private calculateQueryLatency(query: string, table: ClickHouseTable, rowsScanned: number): number {
-    const baseLatency = 10; // ms
-    
-    // Factor from data size (columnar storage - read only needed columns)
-    const dataFactor = (rowsScanned / 1000000) * 5; // 5ms per million rows
-    
-    // Factor from query complexity
-    let complexityFactor = 1.0;
-    const upperQuery = query.toUpperCase();
-    
-    if (upperQuery.includes('JOIN')) complexityFactor *= 2.0;
-    if (upperQuery.includes('GROUP BY')) complexityFactor *= 1.5;
-    if (upperQuery.includes('ORDER BY')) complexityFactor *= 1.3;
-    if (upperQuery.includes('COUNT')) complexityFactor *= 0.8; // Optimized in columnar storage
-    if (upperQuery.includes('SUM') || upperQuery.includes('AVG')) complexityFactor *= 0.9;
-    
-    // Factor from table parts (MergeTree)
+    // Этот метод оставлен для обратной совместимости, но теперь использует LatencyCalculator
+    const columnsRead = this.latencyCalculator.countColumnsInSelect(query);
+    const queryComplexity = this.latencyCalculator.estimateQueryComplexity(query);
     const parts = this.tableParts.get(`${table.database}.${table.name}`) || [];
-    const partsFactor = Math.min(1.5, 1 + (parts.length / 100));
     
-    return baseLatency + (dataFactor * complexityFactor * partsFactor);
+    return this.latencyCalculator.calculateLatency({
+      operationType: 'SELECT',
+      rowsScanned,
+      columnsRead: columnsRead > 0 ? columnsRead : undefined,
+      queryComplexity,
+      partsCount: parts.length,
+      hasIndexes: true,
+      compressionEnabled: this.compression !== 'None',
+      clusterNodes: this.clusterNodes,
+      tableSize: table.size,
+    });
+  }
+
+  /**
+   * Build filter function from WHERE/PREWHERE clause
+   */
+  private buildFilterFunction(clause: string): ((row: Record<string, any>) => boolean) | undefined {
+    if (!clause) return undefined;
+    
+    // Simple equality: column = value
+    const eqMatch = clause.match(/(\w+)\s*=\s*['"]?([^'"\s]+)['"]?/);
+    if (eqMatch) {
+      const column = eqMatch[1];
+      const value = eqMatch[2];
+      return (row: Record<string, any>) => String(row[column]) === value;
+    }
+    
+    // Simple inequality: column != value
+    const neMatch = clause.match(/(\w+)\s*!=\s*['"]?([^'"\s]+)['"]?/);
+    if (neMatch) {
+      const column = neMatch[1];
+      const value = neMatch[2];
+      return (row: Record<string, any>) => String(row[column]) !== value;
+    }
+    
+    // Simple comparison: column > value, column < value, etc.
+    const gtMatch = clause.match(/(\w+)\s*>\s*['"]?([^'"\s]+)['"]?/);
+    if (gtMatch) {
+      const column = gtMatch[1];
+      const value = parseFloat(gtMatch[2]);
+      if (!isNaN(value)) {
+        return (row: Record<string, any>) => parseFloat(String(row[column])) > value;
+      }
+    }
+    
+    const ltMatch = clause.match(/(\w+)\s*<\s*['"]?([^'"\s]+)['"]?/);
+    if (ltMatch) {
+      const column = ltMatch[1];
+      const value = parseFloat(ltMatch[2]);
+      if (!isNaN(value)) {
+        return (row: Record<string, any>) => parseFloat(String(row[column])) < value;
+      }
+    }
+    
+    // Default: return true (no filter)
+    return undefined;
   }
 
   /**
@@ -657,39 +1255,122 @@ export class ClickHouseRoutingEngine {
   }
 
   /**
-   * Simulate part creation for MergeTree
+   * Initialize table engine based on engine type
    */
-  private simulatePartCreation(tableKey: string): void {
-    const parts = this.tableParts.get(tableKey) || [];
-    const now = new Date().toISOString().split('T')[0];
-    
-    // Create a new part
-    const newPart: ClickHouseTablePart = {
-      name: `${now}_${parts.length + 1}`,
-      minDate: now,
-      maxDate: now,
-      rows: 1000, // Batch size
-      size: 512 * 1000,
-      level: 0,
+  private initializeTableEngine(
+    tableKey: string,
+    engineType: string,
+    columns: Array<{ name: string; type: string }>,
+    providedConfig?: Partial<TableEngineConfig>
+  ): void {
+    let engine: ClickHouseTableEngine;
+
+    // Create engine based on type
+    switch (engineType.toUpperCase()) {
+      case 'MERGETREE':
+        engine = new MergeTreeEngine();
+        break;
+      case 'REPLACINGMERGETREE':
+        engine = new ReplacingMergeTreeEngine();
+        break;
+      case 'SUMMINGMERGETREE':
+        engine = new SummingMergeTreeEngine();
+        break;
+      case 'AGGREGATINGMERGETREE':
+        engine = new AggregatingMergeTreeEngine();
+        break;
+      case 'REPLICATEDMERGETREE':
+        engine = new ReplicatedMergeTreeEngine(this.keeper, {
+          networkLatencyPerReplicaMs: this.replicationLatency.networkLatencyPerReplicaMs,
+          partsLatencyMsPerPart: this.replicationLatency.partsLatencyMsPerPart,
+        });
+        break;
+      case 'DISTRIBUTED':
+        engine = new DistributedEngine({
+          baseLatencyMs: this.distributionLatency.baseLatencyMs,
+          networkLatencyPerShardMs: this.distributionLatency.networkLatencyPerShardMs,
+          replicaLatencyMs: this.distributionLatency.replicaLatencyMs,
+        });
+        break;
+      default:
+        // Default to MergeTree for unknown engines
+        engine = new MergeTreeEngine();
+        break;
+    }
+
+    // Parse ORDER BY from provided config or use first column as default
+    const orderBy = providedConfig?.orderBy || (columns.length > 0 ? [columns[0].name] : undefined);
+    const primaryKey = providedConfig?.primaryKey || orderBy;
+
+    // Initialize engine configuration
+    // Передаем конфигурацию кластера через settings для движков, которые ее используют
+    const [database, tableName] = tableKey.includes('.') ? tableKey.split('.') : ['default', tableKey];
+    const engineConfig: TableEngineConfig = {
+      engine: engineType,
+      orderBy,
+      primaryKey,
+      partitionBy: providedConfig?.partitionBy,
+      sampleBy: providedConfig?.sampleBy,
+      ttl: providedConfig?.ttl,
+      settings: {
+        // Конфигурация кластера для ReplicatedMergeTree и Distributed
+        cluster: this.cluster,
+        database,
+        table: tableName,
+        replicas: this.replicas,
+        shards: this.shards,
+        keeperNodes: this.keeperNodes,
+        clusterNodes: this.clusterNodes,
+        tableName: tableName, // Передаем имя таблицы для формирования пути в Keeper
+        shard: 0, // Можно улучшить в будущем для поддержки нескольких шардов
+        replicaIndex: 0, // Можно улучшить в будущем для поддержки нескольких реплик на одной таблице
+        networkBandwidthMBps: this.networkBandwidthMBps, // Пропускная способность сети для DistributedEngine
+        // Merge provided settings with cluster settings
+        ...providedConfig?.settings,
+      },
     };
-    
-    parts.push(newPart);
-    this.tableParts.set(tableKey, parts);
-    
-    // Simulate background merge (simplified)
-    if (parts.length > 10) {
-      // Merge some parts
-      const toMerge = parts.splice(0, 5);
-      const mergedPart: ClickHouseTablePart = {
-        name: `merged_${Date.now()}`,
-        minDate: toMerge[0].minDate,
-        maxDate: toMerge[toMerge.length - 1].maxDate,
-        rows: toMerge.reduce((sum, p) => sum + p.rows, 0),
-        size: toMerge.reduce((sum, p) => sum + p.size, 0),
-        level: Math.max(...toMerge.map(p => p.level)) + 1,
-      };
-      parts.unshift(mergedPart);
-      this.tableParts.set(tableKey, parts);
+
+    engine.initialize(engineConfig);
+    this.tableEngines.set(tableKey, engine);
+  }
+
+  /**
+   * Simulate background merge operations
+   * Вызывается периодически для объединения parts
+   * Использует MergePolicy для выбора parts с учетом свободного места
+   */
+  public performBackgroundMerge(): void {
+    // Рассчитываем процент свободного места на основе использования памяти
+    const memoryUsagePercent = this.metrics.memoryUsagePercent || 0;
+    const freeSpacePercent = Math.max(0, 100 - memoryUsagePercent);
+
+    for (const [tableKey, engine] of this.tableEngines.entries()) {
+      const storage = this.tableStorage.get(tableKey);
+      if (!storage) continue;
+
+      const parts = this.tableParts.get(tableKey) || [];
+      if (parts.length < 2) continue; // Нужно минимум 2 parts для merge
+
+      // Выполняем merge через движок с учетом свободного места
+      // MergePolicy использует freeSpacePercent для определения лимитов merge
+      const mergedParts = engine.merge({
+        parts,
+        storage,
+        freeSpacePercent,
+      });
+
+      // Обновляем parts после merge
+      if (mergedParts.length > 0) {
+        // Для ReplicatedMergeTree обновляем parts в Keeper
+        if (engine instanceof ReplicatedMergeTreeEngine) {
+          engine.updatePartsInKeeper();
+        }
+        
+        // Удаляем старые parts и добавляем объединенные
+        // (движок уже обновил свои внутренние parts, нужно синхронизировать)
+        const engineParts = engine.getParts();
+        this.tableParts.set(tableKey, engineParts);
+      }
     }
   }
 
@@ -703,14 +1384,35 @@ export class ClickHouseRoutingEngine {
     // Table metrics
     this.metrics.totalTables = this.tables.size;
 
-    // Count total rows and calculate size
+    // Count total rows and calculate size using columnar storage
     let totalRows = 0;
     let totalSize = 0;
     let totalParts = 0;
+    let totalUncompressedSize = 0;
     
     for (const [tableKey, table] of this.tables.entries()) {
-      totalRows += table.rows;
-      totalSize += table.size;
+      const storage = this.tableStorage.get(tableKey);
+      
+      if (storage) {
+        // Use columnar storage metrics
+        const rowCount = storage.getRowCount();
+        const size = storage.getTotalSize();
+        const uncompressedSize = storage.getTotalUncompressedSize();
+        
+        totalRows += rowCount;
+        totalSize += size;
+        totalUncompressedSize += uncompressedSize;
+        
+        // Update table metadata from storage
+        table.rows = rowCount;
+        table.size = size;
+      } else {
+        // Fallback if storage doesn't exist
+        totalRows += table.rows;
+        totalSize += table.size;
+        totalUncompressedSize += table.size * (this.metrics.compressionRatio || 1.0);
+      }
+      
       const parts = this.tableParts.get(tableKey) || [];
       totalParts += parts.length;
     }
@@ -718,6 +1420,18 @@ export class ClickHouseRoutingEngine {
     this.metrics.totalRows = totalRows;
     this.metrics.totalSize = totalSize;
     this.metrics.partsCount = totalParts;
+    
+    // Рассчитываем compression ratio динамически
+    if (totalUncompressedSize > 0 && totalSize > 0) {
+      this.metrics.compressionRatio = totalUncompressedSize / totalSize;
+    } else if (totalSize > 0) {
+      // Если нет данных, рассчитываем на основе типа сжатия
+      this.metrics.compressionRatio = this.compressionCalculator.calculateCompressionRatio({
+        compressionType: this.compression,
+        dataSize: totalSize,
+        dataType: 'mixed',
+      });
+    }
 
     // Calculate queries per second
     const oneSecondAgo = now - 1000;
@@ -739,17 +1453,29 @@ export class ClickHouseRoutingEngine {
       this.metrics.writtenRowsPerSecond = Math.round(totalRowsWritten / timeDelta);
     }
 
-    // Memory usage (simplified - based on total size and compression)
-    const compressedSize = totalSize / this.metrics.compressionRatio;
-    this.metrics.memoryUsage = compressedSize;
-    this.metrics.memoryUsagePercent = (compressedSize / this.maxMemoryUsage) * 100;
+    // Memory usage - используем рассчитанный compression ratio
+    // totalSize уже с учетом сжатия, поэтому memoryUsage = totalSize
+    this.metrics.memoryUsage = totalSize;
+    this.metrics.memoryUsagePercent = (totalSize / this.maxMemoryUsage) * 100;
 
-    // Pending merges (simplified - based on parts count)
-    this.metrics.pendingMerges = Math.floor(totalParts / 10);
+    // Pending merges - используем метрики из движков
+    let totalPendingMerges = 0;
+    for (const [tableKey, engine] of this.tableEngines.entries()) {
+      const engineMetrics = engine.getMetrics();
+      totalPendingMerges += engineMetrics.pendingMerges;
+    }
+    this.metrics.pendingMerges = totalPendingMerges;
 
-    // Cluster nodes (simplified)
-    this.metrics.clusterNodes = this.replication ? 3 : 1;
-    this.metrics.healthyNodes = this.metrics.clusterNodes;
+    // Cluster nodes - используем конфигурацию
+    this.metrics.clusterNodes = this.clusterNodes;
+    // Рассчитываем здоровые узлы на основе Keeper статистики
+    if (this.replication || this.replicas > 1) {
+      const keeperStats = this.keeper.getStats();
+      // Здоровые узлы = количество здоровых реплик в Keeper
+      this.metrics.healthyNodes = keeperStats.healthyReplicasCount || this.clusterNodes;
+    } else {
+      this.metrics.healthyNodes = this.clusterNodes; // предполагаем все узлы здоровы
+    }
 
     this.lastMetricsUpdate = now;
   }
@@ -773,17 +1499,41 @@ export class ClickHouseRoutingEngine {
       return { success: false, rowsInserted: 0, error: `Table ${tableName} does not exist` };
     }
 
-    const rows = this.tableData.get(tableKey) || [];
-    rows.push(...data);
-    this.tableData.set(tableKey, rows);
+    // Get or create storage
+    let storage = this.tableStorage.get(tableKey);
+    if (!storage) {
+      storage = new ClickHouseTableStorage({
+        columns: table.columns || [],
+        compressionType: this.compression,
+        hasIndexes: true,
+        sampleSize: this.sampleSize,
+      });
+      this.tableStorage.set(tableKey, storage);
+    }
 
-    // Update table metadata
-    table.rows = rows.length;
-    table.size = rows.length * 512;
+    // Get or create table engine
+    let engine = this.tableEngines.get(tableKey);
+    if (!engine) {
+      this.initializeTableEngine(tableKey, table.engine || 'MergeTree', table.columns || []);
+      engine = this.tableEngines.get(tableKey)!;
+    }
+
+    // Insert rows using engine
+    const newParts = engine.insert({
+      rows: data,
+      storage,
+      compressionType: this.compression,
+    });
+
+    // Update table parts
+    const existingParts = this.tableParts.get(tableKey) || [];
+    existingParts.push(...newParts);
+    this.tableParts.set(tableKey, existingParts);
+
+    // Update table metadata - размер рассчитывается динамически в storage
+    table.rows = storage.getRowCount();
+    table.size = storage.getTotalSize();
     this.tables.set(tableKey, table);
-
-    // Simulate part creation
-    this.simulatePartCreation(tableKey);
 
     this.updateMetrics();
 

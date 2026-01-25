@@ -62,6 +62,22 @@
   - Persistence (RDB/AOF), Cluster Mode, Pub/Sub
   - Метрики в реальном времени (memory, operations, hit rate, slowlog, command statistics)
 
+- **[Apache Cassandra](./data/cassandra.md)** - Распределенная NoSQL база данных
+  - Кластерная топология с узлами, datacenter и rack организацией
+  - Keyspaces, Tables, CQL (Cassandra Query Language)
+  - Consistency Levels (ONE, QUORUM, ALL и др.), Replication Strategies
+  - Token Ring с vnodes, Gossip Protocol, Hinted Handoff, Read Repair
+  - Compaction Strategies, TTL, Lightweight Transactions, Batch Operations
+  - Метрики в реальном времени (latency, operations, consistency violations, compaction)
+
+- **[ClickHouse](./data/clickhouse.md)** - Колоночная OLAP база данных для аналитики
+  - Колоночное хранение данных для оптимизации аналитики
+  - Table Engines (MergeTree, ReplacingMergeTree, SummingMergeTree, AggregatingMergeTree, ReplicatedMergeTree, Distributed)
+  - SQL запросы (SELECT, INSERT, CREATE, DROP, ALTER)
+  - Compression (LZ4, ZSTD, LZ4HC), Partitioning, Replication через ClickHouse Keeper
+  - Кластерная архитектура с шардированием, Merge Operations
+  - Метрики в реальном времени (throughput, latency, memory, compression, parts, merges, replication)
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -256,6 +272,8 @@
 - **PostgreSQL:** [Документация PostgreSQL](./data/postgresql.md)
 - **MongoDB:** [Документация MongoDB](./data/mongodb.md)
 - **Redis:** [Документация Redis](./data/redis.md)
+- **Apache Cassandra:** [Документация Apache Cassandra](./data/cassandra.md)
+- **ClickHouse:** [Документация ClickHouse](./data/clickhouse.md)
 
 ## Обновления
 
@@ -286,3 +304,5 @@
 - [Официальная документация PostgreSQL](https://www.postgresql.org/docs/)
 - [Официальная документация MongoDB](https://docs.mongodb.com/)
 - [Официальная документация Redis](https://redis.io/docs/)
+- [Официальная документация Apache Cassandra](https://cassandra.apache.org/doc/latest/)
+- [Официальная документация ClickHouse](https://clickhouse.com/docs/)

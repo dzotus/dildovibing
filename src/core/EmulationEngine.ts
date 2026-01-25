@@ -23,7 +23,8 @@ import { WebhookRelayRoutingEngine } from './WebhookRelayRoutingEngine';
 import { WebhookEmulationEngine } from './WebhookEmulationEngine';
 import { RedisRoutingEngine } from './RedisRoutingEngine';
 import { CassandraRoutingEngine } from './CassandraRoutingEngine';
-import { ClickHouseRoutingEngine } from './ClickHouseRoutingEngine';
+import { ClickHouseRoutingEngine, ClickHouseConfig } from './ClickHouseRoutingEngine';
+import { ClickHouseEmulationEngine } from './ClickHouseEmulationEngine';
 import { SnowflakeRoutingEngine } from './SnowflakeRoutingEngine';
 import { ElasticsearchRoutingEngine } from './ElasticsearchRoutingEngine';
 import { S3RoutingEngine } from './S3RoutingEngine';
@@ -246,8 +247,11 @@ export class EmulationEngine {
   // Cassandra routing engines per node
   private cassandraRoutingEngines: Map<string, CassandraRoutingEngine> = new Map();
   
-  // ClickHouse routing engines per node
+  // ClickHouse routing engines per node (legacy, kept for backward compatibility)
   private clickHouseRoutingEngines: Map<string, ClickHouseRoutingEngine> = new Map();
+  
+  // ClickHouse emulation engines per node
+  private clickHouseEmulationEngines: Map<string, ClickHouseEmulationEngine> = new Map();
   
   // Snowflake routing engines per node
   private snowflakeRoutingEngines: Map<string, SnowflakeRoutingEngine> = new Map();
@@ -659,6 +663,7 @@ export class EmulationEngine {
         }
         if (node.type === 'clickhouse') {
           this.initializeClickHouseRoutingEngine(node);
+          this.initializeClickHouseEmulationEngine(node);
         }
         if (node.type === 'snowflake') {
           this.initializeSnowflakeRoutingEngine(node);
@@ -1010,9 +1015,16 @@ export class EmulationEngine {
         }
       }
       
-      // Initialize ClickHouse routing engine for ClickHouse nodes
+      // Initialize ClickHouse routing engine and emulation engine for ClickHouse nodes
       if (node.type === 'clickhouse') {
         this.initializeClickHouseRoutingEngine(node);
+        // Update or initialize ClickHouse emulation engine
+        const existingEngine = this.clickHouseEmulationEngines.get(node.id);
+        if (existingEngine) {
+          existingEngine.updateConfig((node.data.config || {}) as ClickHouseConfig);
+        } else {
+          this.initializeClickHouseEmulationEngine(node);
+        }
       }
       
       // Initialize Snowflake routing engine for Snowflake nodes
@@ -1297,6 +1309,7 @@ export class EmulationEngine {
         this.redisRoutingEngines.delete(nodeId);
         this.cassandraRoutingEngines.delete(nodeId);
         this.clickHouseRoutingEngines.delete(nodeId);
+        this.clickHouseEmulationEngines.delete(nodeId);
         this.snowflakeRoutingEngines.delete(nodeId);
         this.elasticsearchRoutingEngines.delete(nodeId);
         this.s3RoutingEngines.delete(nodeId);
@@ -5087,20 +5100,24 @@ export class EmulationEngine {
       return; // Early return for Cassandra
     }
     
-    // Для ClickHouse используем ClickHouseRoutingEngine
+    // Для ClickHouse используем ClickHouseEmulationEngine
     if (node.type === 'clickhouse') {
-      if (!this.clickHouseRoutingEngines.has(node.id)) {
-        this.initializeClickHouseRoutingEngine(node);
+      // Ensure emulation engine is initialized
+      if (!this.clickHouseEmulationEngines.has(node.id)) {
+        this.initializeClickHouseEmulationEngine(node);
       }
       
-      const routingEngine = this.clickHouseRoutingEngines.get(node.id)!;
-      const clickHouseConfig = node.data.config as any;
-      
-      // Sync configuration from UI with runtime state
-      if (clickHouseConfig) {
-        routingEngine.syncFromConfig({
+      const emulationEngine = this.clickHouseEmulationEngines.get(node.id);
+      if (emulationEngine) {
+        // Update engine configuration if changed
+        const clickHouseConfig = (node.data.config || {}) as any;
+        emulationEngine.updateConfig({
           cluster: clickHouseConfig.cluster,
           replication: clickHouseConfig.replication,
+          clusterNodes: clickHouseConfig.clusterNodes,
+          shards: clickHouseConfig.shards,
+          replicas: clickHouseConfig.replicas,
+          keeperNodes: clickHouseConfig.keeperNodes,
           tables: clickHouseConfig.tables?.map((t: any) => ({
             name: t.name,
             database: clickHouseConfig.database || 'default',
@@ -5113,52 +5130,108 @@ export class EmulationEngine {
           maxMemoryUsage: clickHouseConfig.maxMemoryUsage,
           compression: clickHouseConfig.compression,
         });
+        
+        // Update metrics
+        emulationEngine.updateMetrics();
+        
+        // Get extended metrics
+        const clickHouseMetrics = emulationEngine.getMetrics();
+        
+        // Throughput based on incoming connections
+        const incomingConnections = this.connections.filter(conn => conn.target === node.id);
+        const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
+          const sourceMetrics = this.metrics.get(conn.source);
+          return sum + (sourceMetrics?.throughput || 0);
+        }, 0);
+        
+        // ClickHouse throughput is queries per second
+        metrics.throughput = Math.max(clickHouseMetrics.queriesPerSecond, totalIncomingThroughput);
+        
+        // Latency from emulation engine
+        metrics.latency = clickHouseMetrics.avgQueryTime;
+        
+        // Error rate based on failed queries
+        const errorRate = clickHouseMetrics.queries > 0 
+          ? clickHouseMetrics.failed_queries / clickHouseMetrics.queries 
+          : 0.001;
+        metrics.errorRate = Math.min(1, errorRate);
+        
+        // Utilization based on memory usage and active queries
+        const memoryPressure = clickHouseMetrics.memoryUsagePercent / 100;
+        const queryUtilization = Math.min(1, clickHouseMetrics.activeQueries / 10); // Max 10 concurrent queries
+        metrics.utilization = Math.max(queryUtilization, memoryPressure);
+        
+        // Extended custom metrics
+        metrics.customMetrics = {
+          // Basic metrics
+          'total_tables': clickHouseMetrics.totalTables,
+          'total_rows': clickHouseMetrics.totalRows,
+          'total_size_gb': clickHouseMetrics.totalSize / (1024 * 1024 * 1024),
+          'queries_per_sec': clickHouseMetrics.queriesPerSecond,
+          'read_rows_per_sec': clickHouseMetrics.readRowsPerSecond,
+          'written_rows_per_sec': clickHouseMetrics.writtenRowsPerSecond,
+          'avg_query_time_ms': clickHouseMetrics.avgQueryTime,
+          'active_queries': clickHouseMetrics.activeQueries,
+          'memory_usage_bytes': clickHouseMetrics.memoryUsage,
+          'memory_usage_percent': clickHouseMetrics.memoryUsagePercent,
+          'parts_count': clickHouseMetrics.partsCount,
+          'pending_merges': clickHouseMetrics.pendingMerges,
+          'compression_ratio': clickHouseMetrics.compressionRatio,
+          'cluster_nodes': clickHouseMetrics.clusterNodes,
+          'healthy_nodes': clickHouseMetrics.healthyNodes,
+          
+          // Extended query metrics
+          'queries': clickHouseMetrics.queries,
+          'slow_query_count': clickHouseMetrics.slow_query_count,
+          'failed_queries': clickHouseMetrics.failed_queries,
+          
+          // Memory metrics
+          'MemoryTracking': clickHouseMetrics.MemoryTracking,
+          'MemoryTrackingInBackgroundProcessingPool': clickHouseMetrics.MemoryTrackingInBackgroundProcessingPool,
+          'MemoryTrackingInMerges': clickHouseMetrics.MemoryTrackingInMerges,
+          'MemoryTrackingInQueries': clickHouseMetrics.MemoryTrackingInQueries,
+          
+          // Merge metrics
+          'BackgroundMerges': clickHouseMetrics.BackgroundMerges,
+          'MergedRows': clickHouseMetrics.MergedRows,
+          'MergedUncompressedBytes': clickHouseMetrics.MergedUncompressedBytes,
+          'MergedCompressedBytes': clickHouseMetrics.MergedCompressedBytes,
+          
+          // Replication metrics
+          'ReplicatedFetches': clickHouseMetrics.ReplicatedFetches,
+          'ReplicatedSends': clickHouseMetrics.ReplicatedSends,
+          'ReplicatedChecks': clickHouseMetrics.ReplicatedChecks,
+          
+          // Parts metrics
+          'PartsActive': clickHouseMetrics.PartsActive,
+          'PartsCommitted': clickHouseMetrics.PartsCommitted,
+          'PartsOutdated': clickHouseMetrics.PartsOutdated,
+          'PartsDeleting': clickHouseMetrics.PartsDeleting,
+          
+          // Compression metrics
+          'CompressedReadBufferBytes': clickHouseMetrics.CompressedReadBufferBytes,
+          'UncompressedReadBufferBytes': clickHouseMetrics.UncompressedReadBufferBytes,
+          'CompressedWriteBufferBytes': clickHouseMetrics.CompressedWriteBufferBytes,
+          'UncompressedWriteBufferBytes': clickHouseMetrics.UncompressedWriteBufferBytes,
+          
+          // Query type metrics
+          'SelectQuery': clickHouseMetrics.SelectQuery,
+          'InsertQuery': clickHouseMetrics.InsertQuery,
+          'AlterQuery': clickHouseMetrics.AlterQuery,
+          'CreateQuery': clickHouseMetrics.CreateQuery,
+          'DropQuery': clickHouseMetrics.DropQuery,
+          
+          // Network metrics
+          'NetworkReceiveBytes': clickHouseMetrics.NetworkReceiveBytes,
+          'NetworkSendBytes': clickHouseMetrics.NetworkSendBytes,
+          
+          // Disk metrics
+          'DiskReadBytes': clickHouseMetrics.DiskReadBytes,
+          'DiskWriteBytes': clickHouseMetrics.DiskWriteBytes,
+        };
+        
+        return; // Early return for ClickHouse
       }
-      
-      const clickHouseMetrics = routingEngine.getMetrics();
-      
-      // Throughput based on incoming connections
-      const incomingConnections = this.connections.filter(conn => conn.target === node.id);
-      const totalIncomingThroughput = incomingConnections.reduce((sum, conn) => {
-        const sourceMetrics = this.metrics.get(conn.source);
-        return sum + (sourceMetrics?.throughput || 0);
-      }, 0);
-      
-      // ClickHouse throughput is queries per second
-      metrics.throughput = Math.max(clickHouseMetrics.queriesPerSecond, totalIncomingThroughput);
-      
-      // Latency from routing engine
-      metrics.latency = clickHouseMetrics.avgQueryTime;
-      
-      // Error rate is very low for ClickHouse (analytical database is optimized)
-      // Increase slightly with memory pressure
-      const memoryPressure = clickHouseMetrics.memoryUsagePercent / 100;
-      metrics.errorRate = memoryPressure > 0.95 ? 0.01 : 0.001;
-      
-      // Utilization based on memory usage and active queries
-      const queryUtilization = Math.min(1, clickHouseMetrics.activeQueries / 10); // Max 10 concurrent queries
-      const memoryUtilization = memoryPressure;
-      metrics.utilization = Math.max(queryUtilization, memoryUtilization);
-      
-      metrics.customMetrics = {
-        'total_tables': clickHouseMetrics.totalTables,
-        'total_rows': clickHouseMetrics.totalRows,
-        'total_size_gb': clickHouseMetrics.totalSize / (1024 * 1024 * 1024),
-        'queries_per_sec': clickHouseMetrics.queriesPerSecond,
-        'read_rows_per_sec': clickHouseMetrics.readRowsPerSecond,
-        'written_rows_per_sec': clickHouseMetrics.writtenRowsPerSecond,
-        'avg_query_time_ms': clickHouseMetrics.avgQueryTime,
-        'active_queries': clickHouseMetrics.activeQueries,
-        'memory_usage_bytes': clickHouseMetrics.memoryUsage,
-        'memory_usage_percent': clickHouseMetrics.memoryUsagePercent,
-        'parts_count': clickHouseMetrics.partsCount,
-        'pending_merges': clickHouseMetrics.pendingMerges,
-        'compression_ratio': clickHouseMetrics.compressionRatio,
-        'cluster_nodes': clickHouseMetrics.clusterNodes,
-        'healthy_nodes': clickHouseMetrics.healthyNodes,
-      };
-      
-      return; // Early return for ClickHouse
     }
     
     // Для Snowflake используем SnowflakeRoutingEngine
@@ -9387,6 +9460,10 @@ export class EmulationEngine {
     routingEngine.initialize({
       cluster: config.cluster || 'archiphoenix-cluster',
       replication: config.replication || false,
+      clusterNodes: config.clusterNodes || (config.replication ? 3 : 1),
+      shards: config.shards || 1,
+      replicas: config.replicas || (config.replication ? 3 : 1),
+      keeperNodes: config.keeperNodes || [],
       tables: config.tables?.map((t: any) => ({
         name: t.name,
         database: config.database || 'default',
@@ -9401,6 +9478,45 @@ export class EmulationEngine {
     });
 
     this.clickHouseRoutingEngines.set(node.id, routingEngine);
+  }
+
+  /**
+   * Initialize ClickHouse Emulation Engine for a node
+   */
+  private initializeClickHouseEmulationEngine(node: CanvasNode): void {
+    try {
+      const config = (node.data.config || {}) as any;
+      const clickHouseConfig: ClickHouseConfig = {
+        cluster: config.cluster || 'archiphoenix-cluster',
+        replication: config.replication || false,
+        clusterNodes: config.clusterNodes || (config.replication ? 3 : 1),
+        shards: config.shards || 1,
+        replicas: config.replicas || (config.replication ? 3 : 1),
+        keeperNodes: config.keeperNodes || [],
+        tables: config.tables?.map((t: any) => ({
+          name: t.name,
+          database: config.database || 'default',
+          engine: t.engine || 'MergeTree',
+          rows: t.rows || 0,
+          size: t.size || 0,
+          partitions: t.partitions || 0,
+          columns: t.columns || [],
+        })) || [],
+        maxMemoryUsage: config.maxMemoryUsage || 10 * 1024 * 1024 * 1024,
+        compression: config.compression || 'LZ4',
+      };
+      
+      const emulationEngine = new ClickHouseEmulationEngine(node.id, clickHouseConfig);
+      this.clickHouseEmulationEngines.set(node.id, emulationEngine);
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'initialization',
+        componentId: node.id,
+        componentType: node.type,
+        context: { operation: 'initializeClickHouseEmulationEngine' },
+      });
+    }
   }
 
   private initializeSnowflakeRoutingEngine(node: CanvasNode): void {
@@ -10247,6 +10363,13 @@ export class EmulationEngine {
    */
   public getClickHouseRoutingEngine(nodeId: string): ClickHouseRoutingEngine | undefined {
     return this.clickHouseRoutingEngines.get(nodeId);
+  }
+
+  /**
+   * Get ClickHouse Emulation Engine for a node
+   */
+  public getClickHouseEmulationEngine(nodeId: string): ClickHouseEmulationEngine | undefined {
+    return this.clickHouseEmulationEngines.get(nodeId);
   }
 
   /**

@@ -87,14 +87,23 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
   const [editingTableIndex, setEditingTableIndex] = useState<number | null>(null);
   const [showQueryEditor, setShowQueryEditor] = useState(false);
   const [queryText, setQueryText] = useState('');
-  // Get real-time metrics from ClickHouseRoutingEngine
-  const clickHouseEngine = emulationEngine.getClickHouseRoutingEngine(componentId);
+  
+  // Check if emulation is running
+  const isEmulationRunning = emulationEngine.getIsRunning();
+  
+  // Get real-time metrics from ClickHouseRoutingEngine (only if emulation is running)
+  const clickHouseEngine = isEmulationRunning ? emulationEngine.getClickHouseRoutingEngine(componentId) : null;
   const realMetrics = clickHouseEngine?.getMetrics();
   
-  const totalRows = realMetrics?.totalRows || config.totalRows || tables.reduce((sum, t) => sum + t.rows, 0);
-  const totalSize = realMetrics?.totalSize || config.totalSize || tables.reduce((sum, t) => sum + t.size, 0);
-  const queryThroughput = realMetrics?.queryThroughput || config.queryThroughput || 1250;
-  const avgQueryTime = realMetrics?.avgQueryTime || config.avgQueryTime || 45;
+  // Use real metrics if available, otherwise use config values, or 0 if emulation is not running
+  const totalRows = realMetrics?.totalRows ?? config.totalRows ?? tables.reduce((sum, t) => sum + t.rows, 0);
+  const totalSize = realMetrics?.totalSize ?? config.totalSize ?? tables.reduce((sum, t) => sum + t.size, 0);
+  const queryThroughput = isEmulationRunning 
+    ? (realMetrics?.queryThroughput ?? config.queryThroughput ?? 0)
+    : (config.queryThroughput ?? 0);
+  const avgQueryTime = isEmulationRunning
+    ? (realMetrics?.avgQueryTime ?? config.avgQueryTime ?? 0)
+    : (config.avgQueryTime ?? 0);
 
   // Валидация портов и хостов
   const { portError, hostError, portConflict } = usePortValidation(nodes, componentId, host, port);
@@ -241,13 +250,9 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="gap-2">
-              <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-              Running
+              <div className={`h-2 w-2 rounded-full ${isEmulationRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+              {isEmulationRunning ? 'Running' : 'Stopped'}
             </Badge>
-            <Button size="sm" variant="outline">
-              <Settings className="h-4 w-4 mr-2" />
-              Query Console
-            </Button>
           </div>
         </div>
 
@@ -288,8 +293,12 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
               <CardTitle className="text-sm font-medium">Query Throughput</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{queryThroughput}</div>
-              <p className="text-xs text-muted-foreground mt-1">queries/sec</p>
+              <div className={`text-2xl font-bold ${!isEmulationRunning && queryThroughput === 0 ? 'text-muted-foreground' : ''}`}>
+                {isEmulationRunning || queryThroughput > 0 ? queryThroughput : '0'}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                queries/sec {!isEmulationRunning && queryThroughput === 0 && '(N/A)'}
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -504,23 +513,46 @@ export function ClickHouseConfigAdvanced({ componentId }: ClickHouseConfigProps)
             <Card>
               <CardHeader>
                 <CardTitle>Performance Metrics</CardTitle>
-                <CardDescription>Query throughput and latency</CardDescription>
+                <CardDescription>
+                  {isEmulationRunning 
+                    ? 'Query throughput and latency (real-time)' 
+                    : 'Query throughput and latency (simulation not running)'}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {!isEmulationRunning && (
+                  <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
+                    Start the emulation to see real-time metrics. Current values are from configuration or default to 0.
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Query Throughput</span>
-                      <span className="font-semibold">{queryThroughput.toLocaleString()} qps</span>
+                      <span className={`font-semibold ${!isEmulationRunning && queryThroughput === 0 ? 'text-muted-foreground' : ''}`}>
+                        {isEmulationRunning || queryThroughput > 0 
+                          ? `${queryThroughput.toLocaleString()} qps` 
+                          : '0 qps (N/A)'}
+                      </span>
                     </div>
-                    <Progress value={Math.min((queryThroughput / 5000) * 100, 100)} className="h-2" />
+                    <Progress 
+                      value={isEmulationRunning ? Math.min((queryThroughput / 5000) * 100, 100) : 0} 
+                      className="h-2" 
+                    />
                   </div>
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-muted-foreground">Avg Query Time</span>
-                      <span className="font-semibold">{avgQueryTime}ms</span>
+                      <span className={`font-semibold ${!isEmulationRunning && avgQueryTime === 0 ? 'text-muted-foreground' : ''}`}>
+                        {isEmulationRunning || avgQueryTime > 0 
+                          ? `${avgQueryTime}ms` 
+                          : '0ms (N/A)'}
+                      </span>
                     </div>
-                    <Progress value={Math.min((avgQueryTime / 200) * 100, 100)} className="h-2" />
+                    <Progress 
+                      value={isEmulationRunning ? Math.min((avgQueryTime / 200) * 100, 100) : 0} 
+                      className="h-2" 
+                    />
                   </div>
                 </div>
               </CardContent>
