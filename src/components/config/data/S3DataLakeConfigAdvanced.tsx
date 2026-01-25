@@ -1,5 +1,8 @@
 import { useCanvasStore } from '@/store/useCanvasStore';
+import { useEmulationStore } from '@/store/useEmulationStore';
 import { CanvasNode } from '@/types';
+import { emulationEngine } from '@/core/EmulationEngine';
+import { useMemo } from 'react';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -100,6 +103,30 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
   const [selectedBucket, setSelectedBucket] = useState<number | null>(null);
   const [showCreateRule, setShowCreateRule] = useState(false);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
+  
+  const { isRunning, getComponentMetrics } = useEmulationStore();
+
+  // Get S3 Emulation Engine for real-time metrics
+  const s3Engine = useMemo(() => {
+    if (isRunning) {
+      return emulationEngine.getS3EmulationEngine(componentId);
+    }
+    return undefined;
+  }, [componentId, isRunning]);
+
+  const componentMetrics = getComponentMetrics(componentId);
+  const customMetrics = componentMetrics?.customMetrics || {};
+
+  // Get real-time metrics from emulation engine or fallback to config
+  const s3Metrics = s3Engine?.getMetrics();
+  const totalBuckets = s3Metrics?.totalBuckets ?? buckets.length;
+  const totalObjects = s3Metrics?.totalObjects ?? buckets.reduce((sum, b) => sum + (b.objectCount || 0), 0);
+  const totalSize = s3Metrics?.totalSize ?? buckets.reduce((sum, b) => sum + (b.totalSize || 0), 0);
+  const throughput = s3Metrics?.throughput ?? customMetrics.estimated_ops_per_sec ?? 0;
+  const storageUtilization = s3Metrics?.storageUtilization ?? (customMetrics.storage_utilization ? customMetrics.storage_utilization / 100 : 0);
+  const operationsUtilization = s3Metrics?.operationsUtilization ?? (customMetrics.ops_utilization ? customMetrics.ops_utilization / 100 : 0);
+  const glacierObjects = s3Metrics?.glacierObjects ?? customMetrics.glacier_objects ?? 0;
+  const lifecycleTransitions = s3Metrics?.lifecycleTransitions ?? customMetrics.lifecycle_transitions ?? 0;
   
   const handleRefresh = () => {
     // Force re-render by updating timestamp in config
@@ -204,9 +231,6 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
     updateLifecycleRule(ruleId, { transitions: updatedTransitions });
   };
 
-  const totalBuckets = buckets.length;
-  const totalObjects = buckets.reduce((sum, b) => sum + (b.objectCount || 0), 0);
-  const totalSize = buckets.reduce((sum, b) => sum + (b.totalSize || 0), 0);
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return '0 Bytes';
@@ -244,34 +268,50 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
         <div className="grid grid-cols-4 gap-4">
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Buckets</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <span className="text-2xl font-bold">{totalBuckets}</span>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium">Total Objects</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold">{totalObjects.toLocaleString()}</span>
+              <div className="text-2xl font-bold">{totalObjects.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Across {totalBuckets} {totalBuckets === 1 ? 'bucket' : 'buckets'}
+              </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Total Size</CardTitle>
+              <CardTitle className="text-sm font-medium">Total Storage</CardTitle>
             </CardHeader>
             <CardContent>
-              <span className="text-2xl font-bold">{formatBytes(totalSize)}</span>
+              <div className="text-2xl font-bold">
+                {formatBytes(totalSize)}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {Math.round(storageUtilization * 100)}% utilized
+              </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium">Default Region</CardTitle>
+              <CardTitle className="text-sm font-medium">Throughput</CardTitle>
             </CardHeader>
             <CardContent>
-              <Badge variant="outline">{defaultRegion}</Badge>
+              <div className="text-2xl font-bold">
+                {Math.round(throughput)} ops/s
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {Math.round(operationsUtilization * 100)}% capacity
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium">Archived Objects</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{glacierObjects.toLocaleString()}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                In Glacier/Deep Archive
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -337,22 +377,56 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <p className="text-xs text-muted-foreground">Objects</p>
-                            <p className="text-lg font-semibold">{(bucket.objectCount || 0).toLocaleString()}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Total Size</p>
-                            <p className="text-lg font-semibold">{formatBytes(bucket.totalSize || 0)}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">Bucket URL</p>
-                            <p className="text-xs font-mono text-muted-foreground truncate">
-                              s3://{bucket.name}
-                            </p>
-                          </div>
-                        </div>
+                        {(() => {
+                          // Для каждого бакета
+                          const bucketMetrics = s3Metrics?.bucketMetrics.get(bucket.name);
+                          const bucketObjectCount = bucketMetrics?.objectCount ?? bucket.objectCount ?? 0;
+                          const bucketTotalSize = bucketMetrics?.totalSize ?? bucket.totalSize ?? 0;
+                          const bucketPutCount = bucketMetrics?.putCount ?? 0;
+                          const bucketGetCount = bucketMetrics?.getCount ?? 0;
+                          const bucketAverageLatency = bucketMetrics?.averageLatency ?? 0;
+                          
+                          return (
+                            <>
+                              <div className="grid grid-cols-3 gap-4">
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Objects</p>
+                                  <p className="text-lg font-semibold">{bucketObjectCount.toLocaleString()}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Total Size</p>
+                                  <p className="text-lg font-semibold">{formatBytes(bucketTotalSize)}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Bucket URL</p>
+                                  <p className="text-xs font-mono text-muted-foreground truncate">
+                                    s3://{bucket.name}
+                                  </p>
+                                </div>
+                              </div>
+                              {bucketMetrics && (
+                                <div className="grid grid-cols-4 gap-4 pt-2 border-t">
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">PUT ops</p>
+                                    <p className="text-sm font-semibold">{bucketPutCount.toLocaleString()}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">GET ops</p>
+                                    <p className="text-sm font-semibold">{bucketGetCount.toLocaleString()}</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Avg Latency</p>
+                                    <p className="text-sm font-semibold">{Math.round(bucketAverageLatency)}ms</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-muted-foreground">Errors</p>
+                                    <p className="text-sm font-semibold">{bucketMetrics.errorCount.toLocaleString()}</p>
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          );
+                        })()}
                         <Separator />
                         <div className="grid grid-cols-2 gap-4">
                           <div className="space-y-2">
@@ -716,6 +790,46 @@ export function S3DataLakeConfigAdvanced({ componentId }: S3DataLakeConfigProps)
               </CardContent>
             </Card>
           </TabsContent>
+
+          {s3Engine && (
+            <TabsContent value="lifecycle" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-sm font-medium">Lifecycle Transitions</CardTitle>
+                  <CardDescription>
+                    Recent storage class transitions
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-2">
+                    {s3Engine.getLifecycleTransitionHistory()
+                      .slice(-10) // Последние 10
+                      .reverse()
+                      .map((transition, index) => (
+                        <div key={index} className="flex items-center justify-between text-xs p-2 rounded bg-secondary/50">
+                          <div>
+                            <span className="font-medium">{transition.bucket}/{transition.key}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline">{transition.fromClass}</Badge>
+                            <span>→</span>
+                            <Badge variant="outline">{transition.toClass}</Badge>
+                            <span className="text-muted-foreground">
+                              {new Date(transition.timestamp).toLocaleTimeString()}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    {s3Engine.getLifecycleTransitionHistory().length === 0 && (
+                      <p className="text-xs text-muted-foreground text-center py-4">
+                        No lifecycle transitions yet
+                      </p>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          )}
         </Tabs>
       </div>
     </div>

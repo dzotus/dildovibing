@@ -1627,13 +1627,100 @@ export class DataFlowEngine {
         result = s3Engine.headObject(bucketName, key);
         break;
 
+      case 'INITIATE_MULTIPART_UPLOAD':
+      case 'CREATE_MULTIPART_UPLOAD':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'INITIATE_MULTIPART_UPLOAD operation requires key';
+          return message;
+        }
+        result = s3Engine.initiateMultipartUpload(bucketName, key);
+        break;
+
+      case 'UPLOAD_PART':
+        if (!key || !payload?.uploadId || !payload?.partNumber) {
+          message.status = 'failed';
+          message.error = 'UPLOAD_PART operation requires key, uploadId, and partNumber';
+          return message;
+        }
+        const partData = payload?.data || payload?.body || message.payload;
+        const partSize = payload?.size || message.size || 0;
+        result = s3Engine.uploadPart(
+          bucketName,
+          key,
+          payload.uploadId,
+          payload.partNumber,
+          partData,
+          partSize
+        );
+        break;
+
+      case 'COMPLETE_MULTIPART_UPLOAD':
+        if (!key || !payload?.uploadId || !Array.isArray(payload?.parts)) {
+          message.status = 'failed';
+          message.error = 'COMPLETE_MULTIPART_UPLOAD operation requires key, uploadId, and parts array';
+          return message;
+        }
+        result = s3Engine.completeMultipartUpload(
+          bucketName,
+          key,
+          payload.uploadId,
+          payload.parts
+        );
+        break;
+
+      case 'ABORT_MULTIPART_UPLOAD':
+        if (!key || !payload?.uploadId) {
+          message.status = 'failed';
+          message.error = 'ABORT_MULTIPART_UPLOAD operation requires key and uploadId';
+          return message;
+        }
+        result = s3Engine.abortMultipartUpload(bucketName, key, payload.uploadId);
+        break;
+
+      case 'RESTORE_OBJECT':
+      case 'INITIATE_RESTORE':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'RESTORE_OBJECT operation requires key';
+          return message;
+        }
+        const storageClass = payload?.storageClass || 'GLACIER';
+        const tier = payload?.tier || 'Standard';
+        result = s3Engine.initiateRestoreObject(
+          bucketName,
+          key,
+          storageClass as any,
+          tier as 'Expedited' | 'Standard' | 'Bulk'
+        );
+        break;
+
+      case 'GET_RESTORE_STATUS':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'GET_RESTORE_STATUS operation requires key';
+          return message;
+        }
+        result = s3Engine.getRestoreObjectStatus(bucketName, key);
+        break;
+
+      case 'GET_AFTER_RESTORE':
+        if (!key) {
+          message.status = 'failed';
+          message.error = 'GET_AFTER_RESTORE operation requires key';
+          return message;
+        }
+        result = s3Engine.getObjectAfterRestore(bucketName, key);
+        break;
+
       default:
         message.status = 'failed';
         message.error = `Unsupported S3 operation: ${operation}`;
         return message;
     }
 
-    if (result.success) {
+    // Handle success for different operation types
+    if (result.success !== false) {
       message.status = 'delivered';
       message.latency = result.latency || 50;
       
@@ -1657,6 +1744,44 @@ export class DataFlowEngine {
           bucket: bucketName,
           objects: result.objects,
           count: result.objects.length,
+        };
+      } else if (result.uploadId) {
+        // Multipart upload initiated
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          uploadId: result.uploadId,
+        };
+      } else if (result.requestId) {
+        // Restore initiated
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          requestId: result.requestId,
+        };
+      } else if (result.status) {
+        // Restore status
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          restoreStatus: result.status,
+          expires: result.expires,
+        };
+      } else if (result.etag) {
+        // Upload part result
+        message.payload = {
+          ...(message.payload as any),
+          operation: operation.toUpperCase(),
+          bucket: bucketName,
+          key: key,
+          etag: result.etag,
+          partNumber: payload?.partNumber,
         };
       } else {
         message.payload = {

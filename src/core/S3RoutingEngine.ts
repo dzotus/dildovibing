@@ -102,6 +102,27 @@ export class S3RoutingEngine {
     allTransitions?: Array<{ days: number; storageClass: string }>; // All transitions from rule
   }>> = new Map();
 
+  // Multipart upload tracking
+  private multipartUploads: Map<string, {
+    uploadId: string;
+    bucket: string;
+    key: string;
+    parts: Map<number, { etag: string; size: number }>;
+    initiated: number;
+  }> = new Map();
+
+  // Restore requests tracking
+  private restoreRequests: Map<string, {
+    bucket: string;
+    key: string;
+    requestId: string;
+    storageClass: S3StorageClass;
+    tier: 'Expedited' | 'Standard' | 'Bulk';
+    requested: number;
+    expires?: number;
+    status: 'in-progress' | 'completed' | 'failed';
+  }> = new Map();
+
   /**
    * Initialize with S3 configuration
    */
@@ -117,6 +138,8 @@ export class S3RoutingEngine {
     this.operations = [];
     this.metrics.clear();
     this.lifecycleTransitions.clear();
+    this.multipartUploads.clear();
+    this.restoreRequests.clear();
 
     // Initialize buckets
     if (config.buckets) {
@@ -858,6 +881,487 @@ export class S3RoutingEngine {
       total += versions.length;
     }
     return total;
+  }
+
+  /**
+   * Get storage class distribution for a bucket
+   * Returns count of objects per storage class
+   */
+  public getStorageClassDistribution(bucketName: string): {
+    STANDARD: number;
+    STANDARD_IA: number;
+    GLACIER: number;
+    DEEP_ARCHIVE: number;
+    INTELLIGENT_TIERING: number;
+  } {
+    const distribution = {
+      STANDARD: 0,
+      STANDARD_IA: 0,
+      GLACIER: 0,
+      DEEP_ARCHIVE: 0,
+      INTELLIGENT_TIERING: 0,
+    };
+
+    const bucketObjects = this.objects.get(bucketName);
+    if (!bucketObjects) return distribution;
+
+    // Count current objects
+    for (const object of bucketObjects.values()) {
+      const storageClass = object.storageClass || 'STANDARD';
+      if (storageClass in distribution) {
+        distribution[storageClass as keyof typeof distribution]++;
+      }
+    }
+
+    return distribution;
+  }
+
+  /**
+   * Get storage class size distribution for a bucket
+   * Returns total size in bytes per storage class
+   */
+  public getStorageClassSizeDistribution(bucketName: string): {
+    STANDARD: number;
+    STANDARD_IA: number;
+    GLACIER: number;
+    DEEP_ARCHIVE: number;
+    INTELLIGENT_TIERING: number;
+  } {
+    const distribution = {
+      STANDARD: 0,
+      STANDARD_IA: 0,
+      GLACIER: 0,
+      DEEP_ARCHIVE: 0,
+      INTELLIGENT_TIERING: 0,
+    };
+
+    const bucketObjects = this.objects.get(bucketName);
+    if (!bucketObjects) return distribution;
+
+    // Sum sizes by storage class
+    for (const object of bucketObjects.values()) {
+      const storageClass = object.storageClass || 'STANDARD';
+      if (storageClass in distribution) {
+        distribution[storageClass as keyof typeof distribution] += object.size;
+      }
+    }
+
+    return distribution;
+  }
+
+  /**
+   * Get all objects for a bucket (for internal use)
+   */
+  public getAllObjectsForBucket(bucketName: string): S3Object[] {
+    const bucketObjects = this.objects.get(bucketName);
+    if (!bucketObjects) return [];
+    return Array.from(bucketObjects.values());
+  }
+
+  /**
+   * Initiate multipart upload
+   */
+  public initiateMultipartUpload(
+    bucketName: string,
+    key: string
+  ): { uploadId: string; latency: number; error?: string } {
+    const startTime = Date.now();
+    const bucket = this.buckets.get(bucketName);
+    
+    if (!bucket) {
+      return {
+        uploadId: '',
+        latency: Date.now() - startTime,
+        error: `Bucket '${bucketName}' does not exist`,
+      };
+    }
+
+    const uploadId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    this.multipartUploads.set(uploadId, {
+      uploadId,
+      bucket: bucketName,
+      key,
+      parts: new Map(),
+      initiated: Date.now(),
+    });
+    
+    return {
+      uploadId,
+      latency: 20, // Initiate is fast
+    };
+  }
+
+  /**
+   * Upload part for multipart upload
+   */
+  public uploadPart(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    data: unknown,
+    size: number
+  ): { etag: string; latency: number; error?: string } {
+    const startTime = Date.now();
+    const upload = this.multipartUploads.get(uploadId);
+    
+    if (!upload) {
+      return {
+        etag: '',
+        latency: Date.now() - startTime,
+        error: 'Upload not found',
+      };
+    }
+
+    if (upload.bucket !== bucketName || upload.key !== key) {
+      return {
+        etag: '',
+        latency: Date.now() - startTime,
+        error: 'Upload ID does not match bucket/key',
+      };
+    }
+
+    // Validate part number (1-10000)
+    if (partNumber < 1 || partNumber > 10000) {
+      return {
+        etag: '',
+        latency: Date.now() - startTime,
+        error: 'Part number must be between 1 and 10000',
+      };
+    }
+
+    const etag = this.generateETag(`${key}-${partNumber}`, size);
+    upload.parts.set(partNumber, { etag, size });
+    
+    const latency = this.calculatePutLatency(size);
+    this.recordOperation('PUT', bucketName, key, true, latency);
+    
+    return {
+      etag,
+      latency,
+    };
+  }
+
+  /**
+   * Complete multipart upload
+   */
+  public completeMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string,
+    parts: Array<{ partNumber: number; etag: string }>
+  ): { success: boolean; etag: string; versionId?: string; latency: number; error?: string } {
+    const startTime = Date.now();
+    const upload = this.multipartUploads.get(uploadId);
+    
+    if (!upload) {
+      return {
+        success: false,
+        etag: '',
+        latency: Date.now() - startTime,
+        error: 'Upload not found',
+      };
+    }
+
+    if (upload.bucket !== bucketName || upload.key !== key) {
+      return {
+        success: false,
+        etag: '',
+        latency: Date.now() - startTime,
+        error: 'Upload ID does not match bucket/key',
+      };
+    }
+
+    // Validate all parts
+    for (const part of parts) {
+      const storedPart = upload.parts.get(part.partNumber);
+      if (!storedPart) {
+        return {
+          success: false,
+          etag: '',
+          latency: Date.now() - startTime,
+          error: `Part ${part.partNumber} not found`,
+        };
+      }
+      if (storedPart.etag !== part.etag) {
+        return {
+          success: false,
+          etag: '',
+          latency: Date.now() - startTime,
+          error: `Part ${part.partNumber} ETag mismatch`,
+        };
+      }
+    }
+
+    // Calculate total size
+    const totalSize = parts.reduce((sum, part) => {
+      const partData = upload.parts.get(part.partNumber);
+      return sum + (partData?.size || 0);
+    }, 0);
+
+    // Create final object using putObject
+    const bucket = this.buckets.get(bucketName)!;
+    const finalEtag = this.generateETag(key, totalSize);
+    const versionId = bucket.versioning 
+      ? `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      : undefined;
+
+    // Store object
+    const object: S3Object = {
+      key,
+      bucket: bucketName,
+      size: totalSize,
+      lastModified: Date.now(),
+      storageClass: 'STANDARD',
+      etag: finalEtag,
+      contentType: 'application/octet-stream',
+      metadata: {
+        'multipart-upload': 'true',
+        'parts-count': parts.length.toString(),
+      },
+      versionId,
+      encryption: bucket.encryption,
+    };
+
+    const bucketObjects = this.objects.get(bucketName)!;
+    
+    // If versioning enabled, store version
+    if (bucket.versioning && versionId) {
+      const bucketVersions = this.versions.get(bucketName)!;
+      const keyVersions = bucketVersions.get(key) || [];
+      
+      keyVersions.push({
+        versionId,
+        object,
+        isDeleteMarker: false,
+      });
+      
+      bucketVersions.set(key, keyVersions);
+      this.versions.set(bucketName, bucketVersions);
+      
+      const metrics = this.metrics.get(bucketName)!;
+      metrics.versionsCount = this.getTotalVersionsCount(bucketName);
+    }
+    
+    bucketObjects.set(key, object);
+    this.objects.set(bucketName, bucketObjects);
+
+    // Schedule lifecycle transition if applicable
+    const matchingRule = this.findMatchingLifecycleRule(bucket, key);
+    
+    if (matchingRule && matchingRule.transitions && matchingRule.transitions.length > 0) {
+      const transitions = this.lifecycleTransitions.get(bucketName)!;
+      const firstTransition = matchingRule.transitions[0];
+      const transitionTime = Date.now() + (firstTransition.days * 24 * 60 * 60 * 1000);
+      
+      transitions.set(key, {
+        currentClass: 'STANDARD',
+        transitionScheduled: transitionTime,
+        targetClass: firstTransition.storageClass as S3StorageClass,
+        ruleId: matchingRule.id,
+        transitionIndex: 0,
+        allTransitions: matchingRule.transitions,
+      });
+      this.lifecycleTransitions.set(bucketName, transitions);
+    } else if (bucket.lifecycleEnabled && bucket.lifecycleDays) {
+      const transitions = this.lifecycleTransitions.get(bucketName)!;
+      const transitionTime = Date.now() + (bucket.lifecycleDays * 24 * 60 * 60 * 1000);
+      
+      transitions.set(key, {
+        currentClass: 'STANDARD',
+        transitionScheduled: transitionTime,
+        targetClass: bucket.glacierEnabled ? 'GLACIER' : 'STANDARD_IA',
+      });
+      this.lifecycleTransitions.set(bucketName, transitions);
+    }
+
+    // Update metrics
+    const metrics = this.metrics.get(bucketName)!;
+    const existingObject = bucketObjects.get(key);
+    if (!existingObject) {
+      metrics.objectCount++;
+    } else {
+      metrics.totalSize -= existingObject.size;
+    }
+    metrics.totalSize += totalSize;
+    metrics.putCount++;
+    
+    const latency = 50; // Complete is slower
+    this.recordOperation('PUT', bucketName, key, true, latency);
+    this.updateMetrics(bucketName, latency, true);
+
+    // Cleanup
+    this.multipartUploads.delete(uploadId);
+
+    return {
+      success: true,
+      etag: finalEtag,
+      versionId,
+      latency,
+    };
+  }
+
+  /**
+   * Abort multipart upload
+   */
+  public abortMultipartUpload(
+    bucketName: string,
+    key: string,
+    uploadId: string
+  ): { success: boolean; latency: number; error?: string } {
+    const startTime = Date.now();
+    const upload = this.multipartUploads.get(uploadId);
+    
+    if (!upload) {
+      return {
+        success: false,
+        latency: Date.now() - startTime,
+        error: 'Upload not found',
+      };
+    }
+
+    if (upload.bucket !== bucketName || upload.key !== key) {
+      return {
+        success: false,
+        latency: Date.now() - startTime,
+        error: 'Upload ID does not match bucket/key',
+      };
+    }
+
+    this.multipartUploads.delete(uploadId);
+    
+    return {
+      success: true,
+      latency: 10,
+    };
+  }
+
+  /**
+   * Initiate restore object from Glacier/Deep Archive
+   */
+  public initiateRestoreObject(
+    bucketName: string,
+    key: string,
+    storageClass: S3StorageClass,
+    tier: 'Expedited' | 'Standard' | 'Bulk' = 'Standard'
+  ): { requestId: string; latency: number; error?: string } {
+    const startTime = Date.now();
+    const bucket = this.buckets.get(bucketName);
+    
+    if (!bucket) {
+      return {
+        requestId: '',
+        latency: Date.now() - startTime,
+        error: `Bucket '${bucketName}' does not exist`,
+      };
+    }
+
+    const object = this.getObject(bucketName, key);
+    if (!object.success || !object.object) {
+      return {
+        requestId: '',
+        latency: Date.now() - startTime,
+        error: 'Object not found',
+      };
+    }
+
+    if (object.object.storageClass !== 'GLACIER' && object.object.storageClass !== 'DEEP_ARCHIVE') {
+      return {
+        requestId: '',
+        latency: Date.now() - startTime,
+        error: 'Object is not archived',
+      };
+    }
+
+    const requestId = `restore-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Calculate restore time based on tier (simulated - in real S3 it takes hours/days)
+    // For simulation, we use shorter times but still show the concept
+    const restoreTimes: Record<string, number> = {
+      'Expedited': 1 * 60 * 60 * 1000, // 1 hour (simulated as shorter)
+      'Standard': 3 * 60 * 60 * 1000, // 3 hours (simulated)
+      'Bulk': 5 * 60 * 60 * 1000, // 5 hours (simulated)
+    };
+    
+    const restoreTime = restoreTimes[tier] || restoreTimes['Standard'];
+    const expires = Date.now() + (7 * 24 * 60 * 60 * 1000); // 7 days
+
+    this.restoreRequests.set(requestId, {
+      bucket: bucketName,
+      key,
+      requestId,
+      storageClass: object.object.storageClass,
+      tier,
+      requested: Date.now(),
+      expires,
+      status: 'in-progress',
+    });
+
+    // Schedule completion (in real S3 this would be handled by AWS, here we simulate it)
+    setTimeout(() => {
+      const request = this.restoreRequests.get(requestId);
+      if (request) {
+        request.status = 'completed';
+      }
+    }, Math.min(restoreTime, 60000)); // Cap at 60 seconds for simulation
+
+    return {
+      requestId,
+      latency: 50,
+    };
+  }
+
+  /**
+   * Get restore object status
+   */
+  public getRestoreObjectStatus(
+    bucketName: string,
+    key: string
+  ): { status: 'in-progress' | 'completed' | 'failed' | 'not-requested'; expires?: number; error?: string } {
+    const request = Array.from(this.restoreRequests.values())
+      .find(r => r.bucket === bucketName && r.key === key && r.status !== 'failed');
+    
+    if (!request) {
+      return { status: 'not-requested' };
+    }
+
+    // Check if expired
+    if (request.expires && Date.now() > request.expires) {
+      this.restoreRequests.delete(request.requestId);
+      return { status: 'not-requested', error: 'Restore request expired' };
+    }
+
+    return {
+      status: request.status,
+      expires: request.expires,
+    };
+  }
+
+  /**
+   * Get object after restore (if restored)
+   */
+  public getObjectAfterRestore(
+    bucketName: string,
+    key: string
+  ): { success: boolean; object?: S3Object; latency: number; error?: string } {
+    const request = Array.from(this.restoreRequests.values())
+      .find(r => r.bucket === bucketName && r.key === key && r.status === 'completed');
+    
+    if (!request) {
+      return this.getObject(bucketName, key);
+    }
+
+    // If restore is completed, return object normally
+    const result = this.getObject(bucketName, key);
+    
+    // Check if object is still in Glacier (restore might not have changed storage class)
+    if (result.success && result.object) {
+      // In real S3, restored objects are temporarily available
+      // For simulation, we allow access after restore is completed
+      return result;
+    }
+
+    return result;
   }
 }
 

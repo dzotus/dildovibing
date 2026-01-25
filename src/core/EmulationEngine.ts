@@ -38,6 +38,7 @@ import {
   DEFAULT_USERNAME,
 } from './elasticsearch/constants';
 import { S3RoutingEngine } from './S3RoutingEngine';
+import { S3EmulationEngine, S3BucketEmulationMetrics } from './S3EmulationEngine';
 import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/ConnectionPool';
 import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
 import { MongoDBEmulationEngine, MongoDBConfig } from './MongoDBEmulationEngine';
@@ -271,6 +272,9 @@ export class EmulationEngine {
   
   // S3 routing engines per node
   private s3RoutingEngines: Map<string, S3RoutingEngine> = new Map();
+  
+  // S3 emulation engines per node
+  private s3EmulationEngines: Map<string, S3EmulationEngine> = new Map();
   
   // PostgreSQL connection pools per node
   private postgresConnectionPools: Map<string, PostgreSQLConnectionPool> = new Map();
@@ -683,6 +687,7 @@ export class EmulationEngine {
         }
         if (node.type === 's3-datalake') {
           this.initializeS3RoutingEngine(node);
+          this.initializeS3EmulationEngine(node);
         }
         if (node.type === 'prometheus') {
           this.initializePrometheusEngine(node);
@@ -1323,6 +1328,7 @@ export class EmulationEngine {
         this.snowflakeRoutingEngines.delete(nodeId);
         this.elasticsearchRoutingEngines.delete(nodeId);
         this.s3RoutingEngines.delete(nodeId);
+        this.s3EmulationEngines.delete(nodeId);
         this.graphQLGatewayRoutingEngines.delete(nodeId);
         this.keycloakEngines.delete(nodeId);
         this.vaultEngines.delete(nodeId);
@@ -5393,99 +5399,58 @@ export class EmulationEngine {
       return; // Early return for Elasticsearch
     }
     
-    // Для S3 Data Lake используем S3RoutingEngine
+    // Для S3 Data Lake используем S3EmulationEngine
     if (node.type === 's3-datalake') {
-      if (!this.s3RoutingEngines.has(node.id)) {
-        this.initializeS3RoutingEngine(node);
+      if (!this.s3EmulationEngines.has(node.id)) {
+        this.initializeS3EmulationEngine(node);
       }
       
-      const routingEngine = this.s3RoutingEngines.get(node.id)!;
+      const emulationEngine = this.s3EmulationEngines.get(node.id);
+      const routingEngine = this.s3RoutingEngines.get(node.id);
+      
+      if (!emulationEngine || !routingEngine) {
+        return;
+      }
       
       // Process lifecycle transitions periodically
       routingEngine.processLifecycleTransitions();
       
-      if (!hasIncomingConnections) {
-        // No incoming data, reset metrics but keep bucket state
-        metrics.throughput = 0;
-        metrics.latency = 50; // Base latency for S3 (AWS API latency)
-        metrics.errorRate = 0;
-        
-        // Calculate utilization from storage usage
-        const bucketMetrics = routingEngine.getAllBucketMetrics();
-        const totalSize = routingEngine.getTotalStorageSize();
-        const totalObjects = routingEngine.getTotalObjectCount();
-        
-        // Utilization based on storage (assuming max 1TB per bucket)
-        const maxStoragePerBucket = 1024 * 1024 * 1024 * 1024; // 1TB
-        const bucketCount = bucketMetrics.size;
-        const maxTotalStorage = maxStoragePerBucket * bucketCount;
-        metrics.utilization = maxTotalStorage > 0 ? Math.min(1, totalSize / maxTotalStorage) : 0;
-        
-        metrics.customMetrics = {
-          'buckets': bucketCount,
-          'total_objects': totalObjects,
-          'total_size': totalSize,
-          'total_size_mb': Math.round(totalSize / (1024 * 1024) * 100) / 100,
-        };
-        
-        // Update bucket metrics in config
-        this.updateS3BucketMetricsInConfig(node, bucketMetrics);
-        return;
-      }
+      // Обновляем метрики в emulation engine
+      emulationEngine.updateMetrics();
       
-      // Calculate incoming throughput from connections
-      const incomingConnections = this.connections.filter(c => c.target === node.id);
-      let totalThroughput = 0;
-      let totalTraffic = 0;
+      // Получаем метрики
+      const s3Metrics = emulationEngine.getMetrics();
       
-      for (const conn of incomingConnections) {
-        const connMetrics = this.connectionMetrics.get(conn.id);
-        if (connMetrics) {
-          totalThroughput += connMetrics.traffic / 1024; // Convert bytes/sec to KB/sec
-          totalTraffic += connMetrics.traffic;
-        }
-      }
-      
-      // Estimate operations per second based on traffic
-      // Assume average object size of 1MB
-      const avgObjectSize = 1024 * 1024; // 1MB
-      const estimatedOpsPerSec = totalTraffic > 0 ? totalTraffic / avgObjectSize : 0;
-      
-      metrics.throughput = Math.max(0, estimatedOpsPerSec);
-      metrics.latency = 50 + (estimatedOpsPerSec > 100 ? (estimatedOpsPerSec - 100) * 0.1 : 0); // Increase latency with load
-      metrics.errorRate = 0.001; // Very low error rate for S3
-      
-      // Utilization based on storage and operations
-      const bucketMetrics = routingEngine.getAllBucketMetrics();
-      const totalSize = routingEngine.getTotalStorageSize();
-      const totalObjects = routingEngine.getTotalObjectCount();
-      const bucketCount = bucketMetrics.size;
-      
-      // Storage utilization (assuming max 1TB per bucket)
-      const maxStoragePerBucket = 1024 * 1024 * 1024 * 1024; // 1TB
-      const maxTotalStorage = maxStoragePerBucket * bucketCount;
-      const storageUtilization = maxTotalStorage > 0 ? Math.min(1, totalSize / maxTotalStorage) : 0;
-      
-      // Operations utilization (assuming max 3500 PUT/POST/DELETE per second per bucket)
-      const maxOpsPerBucket = 3500;
-      const maxTotalOps = maxOpsPerBucket * bucketCount;
-      const opsUtilization = maxTotalOps > 0 ? Math.min(1, estimatedOpsPerSec / maxTotalOps) : 0;
-      
-      metrics.utilization = Math.max(storageUtilization, opsUtilization);
+      // Обновляем ComponentMetrics
+      metrics.throughput = s3Metrics.throughput;
+      metrics.latency = s3Metrics.averageLatency;
+      metrics.latencyP50 = s3Metrics.p50Latency;
+      metrics.latencyP99 = s3Metrics.p99Latency;
+      metrics.errorRate = s3Metrics.errorRate;
+      metrics.utilization = Math.max(
+        s3Metrics.storageUtilization,
+        s3Metrics.operationsUtilization
+      );
       
       metrics.customMetrics = {
-        'buckets': bucketCount,
-        'total_objects': totalObjects,
-        'total_size': totalSize,
-        'total_size_mb': Math.round(totalSize / (1024 * 1024) * 100) / 100,
-        'total_size_gb': Math.round(totalSize / (1024 * 1024 * 1024) * 100) / 100,
-        'estimated_ops_per_sec': Math.round(estimatedOpsPerSec * 100) / 100,
-        'storage_utilization': Math.round(storageUtilization * 1000) / 10,
-        'ops_utilization': Math.round(opsUtilization * 1000) / 10,
+        'buckets': s3Metrics.totalBuckets,
+        'total_objects': s3Metrics.totalObjects,
+        'total_size': s3Metrics.totalSize,
+        'total_size_mb': Math.round(s3Metrics.totalSize / (1024 * 1024) * 100) / 100,
+        'total_size_gb': Math.round(s3Metrics.totalSize / (1024 * 1024 * 1024) * 100) / 100,
+        'put_operations': s3Metrics.putOperations,
+        'get_operations': s3Metrics.getOperations,
+        'delete_operations': s3Metrics.deleteOperations,
+        'list_operations': s3Metrics.listOperations,
+        'storage_utilization': Math.round(s3Metrics.storageUtilization * 1000) / 10,
+        'ops_utilization': Math.round(s3Metrics.operationsUtilization * 1000) / 10,
+        'glacier_objects': s3Metrics.glacierObjects,
+        'glacier_size': s3Metrics.glacierSize,
+        'lifecycle_transitions': s3Metrics.lifecycleTransitions,
       };
       
-      // Update bucket metrics in config
-      this.updateS3BucketMetricsInConfig(node, bucketMetrics);
+      // Обновляем bucket metrics в config для UI
+      this.updateS3BucketMetricsInConfig(node, s3Metrics.bucketMetrics);
       
       return; // Early return for S3
     }
@@ -9640,6 +9605,44 @@ export class EmulationEngine {
   }
 
   /**
+   * Initialize S3 Emulation Engine for S3 Data Lake node
+   */
+  private initializeS3EmulationEngine(node: CanvasNode): void {
+    try {
+      const config = (node?.data?.config || {}) as any;
+      
+      // Получаем или создаем S3RoutingEngine
+      if (!this.s3RoutingEngines.has(node.id)) {
+        this.initializeS3RoutingEngine(node);
+      }
+      const routingEngine = this.s3RoutingEngines.get(node.id);
+      if (!routingEngine) {
+        return;
+      }
+      
+      // Создаем S3EmulationEngine
+      const emulationEngine = new S3EmulationEngine();
+      emulationEngine.initialize(config, routingEngine);
+      
+      this.s3EmulationEngines.set(node.id, emulationEngine);
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'critical',
+        source: 'initialization',
+        componentId: node.id,
+        componentType: node.type,
+      });
+    }
+  }
+
+  /**
+   * Get S3 Emulation Engine for node
+   */
+  public getS3EmulationEngine(nodeId: string): S3EmulationEngine | undefined {
+    return this.s3EmulationEngines.get(nodeId);
+  }
+
+  /**
    * Initialize PostgreSQL Connection Pool for a node
    */
   /**
@@ -10112,27 +10115,50 @@ export class EmulationEngine {
   /**
    * Update S3 bucket metrics in node config (for UI display)
    */
+  /**
+   * Update S3 bucket metrics in node config (for UI display)
+   */
   private updateS3BucketMetricsInConfig(
     node: CanvasNode,
-    bucketMetrics: Map<string, { bucket: string; objectCount: number; totalSize: number; versionsCount: number; putCount: number; getCount: number; deleteCount: number; listCount: number; errorCount: number; averageLatency: number; lastOperation?: number }>
+    bucketMetrics: Map<string, S3BucketEmulationMetrics>
   ): void {
-    const config = (node.data.config as any) || {};
-    const buckets = config.buckets || [];
-    
-    // Update buckets with runtime metrics
-    for (let i = 0; i < buckets.length; i++) {
-      const bucket = buckets[i];
-      const metrics = bucketMetrics.get(bucket.name);
-      if (metrics) {
-        buckets[i] = {
-          ...bucket,
-          objectCount: metrics.objectCount,
-          totalSize: metrics.totalSize,
-        };
+    try {
+      const config = (node?.data?.config as any) || {};
+      const buckets = Array.isArray(config.buckets) ? config.buckets : [];
+      
+      // Update buckets with runtime metrics
+      for (let i = 0; i < buckets.length; i++) {
+        const bucket = buckets[i];
+        if (!bucket?.name) continue;
+        
+        const metrics = bucketMetrics.get(bucket.name);
+        if (metrics) {
+          buckets[i] = {
+            ...bucket,
+            objectCount: metrics.objectCount,
+            totalSize: metrics.totalSize,
+            versionsCount: metrics.versionsCount,
+            // Добавляем дополнительные метрики
+            putCount: metrics.putCount,
+            getCount: metrics.getCount,
+            deleteCount: metrics.deleteCount,
+            listCount: metrics.listCount,
+            errorCount: metrics.errorCount,
+            averageLatency: metrics.averageLatency,
+            storageClassDistribution: metrics.storageClassDistribution,
+          };
+        }
       }
+      
+      config.buckets = buckets;
+    } catch (error) {
+      errorCollector.addError(error as Error, {
+        severity: 'warning',
+        source: 'updateS3BucketMetricsInConfig',
+        componentId: node.id,
+        componentType: node.type,
+      });
     }
-    
-    config.buckets = buckets;
   }
 
   /**

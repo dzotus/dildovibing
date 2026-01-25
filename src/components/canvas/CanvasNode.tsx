@@ -11,7 +11,7 @@ import { COMPONENT_LIBRARY } from '@/data/components';
 import { ContextMenu } from './ContextMenu';
 import { toast } from 'sonner';
 import { deepClone } from '@/lib/deepClone';
-import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff, Database } from 'lucide-react';
+import { AlertCircle, CheckCircle2, AlertTriangle, XCircle, PowerOff, Database, Archive } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getConnectionPoints } from '@/utils/connectionPoints';
 import { useNodeRefs } from '@/contexts/NodeRefsContext';
@@ -26,6 +26,15 @@ interface CanvasNodeProps {
 }
 
 function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConnecting = false, onContextMenu }: CanvasNodeProps) {
+  // Вспомогательная функция для форматирования размеров
+  const formatBytes = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
   // Регистрируем ref узла для доступа из других компонентов (вместо querySelector)
   const { registerNodeRef, unregisterNodeRef } = useNodeRefs();
   const nodeElementRef = useRef<HTMLDivElement>(null);
@@ -104,6 +113,21 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
     const warehouses = snowflakeEngine.getWarehouses();
     return { metrics, warehouses };
   }, [snowflakeEngine]);
+  
+  // Get S3-specific metrics if this is an S3 component
+  const s3Engine = useMemo(() => {
+    if (node.type === 's3-datalake' && isRunning) {
+      return emulationEngine.getS3EmulationEngine(node.id);
+    }
+    return undefined;
+  }, [node.type, node.id, isRunning]);
+
+  const s3Metrics = useMemo(() => {
+    if (s3Engine) {
+      return s3Engine.getMetrics();
+    }
+    return undefined;
+  }, [s3Engine]);
   
   // Memoize hasConnections check - only recalculate when connections or node.id changes
   const hasConnections = useMemo(
@@ -688,6 +712,41 @@ function CanvasNodeComponent({ node, onConnectionStart, onConnectionEnd, isConne
                   </>
                 );
               })()}
+            </div>
+          )}
+
+          {/* S3-specific visual indicators */}
+          {node.type === 's3-datalake' && s3Metrics && (
+            <div className="absolute -bottom-6 left-0 right-0 flex flex-col items-center gap-1">
+              {/* Bucket count and storage info */}
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="px-1.5 py-0.5 rounded bg-secondary/80 text-foreground">
+                  {s3Metrics.totalBuckets} {s3Metrics.totalBuckets === 1 ? 'bucket' : 'buckets'}
+                </span>
+                {s3Metrics.totalSize > 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-secondary/80 text-foreground">
+                    {formatBytes(s3Metrics.totalSize)}
+                  </span>
+                )}
+              </div>
+              
+              {/* Operations and utilization */}
+              <div className="flex items-center gap-2 text-[10px]">
+                <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400">
+                  {Math.round(s3Metrics.throughput)} ops/s
+                </span>
+                <span className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">
+                  {Math.round(s3Metrics.storageUtilization * 100)}% storage
+                </span>
+              </div>
+              
+              {/* Glacier objects indicator */}
+              {s3Metrics.glacierObjects > 0 && (
+                <div className="flex items-center gap-1 text-[10px] text-amber-400">
+                  <Archive className="h-3 w-3" />
+                  <span>{s3Metrics.glacierObjects} archived</span>
+                </div>
+              )}
             </div>
           )}
 
