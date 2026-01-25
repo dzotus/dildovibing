@@ -129,6 +129,27 @@
   - Dashboard Refresh с автоматическим обновлением по заданному интервалу
   - Полный набор метрик производительности и использования
 
+- **[Loki](./observability/loki.md)** - Горизонтально масштабируемая система агрегации логов
+  - Log Ingestion через HTTP Push API в формате Loki
+  - LogQL Queries для поиска и анализа логов (stream selector, line filters, label filters, aggregations)
+  - Streams с labels для организации и фильтрации логов
+  - Retention Policy для автоматического удаления старых логов
+  - Compression для экономии места (gzip, snappy, lz4)
+  - Rate Limiting для защиты от перегрузки (ingestion rate, query rate)
+  - Multi-tenancy для изоляции данных по tenants
+  - Полный набор метрик производительности и использования
+
+- **[Jaeger](./observability/jaeger.md)** - Распределенная система трейсинга для мониторинга и отладки микросервисов
+  - Distributed Tracing с автоматическим сбором spans от компонентов
+  - Sampling Mechanisms (probabilistic, rate limiting, per-operation) для оптимизации
+  - Trace Storage в памяти или внешних backends (Elasticsearch, Cassandra, Kafka)
+  - Query Service для поиска и фильтрации traces по service, operation, tags, времени
+  - Trace Context Propagation для связи spans между сервисами
+  - Service Statistics для анализа производительности сервисов
+  - Trace Tree Visualization для визуализации иерархии spans
+  - Metrics Export в Prometheus или StatsD
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -330,6 +351,8 @@
 - **S3 Data Lake:** [Документация S3 Data Lake](./data/s3-datalake.md)
 - **Prometheus:** [Документация Prometheus](./observability/prometheus.md)
 - **Grafana:** [Документация Grafana](./observability/grafana.md)
+- **Loki:** [Документация Loki](./observability/loki.md)
+- **Jaeger:** [Документация Jaeger](./observability/jaeger.md)
 
 ## Обновления
 
@@ -371,3 +394,10 @@
 - [Grafana Data Sources](https://grafana.com/docs/grafana/latest/datasources/)
 - [Grafana Dashboards](https://grafana.com/docs/grafana/latest/dashboards/)
 - [Grafana Alerting](https://grafana.com/docs/grafana/latest/alerting/)
+- [Официальная документация Loki](https://grafana.com/docs/loki/latest/)
+- [Loki Query Language (LogQL)](https://grafana.com/docs/loki/latest/logql/)
+- [Loki Push API](https://grafana.com/docs/loki/latest/api/#push-log-entries-to-loki)
+- [Официальная документация Jaeger](https://www.jaegertracing.io/docs/)
+- [Jaeger Architecture](https://www.jaegertracing.io/docs/1.50/architecture/)
+- [Jaeger Sampling](https://www.jaegertracing.io/docs/1.50/sampling/)
+- [Jaeger Storage Backends](https://www.jaegertracing.io/docs/1.50/deployment/#storage-backends)

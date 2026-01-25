@@ -169,12 +169,19 @@ export class JaegerEmulationEngine {
   // Trace TTL cleanup
   private lastCleanupTime: number = 0;
   private readonly CLEANUP_INTERVAL = 60000; // 1 minute
+  
+  // Metrics history for per-second calculations
+  private metricsHistory: Array<{ timestamp: number; spansReceived: number; tracesStored: number }> = [];
+  private readonly METRICS_HISTORY_SIZE = 60; // Keep last 60 seconds
 
   /**
    * Инициализирует конфигурацию Jaeger из конфига компонента
    */
   initializeConfig(node: CanvasNode): void {
     const config = (node.data.config || {}) as any;
+    
+    // Сохраняем старую конфигурацию для сравнения
+    const oldConfig = this.config;
     
     this.config = {
       serverUrl: config.serverUrl || 'http://jaeger:16686',
@@ -183,8 +190,8 @@ export class JaegerEmulationEngine {
       queryEndpoint: config.queryEndpoint || 'http://jaeger-query:16686',
       samplingType: config.samplingType || 'probabilistic',
       samplingParam: config.samplingParam ?? 0.001,
-      storageBackend: config.storageBackend || 'elasticsearch',
-      storageUrl: config.storageUrl || 'http://elasticsearch:9200',
+      storageBackend: config.storageBackend || 'memory',
+      storageUrl: config.storageUrl || '',
       enableUIGraphQL: config.enableUIGraphQL ?? true,
       enableMetrics: config.enableMetrics ?? true,
       metricsBackend: config.metricsBackend || 'prometheus',
@@ -193,8 +200,12 @@ export class JaegerEmulationEngine {
       traceTTL: config.traceTTL || 86400000, // 24 hours
     };
     
-    // Инициализируем sampling state
-    this.initializeSampling();
+    // Переинициализируем sampling если параметры изменились
+    if (!oldConfig || 
+        oldConfig.samplingType !== this.config.samplingType || 
+        oldConfig.samplingParam !== this.config.samplingParam) {
+      this.initializeSampling();
+    }
   }
 
   /**
@@ -690,6 +701,7 @@ export class JaegerEmulationEngine {
     queryLatency: number;
     errorRate: number;
   } {
+    const now = Date.now();
     const totalSpans = this.jaegerMetrics.spansReceivedTotal;
     const totalTraces = this.jaegerMetrics.tracesStoredTotal;
     const droppedSpans = this.jaegerMetrics.spansDroppedTotal;
@@ -697,22 +709,57 @@ export class JaegerEmulationEngine {
     const totalQueryDuration = this.jaegerMetrics.queryDurationTotal;
     const queryErrors = this.jaegerMetrics.queryErrorsTotal;
     
-    // Упрощенный расчет (в реальности нужен временной интервал)
+    // Добавляем текущие метрики в историю
+    this.metricsHistory.push({
+      timestamp: now,
+      spansReceived: totalSpans,
+      tracesStored: totalTraces,
+    });
+    
+    // Удаляем старые записи (старше 60 секунд)
+    const cutoffTime = now - 60000;
+    this.metricsHistory = this.metricsHistory.filter(m => m.timestamp > cutoffTime);
+    
+    // Ограничиваем размер истории
+    if (this.metricsHistory.length > this.METRICS_HISTORY_SIZE) {
+      this.metricsHistory = this.metricsHistory.slice(-this.METRICS_HISTORY_SIZE);
+    }
+    
+    // Рассчитываем per-second значения на основе истории
+    let spansPerSecond = 0;
+    let tracesPerSecond = 0;
+    
+    if (this.metricsHistory.length >= 2) {
+      const oldest = this.metricsHistory[0];
+      const newest = this.metricsHistory[this.metricsHistory.length - 1];
+      const timeDiff = (newest.timestamp - oldest.timestamp) / 1000; // seconds
+      
+      if (timeDiff > 0) {
+        spansPerSecond = (newest.spansReceived - oldest.spansReceived) / timeDiff;
+        tracesPerSecond = (newest.tracesStored - oldest.tracesStored) / timeDiff;
+      }
+    } else if (this.metricsHistory.length === 1) {
+      // Если только одна запись, используем упрощенный расчет
+      spansPerSecond = totalSpans / 60;
+      tracesPerSecond = totalTraces / 60;
+    }
+    
+    // Sampling rate
     const samplingRate = totalSpans > 0 ? 1 - (droppedSpans / totalSpans) : 0;
+    
+    // Query latency (average)
     const queryLatency = totalQueries > 0 ? totalQueryDuration / totalQueries : 0;
+    
+    // Error rate (query errors)
     const errorRate = totalQueries > 0 ? queryErrors / totalQueries : 0;
     
     // Storage utilization (процент от maxTraces)
     const maxTraces = this.config?.maxTraces || 10000;
-    const storageUtilization = this.traces.size / maxTraces;
-    
-    // Приблизительные значения per second (нужен реальный временной интервал)
-    const spansPerSecond = totalSpans / 60; // предполагаем 1 минуту работы
-    const tracesPerSecond = totalTraces / 60;
+    const storageUtilization = Math.min(1, this.traces.size / maxTraces);
     
     return {
-      spansPerSecond,
-      tracesPerSecond,
+      spansPerSecond: Math.max(0, spansPerSecond),
+      tracesPerSecond: Math.max(0, tracesPerSecond),
       samplingRate,
       storageUtilization,
       queryLatency,

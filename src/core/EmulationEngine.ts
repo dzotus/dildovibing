@@ -2163,6 +2163,9 @@ export class EmulationEngine {
         case 'loki':
           this.simulateLoki(node, config, metrics, hasIncomingConnections);
           break;
+        case 'jaeger':
+          this.simulateJaeger(node, config, metrics, hasIncomingConnections);
+          break;
         case 'keycloak':
           this.simulateKeycloak(node, config, metrics, hasIncomingConnections);
           break;
@@ -7001,6 +7004,60 @@ export class EmulationEngine {
   }
 
   /**
+   * Jaeger emulation
+   */
+  private simulateJaeger(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
+    // Get Jaeger emulation engine
+    const jaegerEngine = this.jaegerEngines.get(node.id);
+    
+    if (!jaegerEngine) {
+      // No engine initialized, use default metrics
+      metrics.throughput = 0;
+      metrics.latency = 0;
+      metrics.errorRate = 0;
+      metrics.utilization = 0.1; // Minimal utilization when idle
+      return;
+    }
+
+    // Update config if it changed
+    jaegerEngine.initializeConfig(node);
+
+    // Get Jaeger metrics and load
+    const jaegerMetrics = jaegerEngine.getJaegerMetrics();
+    const load = jaegerEngine.calculateLoad();
+    
+    // Jaeger throughput = spans per second
+    metrics.throughput = load.spansPerSecond;
+    
+    // Jaeger latency = query latency (average query response time)
+    metrics.latency = load.queryLatency;
+    
+    // Error rate from queries and processing
+    metrics.errorRate = load.errorRate;
+    
+    // Utilization based on storage and spans processing
+    // Higher storage utilization and more spans = higher utilization
+    metrics.utilization = Math.min(0.95, load.storageUtilization + (load.spansPerSecond / 1000) * 0.2);
+    
+    // Custom metrics
+    metrics.customMetrics = {
+      'spans_received_total': jaegerMetrics.spansReceivedTotal,
+      'spans_dropped_total': jaegerMetrics.spansDroppedTotal,
+      'spans_processed_total': jaegerMetrics.spansProcessedTotal,
+      'traces_stored_total': jaegerMetrics.tracesStoredTotal,
+      'traces_dropped_total': jaegerMetrics.tracesDroppedTotal,
+      'query_requests_total': jaegerMetrics.queryRequestsTotal,
+      'query_errors_total': jaegerMetrics.queryErrorsTotal,
+      'spans_per_second': load.spansPerSecond,
+      'traces_per_second': load.tracesPerSecond,
+      'sampling_rate': load.samplingRate,
+      'storage_utilization': load.storageUtilization,
+      'query_latency': load.queryLatency,
+      'storage_size_bytes': jaegerMetrics.storageSizeBytes,
+    };
+  }
+
+  /**
    * WAF emulation
    */
   private simulateWAF(node: CanvasNode, config: ComponentConfig, metrics: ComponentMetrics, hasIncomingConnections: boolean) {
@@ -9773,6 +9830,10 @@ export class EmulationEngine {
       const lokiQueryExecutor = this.createLokiQueryExecutorForRouting(node.id);
       routingEngine.setLokiQueryExecutor(lokiQueryExecutor);
       
+      // Создаем функцию для выполнения Jaeger queries
+      const jaegerQueryExecutor = this.createJaegerQueryExecutorForRouting(node.id);
+      routingEngine.setJaegerQueryExecutor(jaegerQueryExecutor);
+      
       // Устанавливаем RoutingEngine в GrafanaEmulationEngine
       grafanaEngine.setRoutingEngine(routingEngine);
       
@@ -9873,11 +9934,15 @@ export class EmulationEngine {
   private initializeOpenTelemetryCollectorEngine(node: CanvasNode): void {
     if (!this.otelCollectorEngines.has(node.id)) {
       const otelEngine = new OpenTelemetryCollectorRoutingEngine();
+      // Set callback for getting Jaeger engines
+      otelEngine.setGetJaegerEnginesCallback(() => this.getAllJaegerEngines());
       otelEngine.initializeConfig(node);
       this.otelCollectorEngines.set(node.id, otelEngine);
     } else {
       // Update config if engine already exists
       const otelEngine = this.otelCollectorEngines.get(node.id)!;
+      // Ensure callback is set
+      otelEngine.setGetJaegerEnginesCallback(() => this.getAllJaegerEngines());
       otelEngine.initializeConfig(node);
     }
   }
@@ -10290,6 +10355,95 @@ export class EmulationEngine {
             error: result.error || 'Query execution failed',
           };
         }
+      } catch (error) {
+        return {
+          success: false,
+          latency: Date.now() - queryStartTime,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+  }
+
+  /**
+   * Создает executor для выполнения Jaeger queries из Grafana
+   */
+  private createJaegerQueryExecutorForRouting(grafanaNodeId: string): (
+    jaegerNodeId: string,
+    query: {
+      service?: string;
+      operation?: string;
+      tags?: Record<string, string>;
+      startTime?: number;
+      endTime?: number;
+      limit?: number;
+    }
+  ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }> {
+    return async (
+      jaegerNodeId: string,
+      query: {
+        service?: string;
+        operation?: string;
+        tags?: Record<string, string>;
+        startTime?: number;
+        endTime?: number;
+        limit?: number;
+      }
+    ): Promise<{ success: boolean; data?: any; latency: number; error?: string }> => {
+      const queryStartTime = Date.now();
+      
+      try {
+        // Получаем Jaeger engine
+        const jaegerEngine = this.jaegerEngines.get(jaegerNodeId);
+        if (!jaegerEngine) {
+          return {
+            success: false,
+            latency: Date.now() - queryStartTime,
+            error: `Jaeger engine not found for node: ${jaegerNodeId}`,
+          };
+        }
+
+        // Выполняем query через Jaeger engine
+        const traces = jaegerEngine.queryTraces({
+          service: query.service,
+          operation: query.operation,
+          tags: query.tags,
+          startTime: query.startTime,
+          endTime: query.endTime,
+          limit: query.limit || 100,
+        });
+        
+        const latency = Date.now() - queryStartTime;
+
+        // Конвертируем traces в формат, понятный Grafana
+        const data = {
+          status: 'success',
+          data: traces.map(trace => ({
+            traceID: trace.traceId,
+            spans: trace.spans.map(span => ({
+              traceID: span.traceId,
+              spanID: span.spanId,
+              parentSpanID: span.parentSpanId,
+              operationName: span.operationName,
+              startTime: span.startTime,
+              duration: span.duration,
+              tags: span.tags,
+              logs: span.logs,
+            })),
+            processes: {},
+            startTime: trace.startTime,
+            duration: trace.duration,
+            serviceCount: trace.serviceCount,
+            spanCount: trace.spanCount,
+            hasErrors: trace.hasErrors,
+          })),
+        };
+
+        return {
+          success: true,
+          data,
+          latency,
+        };
       } catch (error) {
         return {
           success: false,

@@ -111,7 +111,7 @@ interface AlertRule {
 
 interface DataSource {
   name: string;
-  type: 'prometheus' | 'loki' | 'influxdb' | 'elasticsearch' | 'postgres' | 'mysql';
+  type: 'prometheus' | 'loki' | 'influxdb' | 'elasticsearch' | 'postgres' | 'mysql' | 'jaeger';
   url: string;
   access: 'proxy' | 'direct';
   isDefault?: boolean;
@@ -647,6 +647,7 @@ export function GrafanaConfigAdvanced({ componentId }: GrafanaConfigProps) {
                                 <SelectItem value="elasticsearch">Elasticsearch</SelectItem>
                                 <SelectItem value="postgres">PostgreSQL</SelectItem>
                                 <SelectItem value="mysql">MySQL</SelectItem>
+                                <SelectItem value="jaeger">Jaeger</SelectItem>
                               </SelectContent>
                             </Select>
                           </div>

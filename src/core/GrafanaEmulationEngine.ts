@@ -80,7 +80,7 @@ export interface GrafanaAlertRule {
  */
 export interface GrafanaDataSource {
   name: string;
-  type: 'prometheus' | 'loki' | 'influxdb' | 'elasticsearch' | 'postgres' | 'mysql';
+  type: 'prometheus' | 'loki' | 'influxdb' | 'elasticsearch' | 'postgres' | 'mysql' | 'jaeger';
   url: string;
   access: 'proxy' | 'direct';
   isDefault?: boolean;

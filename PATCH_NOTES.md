@@ -1,5 +1,258 @@
 # Patch Notes
 
+## Версия 0.1.8u - Jaeger: Connection Rules, Extended Configuration, Metrics Integration, Trace Visualization, Filtering, OpenTelemetry Collector Integration, Grafana Integration, No Hardcode
+
+### Jaeger: Улучшение симуляции и интеграция метрик
+
+**Критическое улучшение**: Реализованы Connection Rules для Jaeger, расширена конфигурация в UI (endpoints, sampling, storage, metrics), интегрированы метрики Jaeger в useEmulationStore для отображения в дашбордах, улучшен расчет per-second метрик на основе временных окон, добавлена визуализация trace tree с иерархией spans, реализована фильтрация и поиск traces, добавлена интеграция с OpenTelemetry Collector для экспорта traces, добавлена интеграция с Grafana для использования Jaeger как datasource. Все реализовано без хардкода - значения по умолчанию берутся из конфигурации, UI синхронизируется с реальными метриками из симуляции, симуляция соответствует реальному поведению Jaeger.
+
+#### 1. Connection Rules для Jaeger ✅
+
+**Улучшение**: Созданы Connection Rules для автоматической настройки при создании connections.
+
+**Реализовано**:
+- ✅ Создан файл `src/services/connection/rules/jaegerRules.ts`:
+  - Функция `createJaegerRule()` - создание правила подключения
+  - `sourceType: '*'` - любой компонент может отправлять spans в Jaeger
+  - `targetTypes: ['jaeger']` - только Jaeger может быть целевым компонентом
+  - `updateSourceConfig: () => null` - не требуется обновление конфига источника (spans отправляются автоматически через DataFlowEngine)
+  - `updateTargetConfig: () => null` - Jaeger не требует предварительной настройки для приема spans
+  - `extractMetadata()` - извлечение metadata (endpoint, port) из конфигурации
+  - `validateConnection()` - валидация соединения
+- ✅ Зарегистрировано в `src/services/connection/rules/index.ts`:
+  - Импорт `createJaegerRule`
+  - Добавлено в список правил в `initializeConnectionRules()`
+- ✅ Отсутствие хардкода:
+  - Все endpoints извлекаются из конфигурации компонента
+  - ServiceDiscovery используется для разрешения имен и портов
+  - Поддержка Agent (6831/14250), Collector (14268/14250), Query (16686/16685) endpoints
+
+#### 2. Расширенная конфигурация в UI ✅
+
+**Улучшение**: Добавлены все необходимые настройки Jaeger в UI с валидацией.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/JaegerConfigAdvanced.tsx`:
+  - **Endpoints секция:**
+    - Server URL (UI endpoint) - порт 16686
+    - Agent Endpoint (UDP/gRPC) - порт 6831/14250
+    - Collector Endpoint (HTTP/gRPC) - порт 14268/14250
+    - Query Endpoint (HTTP/gRPC) - порт 16686/16685
+  - **Sampling секция:**
+    - Тип sampling (probabilistic, rate limiting, per-operation)
+    - Параметр sampling (probability 0-1 или rate limit > 0)
+    - Визуализация текущего sampling rate из engine
+  - **Storage секция:**
+    - Backend type (elasticsearch, cassandra, kafka, memory)
+    - Storage URL (для Elasticsearch/Cassandra/Kafka)
+    - Max traces (лимит хранения, > 0)
+    - Trace TTL (время жизни traces в ms, >= 1000)
+  - **Metrics секция:**
+    - Enable metrics export (switch)
+    - Metrics backend (prometheus, statsd)
+    - Metrics URL
+  - **Metrics Tab (новая вкладка):**
+    - Отображение реальных метрик из `useEmulationStore`
+    - Spans/sec, Traces/sec, Sampling Rate, Storage Utilization
+    - Детальные метрики (spans received, dropped, traces stored, query latency)
+- ✅ Валидация полей:
+  - Проверка диапазонов (probability 0-1, rate limit > 0, TTL >= 1000ms, maxTraces > 0)
+  - Минимальные значения для числовых полей
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Дефолтные значения определены в `JaegerEmulationEngine.initializeConfig()`
+  - UI обновляется в реальном времени на основе симуляции
+
+#### 3. Интеграция метрик в useEmulationStore ✅
+
+**Улучшение**: Метрики Jaeger публикуются в ComponentMetrics для отображения в дашбордах.
+
+**Реализовано**:
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Добавлен метод `simulateJaeger()` для расчета метрик Jaeger компонентов
+  - Метод вызывается в `updateComponentMetrics()` для типа 'jaeger'
+  - Конвертация метрик в `ComponentMetrics`:
+    - `throughput` = spansPerSecond из `calculateLoad()`
+    - `latency` = queryLatency из `calculateLoad()`
+    - `errorRate` = errorRate из `calculateLoad()`
+    - `utilization` = storageUtilization из `calculateLoad()`
+    - `customMetrics` = детальные метрики Jaeger:
+      - `spans_received_total`, `spans_dropped_total`, `spans_processed_total`
+      - `traces_stored_total`, `traces_dropped_total`
+      - `query_requests_total`, `query_errors_total`
+      - `spans_per_second`, `traces_per_second`, `sampling_rate`
+      - `storage_utilization`, `query_latency`, `storage_size_bytes`
+  - Обновление конфигурации engine при изменении настроек
+- ✅ В `src/core/JaegerEmulationEngine.ts`:
+  - Улучшен метод `calculateLoad()`:
+    - Добавлена история метрик (`metricsHistory`) для расчета реальных per-second значений
+    - Временное окно: 60 секунд для расчета метрик
+    - Автоматическая очистка старой истории (старше 60 секунд)
+    - Расчет spansPerSecond и tracesPerSecond на основе временного окна вместо деления на 60
+  - Улучшен метод `initializeConfig()`:
+    - Переинициализация sampling state только при изменении параметров
+    - Сохранение старой конфигурации для сравнения
+- ✅ Отсутствие хардкода:
+  - Все метрики рассчитываются на основе реальных данных из временного окна
+  - Метрики обновляются каждые 100ms через `simulate()`
+  - Метрики доступны в MetricsDashboard и canvas overlay через ComponentMetrics
+
+#### 4. Визуализация Trace Tree ✅
+
+**Улучшение**: Добавлена визуализация иерархии spans в trace с детальным просмотром.
+
+**Реализовано**:
+- ✅ Создан компонент `src/components/config/observability/TraceTreeViewer.tsx`:
+  - Визуализация иерархии spans (parent-child отношения)
+  - Построение дерева spans из parentSpanId
+  - Отображение duration каждого span
+  - Отображение service и operation name
+  - Выделение spans с ошибками (красный цвет)
+  - Раскрытие/сворачивание узлов дерева
+  - Timeline визуализация для всего trace и каждого span
+  - Отображение offset и width каждого span на timeline
+  - Детальный просмотр выбранного span:
+    - Span ID, Trace ID, Parent Span ID
+    - Duration, Start Time
+    - Tags (все теги span с ключами и значениями)
+    - Logs (все логи span с timestamp и полями)
+    - Service и operation info
+- ✅ Обновлен `src/components/config/observability/JaegerConfigAdvanced.tsx`:
+  - Добавлена кнопка "View Trace" для каждого trace в списке
+  - Модальное окно с `TraceTreeViewer` для просмотра trace
+  - Отображение Trace ID в списке traces
+- ✅ Отсутствие хардкода:
+  - Все данные берутся из `JaegerTrace` и `JaegerSpan` интерфейсов
+  - Дерево строится динамически на основе parent-child отношений
+  - Timeline рассчитывается на основе реальных временных меток spans
+
+#### 5. Фильтрация и поиск traces ✅
+
+**Улучшение**: Добавлены возможности фильтрации и поиска traces.
+
+**Реализовано**:
+- ✅ В `src/components/config/observability/JaegerConfigAdvanced.tsx`:
+  - **Поиск:**
+    - Текстовый поиск по trace ID, service, или operation
+    - Поле поиска с иконкой и кнопкой очистки
+  - **Фильтры:**
+    - Фильтр по service (dropdown) - динамический список из доступных services
+    - Фильтр по operation (dropdown) - динамический список из доступных operations
+    - Фильтр по статусу (success/error/all)
+    - Фильтр по времени (last hour, last 24 hours, last 7 days, all time)
+  - **Интеграция с JaegerEmulationEngine:**
+    - Использование `queryTraces()` для фильтрации по времени
+    - Комбинирование фильтров (AND логика)
+    - Отображение количества найденных traces (filtered/total)
+  - **UI улучшения:**
+    - Сетка фильтров (2 колонки на мобильных, 4 на десктопе)
+    - Иконки для фильтров
+    - Счетчик результатов
+- ✅ Отсутствие хардкода:
+  - Все фильтры динамические на основе реальных данных из traces
+  - Списки services и operations генерируются из реальных traces
+  - Фильтрация по времени использует `queryTraces()` с реальными временными метками
+  - Поиск работает по всем полям trace без предопределенных паттернов
+
+#### 6. Интеграция с OpenTelemetry Collector ✅
+
+**Улучшение**: Реализована интеграция OpenTelemetry Collector с Jaeger для экспорта traces.
+
+**Реализовано**:
+- ✅ В `src/core/OpenTelemetryCollectorRoutingEngine.ts`:
+  - Добавлен callback `getJaegerEnginesCallback` для получения Jaeger engines
+  - Реализован метод `exportToJaeger()` для отправки spans в Jaeger
+  - Реализована конвертация OTLP traces в Jaeger spans:
+    - `convertOTLPToJaeger()` - конвертация OTLP ResourceSpans, упрощенного формата и одиночных spans
+    - `convertOTLPSpanToJaeger()` - конвертация OTLP span в Jaeger span
+    - `extractAttributeValue()` - конвертация OTLP attribute values
+    - `convertBytesToHex()` - конвертация byte arrays в hex строки
+    - Поддержка OTLP Events → Jaeger Logs
+    - Поддержка OTLP Links → Jaeger References
+  - Обновлен метод `applyExporter()` для реальной отправки spans при типе 'jaeger'
+- ✅ В `src/services/connection/rules/jaegerRules.ts`:
+  - Добавлена функция `updateOTelCollectorConfig()` для автоматической настройки Jaeger exporter
+  - Автоматическое создание/обновление Jaeger exporter в конфигурации OpenTelemetry Collector
+  - Автоматическое добавление Jaeger exporter в traces pipeline
+  - Извлечение Jaeger endpoint из конфигурации (collectorEndpoint, agentEndpoint, или metadata)
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Установка callback для получения Jaeger engines в `OpenTelemetryCollectorRoutingEngine`
+  - Callback устанавливается при инициализации и обновлении конфигурации
+- ✅ Отсутствие хардкода:
+  - Все endpoints извлекаются из конфигурации компонентов
+  - Конвертация форматов соответствует OpenTelemetry спецификации
+  - Отправка spans происходит в реальные Jaeger engines через `receiveSpan()`
+
+#### 7. Интеграция с Grafana ✅
+
+**Улучшение**: Реализована интеграция Grafana с Jaeger для использования Jaeger как datasource.
+
+**Реализовано**:
+- ✅ В `src/core/GrafanaEmulationEngine.ts`:
+  - Добавлена поддержка Jaeger datasource type в интерфейсе `GrafanaDataSource`
+  - Тип расширен: `'prometheus' | 'loki' | 'influxdb' | 'elasticsearch' | 'postgres' | 'mysql' | 'jaeger'`
+- ✅ В `src/components/config/observability/GrafanaConfigAdvanced.tsx`:
+  - Добавлен 'jaeger' в список доступных datasource types в UI Select
+  - Тип `DataSource` расширен для поддержки 'jaeger'
+- ✅ В `src/core/GrafanaRoutingEngine.ts`:
+  - Добавлен метод `setJaegerQueryExecutor()` для установки executor
+  - Добавлен метод `routeJaegerQuery()` для маршрутизации запросов к Jaeger
+  - Добавлен метод `findJaegerNode()` для поиска Jaeger node по URL datasource
+  - Добавлен case 'jaeger' в `routeQuery()` для обработки Jaeger queries
+  - Поддержка парсинга query expression (JSON или простой формат service=name,operation=name)
+  - Визуализация HTTP запросов через DataFlowEngine
+- ✅ В `src/services/connection/rules/grafanaRules.ts`:
+  - Расширены `targetTypes` для поддержки 'jaeger'
+  - Обновлен `updateSourceConfig()` для автоматической настройки Jaeger datasource
+  - Автоматическое извлечение Jaeger Query endpoint (16686) из конфигурации
+  - Обновлен `cleanupSourceConfig()` для удаления Jaeger datasource при разрыве соединения
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Добавлен метод `createJaegerQueryExecutorForRouting()` для создания executor
+  - Executor использует `JaegerEmulationEngine.queryTraces()` для выполнения запросов
+  - Конвертация результатов в формат, понятный Grafana (Jaeger trace format)
+  - Executor устанавливается в `GrafanaRoutingEngine` при инициализации Grafana
+- ✅ Отсутствие хардкода:
+  - Все endpoints извлекаются из конфигурации компонентов
+  - Запросы выполняются через реальные Jaeger engines
+  - Конвертация форматов соответствует Jaeger API
+
+**Изменённые файлы**:
+- `src/services/connection/rules/jaegerRules.ts` (новый)
+  - ✅ Connection Rules для Jaeger
+- `src/services/connection/rules/index.ts`
+  - ✅ Регистрация правила Jaeger
+- `src/components/config/observability/JaegerConfigAdvanced.tsx`
+  - ✅ Расширена конфигурация (endpoints, sampling, storage, metrics)
+  - ✅ Добавлена вкладка Metrics с отображением реальных метрик
+  - ✅ Валидация полей
+  - ✅ Добавлена фильтрация и поиск traces
+  - ✅ Добавлена кнопка View Trace и модальное окно
+- `src/components/config/observability/TraceTreeViewer.tsx` (новый)
+  - ✅ Компонент для визуализации trace tree
+  - ✅ Детальный просмотр span (tags, logs, duration)
+  - ✅ Timeline визуализация
+- `src/core/EmulationEngine.ts`
+  - ✅ Добавлен метод `simulateJaeger()` для расчета метрик
+  - ✅ Интеграция в `updateComponentMetrics()` для типа 'jaeger'
+- `src/core/JaegerEmulationEngine.ts`
+  - ✅ Улучшен метод `calculateLoad()` с историей метрик
+  - ✅ Улучшен метод `initializeConfig()` с переинициализацией sampling
+- `src/core/OpenTelemetryCollectorRoutingEngine.ts`
+  - ✅ Добавлена интеграция с Jaeger для экспорта traces
+  - ✅ Реализована конвертация OTLP → Jaeger форматов
+- `src/services/connection/rules/jaegerRules.ts`
+  - ✅ Добавлена автоматическая настройка Jaeger exporter в OpenTelemetry Collector
+- `src/core/GrafanaEmulationEngine.ts`
+  - ✅ Добавлена поддержка Jaeger datasource type
+- `src/components/config/observability/GrafanaConfigAdvanced.tsx`
+  - ✅ Добавлен 'jaeger' в список datasource types
+- `src/core/GrafanaRoutingEngine.ts`
+  - ✅ Добавлена поддержка маршрутизации запросов к Jaeger
+- `src/services/connection/rules/grafanaRules.ts`
+  - ✅ Добавлена автоматическая настройка Jaeger datasource при создании соединения
+
+---
+
 ## Версия 0.1.8t - Loki: Rate Limiting, Real-time Metrics, Connection Rules, No Hardcode
 
 ### Loki: Улучшение симуляции и устранение хардкода

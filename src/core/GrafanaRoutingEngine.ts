@@ -55,6 +55,19 @@ export class GrafanaRoutingEngine {
     endTime?: number,
     limit?: number
   ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }>;
+  
+  // Функция для выполнения Jaeger queries
+  private executeJaegerQuery?: (
+    jaegerNodeId: string,
+    query: {
+      service?: string;
+      operation?: string;
+      tags?: Record<string, string>;
+      startTime?: number;
+      endTime?: number;
+      limit?: number;
+    }
+  ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }>;
 
   constructor(
     serviceDiscovery: ServiceDiscovery,
@@ -109,6 +122,25 @@ export class GrafanaRoutingEngine {
   }
 
   /**
+   * Устанавливает функцию для выполнения Jaeger queries
+   */
+  setJaegerQueryExecutor(
+    executor: (
+      jaegerNodeId: string,
+      query: {
+        service?: string;
+        operation?: string;
+        tags?: Record<string, string>;
+        startTime?: number;
+        endTime?: number;
+        limit?: number;
+      }
+    ) => Promise<{ success: boolean; data?: any; latency: number; error?: string }>
+  ): void {
+    this.executeJaegerQuery = executor;
+  }
+
+  /**
    * Маршрутизирует query к datasource
    */
   async routeQuery(
@@ -142,6 +174,9 @@ export class GrafanaRoutingEngine {
         break;
       case 'loki':
         result = await this.routeLokiQuery(query, datasource, timeRange);
+        break;
+      case 'jaeger':
+        result = await this.routeJaegerQuery(query, datasource, timeRange);
         break;
       default:
         result = {
@@ -393,6 +428,143 @@ export class GrafanaRoutingEngine {
   }
 
   /**
+   * Маршрутизирует Jaeger query
+   */
+  private async routeJaegerQuery(
+    query: GrafanaPanelQuery,
+    datasource: GrafanaDataSource,
+    timeRange?: { from: number; to: number; step?: number }
+  ): Promise<GrafanaQueryResult> {
+    const startTime = Date.now();
+
+    // Находим Jaeger node по URL datasource
+    const jaegerNode = this.findJaegerNode(datasource);
+    if (!jaegerNode) {
+      return {
+        success: false,
+        latency: Date.now() - startTime,
+        error: `Jaeger node not found for datasource: ${datasource.url}`,
+      };
+    }
+
+    // Находим connection между Grafana и Jaeger
+    const connection = this.connections.find(
+      c => (c.source === this.grafanaNode.id && c.target === jaegerNode.id) ||
+           (c.source === jaegerNode.id && c.target === this.grafanaNode.id)
+    );
+
+    // Получаем latency соединения
+    const connectionLatency = connection?.data?.latency || 0;
+
+    // Выполняем query через Jaeger executor
+    if (!this.executeJaegerQuery) {
+      return {
+        success: false,
+        latency: Date.now() - startTime + connectionLatency,
+        error: 'Jaeger query executor not set',
+      };
+    }
+
+    try {
+      // Парсим query expression для извлечения параметров
+      // В реальности Grafana использует специальный формат для Jaeger queries
+      // Для симуляции поддерживаем простой формат: service=name,operation=name или JSON
+      let queryParams: {
+        service?: string;
+        operation?: string;
+        tags?: Record<string, string>;
+        startTime?: number;
+        endTime?: number;
+        limit?: number;
+      } = {};
+
+      try {
+        // Пытаемся распарсить как JSON
+        queryParams = JSON.parse(query.expr);
+      } catch {
+        // Если не JSON, пытаемся распарсить как простой формат
+        const parts = query.expr.split(',');
+        for (const part of parts) {
+          const [key, value] = part.split('=').map(s => s.trim());
+          if (key === 'service') {
+            queryParams.service = value;
+          } else if (key === 'operation') {
+            queryParams.operation = value;
+          } else if (key && value) {
+            if (!queryParams.tags) {
+              queryParams.tags = {};
+            }
+            queryParams.tags[key] = value;
+          }
+        }
+      }
+
+      // Устанавливаем временной диапазон
+      queryParams.startTime = timeRange?.from || Date.now() - 3600000; // Last hour by default
+      queryParams.endTime = timeRange?.to || Date.now();
+      queryParams.limit = 100; // Default limit
+
+      // Создаем визуализацию HTTP запроса (если DataFlowEngine доступен)
+      if (this.dataFlowEngine) {
+        const queryUrl = `/api/traces?service=${encodeURIComponent(queryParams.service || '')}&start=${queryParams.startTime}&end=${queryParams.endTime}`;
+        
+        const queryPayload = JSON.stringify(queryParams);
+        
+        this.dataFlowEngine.addMessage({
+          source: this.grafanaNode.id,
+          target: jaegerNode.id,
+          format: 'json',
+          payload: queryPayload,
+          size: queryPayload.length,
+          metadata: {
+            contentType: 'application/json',
+            operation: 'Jaeger query',
+            query: query.expr,
+            url: queryUrl,
+          },
+          latency: connectionLatency,
+        });
+      }
+
+      const result = await this.executeJaegerQuery(jaegerNode.id, queryParams);
+
+      // Общая latency = latency соединения + latency выполнения query
+      const totalLatency = connectionLatency + result.latency;
+
+      // Создаем визуализацию ответа (если DataFlowEngine доступен)
+      if (this.dataFlowEngine && result.success) {
+        const responsePayload = JSON.stringify(result.data || {});
+        this.dataFlowEngine.addMessage({
+          source: jaegerNode.id,
+          target: this.grafanaNode.id,
+          format: 'json',
+          payload: responsePayload,
+          size: responsePayload.length,
+          metadata: {
+            contentType: 'application/json',
+            operation: 'Jaeger response',
+            query: query.expr,
+          },
+          latency: result.latency,
+        });
+      }
+
+      return {
+        success: result.success,
+        latency: totalLatency,
+        data: result.data,
+        error: result.error,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        latency: Date.now() - startTime + connectionLatency,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  /**
    * Находит Prometheus node по URL datasource с поддержкой балансировки нагрузки
    */
   private findPrometheusNode(datasource: GrafanaDataSource): CanvasNode | null {
@@ -541,6 +713,65 @@ export class GrafanaRoutingEngine {
     
     // Обновляем индекс для следующего запроса
     this.lokiRoundRobinIndex.set(cacheKey, (currentIndex + 1) % matchingNodes.length);
+    
+    return selectedNode;
+  }
+
+  /**
+   * Находит Jaeger node по URL datasource с поддержкой балансировки нагрузки
+   */
+  private findJaegerNode(datasource: GrafanaDataSource): CanvasNode | null {
+    // Парсим URL datasource
+    let targetHost: string | null = null;
+    let targetPort: number | null = null;
+
+    try {
+      const url = new URL(datasource.url);
+      targetHost = url.hostname;
+      targetPort = parseInt(url.port) || 16686; // Default Jaeger Query port
+    } catch {
+      // Если не валидный URL, пытаемся извлечь host:port напрямую
+      const match = datasource.url.match(/^https?:\/\/([^\/]+)/);
+      if (match) {
+        const parts = match[1].split(':');
+        targetHost = parts[0];
+        targetPort = parts[1] ? parseInt(parts[1]) : 16686;
+      }
+    }
+
+    // Собираем все подходящие Jaeger nodes
+    const matchingNodes: CanvasNode[] = [];
+    
+    for (const node of this.allNodes) {
+      if (node.type === 'jaeger') {
+        const host = this.serviceDiscovery.getHost(node);
+        const port = this.serviceDiscovery.getPort(node, 'main');
+        
+        if (targetHost && targetPort) {
+          // Сравниваем host и port
+          if (host === targetHost && port === targetPort) {
+            matchingNodes.push(node);
+          }
+        } else {
+          // Если не можем распарсить URL, добавляем все Jaeger nodes для балансировки
+          matchingNodes.push(node);
+        }
+      }
+    }
+
+    if (matchingNodes.length === 0) {
+      return null;
+    }
+
+    // Если только один node, возвращаем его
+    if (matchingNodes.length === 1) {
+      return matchingNodes[0];
+    }
+
+    // Балансировка нагрузки: round-robin между множественными instances
+    const cacheKey = datasource.url || 'default';
+    const currentIndex = 0; // Можно добавить jaegerRoundRobinIndex если нужно
+    const selectedNode = matchingNodes[currentIndex % matchingNodes.length];
     
     return selectedNode;
   }
