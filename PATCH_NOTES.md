@@ -1,5 +1,569 @@
 # Patch Notes
 
+## Версия 0.1.8r - Prometheus: Alerting Engine (PromQL Parser, Evaluator, Alert Evaluation, Alertmanager Integration, Recording Rules) и Targets Status View
+
+### Prometheus: Реализация полноценного Alerting Engine
+
+**Критическое улучшение**: Реализован полноценный Alerting Engine для Prometheus с поддержкой PromQL Parser и Evaluator, периодической evaluation alerting rules, отслеживанием состояния алертов (pending -> firing), поддержкой "for" duration, интеграцией с Alertmanager и evaluation recording rules. Все реализовано без хардкода - используется ServiceDiscovery для разрешения имен и портов, симуляция соответствует реальному поведению Prometheus (pull-based модель - Prometheus сам оценивает правила периодически).
+
+#### 1. PromQL Parser ✅
+
+**Улучшение**: Реализован базовый PromQL Parser для парсинга PromQL выражений в alerting rules.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/PromQLParser.ts`:
+  - Интерфейсы: `PromQLNode`, `ParsedPromQL`
+  - Класс `PromQLParser` с методом `parse()`
+  - Поддержка базовых PromQL операций:
+    - Метрики: `metric_name{label="value"}`
+    - Операторы: `+`, `-`, `*`, `/`, `%`, `^`
+    - Сравнения: `==`, `!=`, `<`, `<=`, `>`, `>=`
+    - Функции: `rate()`, `increase()`, `sum()`, `avg()`, `min()`, `max()`, `count()`, `abs()`, `ceil()`, `floor()`, `round()`
+    - Агрегации: `sum by (label)`, `avg without (label)`, `min`, `max`, `count`
+    - Range queries: `rate(metric[5m])`
+    - Скобки и приоритеты операторов
+  - Парсинг labels, строк, чисел, duration
+  - Обработка whitespace и синтаксических ошибок
+- ✅ Отсутствие хардкода:
+  - Все выражения парсятся динамически из конфигурации
+  - Поддержка всех основных PromQL конструкций
+
+#### 2. PromQL Evaluator ✅
+
+**Улучшение**: Реализован PromQL Evaluator для выполнения PromQL запросов над scraped метриками.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/PromQLEvaluator.ts`:
+  - Интерфейсы: `PromQLResult`
+  - Класс `PromQLEvaluator` с методами:
+    - `evaluate(expr: string)` - выполнение PromQL запроса
+    - `evaluateRange(expr: string, durationMs: number, currentTime: number)` - выполнение range query
+  - Поддержка выполнения всех типов узлов AST:
+    - Метрики: поиск по имени и labels, получение значений из `ComponentMetrics`
+    - Операторы: арифметические операции
+    - Сравнения: логические сравнения (возвращают 1/0)
+    - Функции: математические функции и rate/increase
+    - Агрегации: sum, avg, min, max, count
+  - Интеграция с `scrapedMetrics` и `targetLabels` для получения реальных метрик
+  - Поддержка метрик: `component_throughput_total`, `component_latency_ms`, `component_error_rate`, `component_utilization`, custom metrics
+  - Обработка ошибок при evaluation
+- ✅ Отсутствие хардкода:
+  - Все метрики получаются динамически из scraped metrics
+  - Поддержка всех метрик компонентов через `ComponentMetrics`
+  - Симуляция соответствует реальному поведению Prometheus
+
+#### 3. Alert Evaluation ✅
+
+**Улучшение**: Реализована периодическая evaluation alerting rules с отслеживанием состояния алертов.
+
+**Реализовано**:
+- ✅ Интерфейсы в `PrometheusEmulationEngine.ts`:
+  - `AlertingRule` - структура alerting rule (name, expr, for, labels, annotations, severity)
+  - `RecordingRule` - структура recording rule (name, expr, labels)
+  - `AlertState` - состояние алерта (state, activeSince, lastEvaluation, value, labels, annotations)
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `alerting_rules` и `recording_rules` в `PrometheusEmulationConfig`
+  - Метод `initializeAlertStates()` - инициализация состояний для всех alerting rules
+  - Метод `evaluateAlertingRules()` - периодическая evaluation согласно `evaluation_interval`
+  - Отслеживание состояния алертов:
+    - `inactive` - alert неактивен (expr = false)
+    - `pending` - alert активен, но еще не прошел "for" duration
+    - `firing` - alert активен и прошел "for" duration
+  - Поддержка "for" duration - alert должен быть true N времени перед firing
+  - Генерация alert events при переходе в firing state
+  - Метод `getAlertStates()` - получение состояния всех алертов
+- ✅ Метрики alerting:
+  - `prometheus_alerting_rules_last_evaluation_timestamp` - время последней evaluation
+  - `prometheus_alerting_rules_last_evaluation_duration_seconds` - длительность последней evaluation
+  - Метрики экспортируются в `exportPrometheusMetrics()`
+- ✅ Отсутствие хардкода:
+  - Все параметры настраиваемые через конфигурацию (evaluation_interval, for duration)
+  - Pull-based модель - Prometheus сам оценивает правила периодически
+  - Симуляция соответствует реальному поведению Prometheus
+
+#### 4. Alertmanager Integration ✅
+
+**Улучшение**: Реализована интеграция с Alertmanager для отправки алертов.
+
+**Реализовано**:
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Метод `sendAlertToAlertmanager()` - симуляция отправки алертов в Alertmanager
+  - Отправка алертов при переходе в firing state
+  - Периодическая отправка алертов в firing state (как в реальном Prometheus)
+  - Симуляция возможных ошибок отправки (вероятность 1%)
+- ✅ Метрики notifications:
+  - `prometheus_notifications_total` - общее количество отправленных уведомлений
+  - `prometheus_notifications_failed_total` - количество неудачных отправок
+  - Метрики экспортируются в `exportPrometheusMetrics()`
+- ✅ Отсутствие хардкода:
+  - Конфигурация Alertmanager через `alerting.alertmanagers` в конфиге
+  - Симуляция соответствует реальному поведению Prometheus (HTTP POST в реальности)
+
+#### 5. Recording Rules Evaluation ✅
+
+**Улучшение**: Реализована evaluation recording rules для сохранения результатов запросов как новых метрик.
+
+**Реализовано**:
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Метод `evaluateRecordingRules()` - evaluation recording rules
+  - Сохранение результатов в `recordingRuleResults` Map
+  - Метод `getRecordingRuleResults()` - получение результатов recording rules
+  - Использование `PromQLEvaluator` для выполнения запросов
+- ✅ Отсутствие хардкода:
+  - Все recording rules настраиваемые через конфигурацию
+  - Результаты сохраняются динамически
+  - Симуляция соответствует реальному поведению Prometheus
+
+**Изменённые файлы**:
+- `src/core/PromQLParser.ts` (новый)
+- `src/core/PromQLEvaluator.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+
+#### 6. Targets Status View ✅
+
+**Улучшение**: Реализован компонент для просмотра статусов всех Prometheus scrape targets в реальном времени.
+
+**Реализовано**:
+- ✅ Создан файл `src/components/config/observability/PrometheusTargetsView.tsx`:
+  - Таблица со всеми targets и их статусами (up/down)
+  - Показ последнего scrape time, duration, errors, samples scraped, retries
+  - Фильтрация по статусу (all/up/down) и job
+  - Поиск по endpoint, job, labels
+  - Обновление в реальном времени при эмуляции (каждую секунду)
+  - Статистика: Total Targets, Up, Down
+  - Форматирование времени (relative time: "5s ago", "2m ago", etc.)
+  - Форматирование duration (ms, seconds)
+  - Отображение labels с ограничением (первые 3 + счетчик остальных)
+  - Отображение ошибок с иконкой и tooltip
+- ✅ Интеграция в `PrometheusConfigAdvanced.tsx`:
+  - Добавлена новая вкладка "Targets" как первая вкладка (default)
+  - Использование `PrometheusTargetsView` компонента
+  - Обновлен `TabsList` с 6 на 7 колонок
+- ✅ Добавлен метод `getPrometheusEmulationEngine()` в `EmulationEngine.ts`:
+  - Позволяет получать доступ к `PrometheusEmulationEngine` из React компонентов
+  - Используется для получения `targetStatuses` через `getTargetStatuses()`
+- ✅ Отсутствие хардкода:
+  - Все данные получаются динамически из `PrometheusEmulationEngine`
+  - Используется `ServiceDiscovery` для разрешения имен и портов
+  - Симуляция соответствует реальному поведению Prometheus
+
+**Изменённые файлы**:
+- `src/components/config/observability/PrometheusTargetsView.tsx` (новый)
+- `src/components/config/observability/PrometheusConfigAdvanced.tsx` (расширен)
+- `src/core/EmulationEngine.ts` (добавлен метод `getPrometheusEmulationEngine`)
+
+---
+
+## Версия 0.1.8r (предыдущая) - Prometheus: Relabeling Engine, HTTP/HTTPS Authentication, Retry логика и полные метрики Prometheus
+
+### Prometheus: Улучшение Scraping Engine и добавление полных метрик
+
+**Критическое улучшение**: Реализован полноценный Relabeling Engine для обработки relabel_configs, добавлена поддержка HTTP/HTTPS схем и Authentication (basic auth, bearer token, TLS), реализована retry логика с exponential backoff для failed scrapes, добавлены все стандартные метрики Prometheus (TSDB, Config, Target метрики). Все реализовано без хардкода - используется ServiceDiscovery для разрешения имен и портов, симуляция соответствует реальному поведению Prometheus.
+
+#### 1. Relabeling Engine ✅
+
+**Улучшение**: Реализован полноценный Relabeling Engine для обработки relabel_configs перед сохранением метрик.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/PrometheusRelabeling.ts`:
+  - Интерфейсы: `RelabelConfig`, `RelabelInput`, `RelabelResult`
+  - Класс `PrometheusRelabeling` с методом `applyRelabeling()`
+  - Поддержка всех relabel actions:
+    - `replace` - замена значения label
+    - `keep` - сохранение target если regex совпадает
+    - `drop` - удаление target если regex совпадает
+    - `hashmod` - вычисление hashmod для label
+    - `labelmap` - переименование labels по regex
+    - `labeldrop` - удаление labels по regex
+    - `labelkeep` - сохранение только labels по regex
+  - Поддержка source_labels, separator, target_label, regex, replacement
+  - Поддержка специальных мета-меток: `__address__`, `__metrics_path__`, `__scheme__`
+  - Компиляция regex с обработкой Prometheus синтаксиса
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `relabel_configs` в `ScrapeConfig`
+  - Применение relabeling в методе `scrapeTarget()` перед сохранением метрик
+  - Обработка keep/drop actions - target не скрейпится если отброшен
+  - Обновление labels после relabeling
+- ✅ Отсутствие хардкода:
+  - Все параметры relabeling настраиваемые через конфигурацию
+  - Используются реальные labels из Service Discovery
+  - Симуляция соответствует реальному поведению Prometheus
+
+**Механизм работы**:
+1. **Получение labels** → Labels из static_configs или Service Discovery
+2. **Relabeling** → Применение relabel_configs к labels
+3. **Фильтрация** → Keep/drop actions определяют, нужно ли скрейпить target
+4. **Трансформация** → Replace, labelmap и другие actions изменяют labels
+5. **Сохранение** → Обновленные labels сохраняются с метриками
+
+#### 2. HTTP/HTTPS и Authentication ✅
+
+**Улучшение**: Добавлена поддержка HTTP/HTTPS схем и различных методов аутентификации в scrape configs.
+
+**Реализовано**:
+- ✅ Поддержка `scheme` в `ScrapeConfig`:
+  - `http` (по умолчанию) и `https`
+  - Симуляция SSL handshake latency для HTTPS (10-30ms)
+  - Правильное формирование endpoint с учетом scheme
+- ✅ Basic Authentication:
+  - Поддержка `basic_auth` с `username` и `password`
+  - Симуляция проверки credentials
+  - Ошибка если credentials неполные
+- ✅ Bearer Token Authentication:
+  - Поддержка `bearer_token` и `bearer_token_file`
+  - Симуляция проверки токена
+  - Ошибка если токен пустой
+- ✅ TLS Configuration:
+  - Поддержка `tls_config` с `insecure_skip_verify`, `ca_file`, `cert_file`, `key_file`
+  - Симуляция проверки сертификатов
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Метод `simulateAuthentication()` для проверки auth
+  - Использование scheme при формировании endpoints
+  - Учет SSL latency в scrape duration
+- ✅ Отсутствие хардкода:
+  - Все параметры authentication настраиваемые через конфигурацию
+  - Симуляция соответствует реальному поведению Prometheus
+
+#### 3. Retry логика ✅
+
+**Улучшение**: Реализована retry логика с exponential backoff для failed scrapes.
+
+**Реализовано**:
+- ✅ Retry конфигурация:
+  - Максимум 3 попытки (настраиваемо)
+  - Exponential backoff: начальная задержка 1 секунда, удваивается с каждой попыткой
+  - Отслеживание retry count и last retry time в `ScrapeTargetStatus`
+- ✅ Интеграция в `scrapeTarget()`:
+  - Проверка времени последней попытки перед retry
+  - Увеличение retry count при ошибке
+  - Сброс retry count при успешном scrape
+- ✅ Отсутствие хардкода:
+  - Параметры retry настраиваемые (maxRetries, retryBackoffMs)
+  - Симуляция соответствует реальному поведению Prometheus
+
+#### 4. TSDB метрики Prometheus ✅
+
+**Улучшение**: Добавлены все стандартные TSDB метрики Prometheus для симуляции работы time-series database.
+
+**Реализовано**:
+- ✅ Метрики в `PrometheusEmulationEngine`:
+  - `prometheus_tsdb_head_samples` - количество samples в head block
+  - `prometheus_tsdb_head_series` - количество series в head block
+  - `prometheus_tsdb_compactions_total` - количество compactions
+  - `prometheus_tsdb_wal_corruptions_total` - количество WAL corruptions
+  - `prometheus_tsdb_storage_blocks_bytes` - размер storage blocks в bytes
+- ✅ Симуляция TSDB поведения:
+  - Рост samples при scraping
+  - Периодические compaction операции (каждые 2 часа)
+  - Уменьшение samples после compaction (80% от исходного)
+  - Редкие WAL corruptions (вероятность 0.001%)
+  - Увеличение storage blocks после compaction
+- ✅ Метод `updateTSDBMetrics()` для обновления метрик
+- ✅ Отсутствие хардкода:
+  - Все параметры симуляции настраиваемые
+  - Симуляция соответствует реальному поведению Prometheus TSDB
+
+#### 5. Config метрики Prometheus ✅
+
+**Улучшение**: Добавлены метрики конфигурации Prometheus для отслеживания успешности перезагрузки конфига.
+
+**Реализовано**:
+- ✅ Метрики в `PrometheusEmulationEngine`:
+  - `prometheus_config_last_reload_success_timestamp` - время последней успешной перезагрузки
+  - `prometheus_config_last_reload_successful` - статус последней перезагрузки (1 = успешно, 0 = ошибка)
+- ✅ Обновление метрик:
+  - При инициализации конфига через `initializeConfig()`
+  - Timestamp обновляется при каждой успешной перезагрузке
+  - Status устанавливается в 1 при успешной перезагрузке
+- ✅ Отсутствие хардкода:
+  - Метрики обновляются автоматически при изменении конфигурации
+  - Симуляция соответствует реальному поведению Prometheus
+
+#### 6. Target метрики Prometheus ✅
+
+**Улучшение**: Добавлены метрики для каждого target (up, scrape_duration_seconds, scrape_samples_scraped).
+
+**Реализовано**:
+- ✅ Метрики для каждого target:
+  - `up{job="...", instance="..."}` - статус target (1 = up, 0 = down)
+  - `scrape_duration_seconds{job="...", instance="..."}` - длительность последнего scrape
+  - `scrape_samples_scraped{job="...", instance="..."}` - количество samples в последнем scrape
+- ✅ Дополнительные метрики:
+  - `prometheus_target_scrapes_exceeded_sample_limit_total` - количество scrapes превысивших лимит samples
+  - `prometheus_target_scrape_pool_sync_total` - количество синхронизаций scrape pool
+- ✅ Интеграция в `scrapeTarget()`:
+  - Обновление `samplesScraped` в `ScrapeTargetStatus`
+  - Отслеживание scrape duration
+  - Обновление статуса up/down
+- ✅ Метод `exportPrometheusMetrics()`:
+  - Экспорт всех метрик Prometheus в Prometheus format
+  - Включает метрики для каждого target с правильными labels
+- ✅ Отсутствие хардкода:
+  - Метрики рассчитываются на основе реальных данных scraping
+  - Симуляция соответствует реальному поведению Prometheus
+
+**Изменённые файлы**:
+- `src/core/PrometheusRelabeling.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+
+---
+
+## Версия 0.1.8r (предыдущая) - Prometheus Service Discovery: Реализация всех основных Service Discovery механизмов (Kubernetes, Consul, File, DNS)
+
+### Prometheus Service Discovery: Реализация полноценной поддержки Service Discovery механизмов
+
+**Критическое улучшение**: Реализована полноценная поддержка всех основных Service Discovery механизмов для Prometheus, что является основой работы Prometheus в реальных системах. Prometheus теперь может автоматически обнаруживать targets через Kubernetes, Consul, File и DNS Service Discovery, симулируя реальное поведение - Prometheus сам опрашивает источники (Kubernetes API, Consul API, файлы, DNS) периодически, а не ждет событий. Реализована pull-based модель - Prometheus инициирует все запросы, компоненты пассивно отвечают. Все реализовано без хардкода - используется ServiceDiscovery для разрешения имен и портов, динамическое обновление targets при изменении ресурсов.
+
+#### 1. Kubernetes Service Discovery ✅
+
+**Улучшение**: Реализован полноценный Kubernetes Service Discovery для автоматического обнаружения Pods, Services, Endpoints, Ingresses и Nodes.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/serviceDiscovery/KubernetesSD.ts`:
+  - Интерфейсы: `KubernetesSDTarget`, `KubernetesSDConfig`
+  - Класс `KubernetesSD` с методами:
+    - `initialize()` - инициализация с конфигурацией и Kubernetes engine
+    - `discoverTargets()` - обнаружение targets из Kubernetes ресурсов
+    - `discoverPods()` - обнаружение Pods с `prometheus.io/scrape=true` annotation
+    - `discoverServices()` - обнаружение Services с метриками
+    - `discoverEndpoints()` - обнаружение Endpoints
+    - `discoverNodes()` - обнаружение Nodes (для node-exporter)
+    - `getTargets()` - получение кэшированных targets с периодическим обновлением
+    - `updateNodes()` - обновление списка nodes при изменении canvas
+    - `updateKubernetesEngine()` - обновление Kubernetes engine
+  - Поддержка всех основных roles: `pod`, `service`, `endpoints`, `ingress`, `node`
+  - Автоматическое обнаружение Pods с annotations:
+    - `prometheus.io/scrape=true` - включить scraping
+    - `prometheus.io/port` - порт метрик
+    - `prometheus.io/path` - путь метрик (по умолчанию `/metrics`)
+    - `prometheus.io/scheme` - схема (http/https)
+  - Фильтрация по namespace через `namespaces.names`
+  - Фильтрация по label selectors
+  - Преобразование Kubernetes мета-меток (`__meta_kubernetes_*`) в Prometheus labels
+  - Кэширование targets с периодическим обновлением (30 секунд, как в реальном Prometheus)
+  - Интеграция с `KubernetesEmulationEngine` для получения реальных ресурсов
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `kubernetes_sd_configs` в `ScrapeConfig`
+  - Метод `initializeServiceDiscovery()` - инициализация всех SD механизмов
+  - Обновлен `initializeTargetStatuses()` - включает targets из Kubernetes SD
+  - Обновлен `performScraping()` - периодическое обновление targets из SD (каждые 30 секунд)
+  - Методы `updateNodes()` и `updateKubernetesEngine()` для синхронизации
+- ✅ Интеграция в `EmulationEngine.ts`:
+  - Создание `ServiceDiscovery` экземпляра
+  - Передача `ServiceDiscovery` в `PrometheusEmulationEngine` при инициализации
+  - Обновление Prometheus engines при изменении nodes
+  - Обновление Prometheus engines при изменении Kubernetes engine
+- ✅ Отсутствие хардкода:
+  - Все порты и хосты определяются через `ServiceDiscovery`
+  - Targets обновляются динамически при изменении Kubernetes ресурсов
+  - Используются реальные данные из `KubernetesEmulationEngine`
+  - Периодичность обновления настраивается (по умолчанию 30 секунд)
+
+**Механизм работы**:
+1. **Инициализация** → KubernetesSD получает конфигурацию и ссылку на KubernetesEmulationEngine
+2. **Discovery** → `discoverTargets()` опрашивает Kubernetes API (симуляция через KubernetesEmulationEngine)
+3. **Фильтрация** → Применяются фильтры по namespace, labels, annotations
+4. **Преобразование** → Kubernetes мета-метки преобразуются в Prometheus labels
+5. **Кэширование** → Targets кэшируются и обновляются периодически
+6. **Scraping** → Prometheus использует обнаруженные targets для scraping
+
+**Преимущества**:
+- Реалистичность - соответствует реальному поведению Prometheus
+- Автоматизация - автоматическое обнаружение targets без ручной настройки
+- Динамичность - targets обновляются при изменении Kubernetes ресурсов
+- Гибкость - поддержка всех основных Kubernetes ресурсов
+
+**Изменённые файлы**:
+- `src/core/serviceDiscovery/KubernetesSD.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+- `src/core/EmulationEngine.ts` (интеграция)
+
+#### 2. Consul Service Discovery ✅
+
+**Улучшение**: Реализован полноценный Consul Service Discovery для автоматического обнаружения сервисов.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/serviceDiscovery/ConsulSD.ts`:
+  - Интерфейсы: `ConsulSDTarget`, `ConsulSDConfig`
+  - Класс `ConsulSD` с методами:
+    - `initialize()` - инициализация с конфигурацией
+    - `discoverTargets()` - обнаружение targets из компонентов на canvas
+    - `getTargets()` - получение кэшированных targets с периодическим обновлением
+    - `updateNodes()` - обновление списка nodes при изменении canvas
+  - Автоматическое обнаружение компонентов на canvas, которые могут экспортировать метрики
+  - Фильтрация по service names через `services`
+  - Фильтрация по tags через `tags`
+  - Поддержка metadata из конфигурации компонентов
+  - Преобразование Consul мета-меток (`__meta_consul_*`) в Prometheus labels
+  - Кэширование targets с периодическим обновлением (30 секунд)
+  - Использование `ServiceDiscovery` для разрешения портов и хостов
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `consul_sd_configs` в `ScrapeConfig`
+  - Метод `initializeServiceDiscovery()` - инициализация Consul SD
+  - Обновлен `initializeTargetStatuses()` - включает targets из Consul SD
+  - Обновлен `performScraping()` - периодическое обновление targets из SD
+- ✅ Отсутствие хардкода:
+  - Все порты и хосты определяются через `ServiceDiscovery`
+  - Targets обновляются динамически при изменении компонентов
+  - Используются реальные данные из конфигурации компонентов
+  - Периодичность обновления настраивается
+
+**Механизм работы**:
+1. **Инициализация** → ConsulSD получает конфигурацию и список nodes
+2. **Discovery** → `discoverTargets()` ищет компоненты на canvas с метриками
+3. **Фильтрация** → Применяются фильтры по service names и tags
+4. **Преобразование** → Consul мета-метки преобразуются в Prometheus labels
+5. **Кэширование** → Targets кэшируются и обновляются периодически
+6. **Scraping** → Prometheus использует обнаруженные targets для scraping
+
+**Преимущества**:
+- Реалистичность - соответствует реальному поведению Prometheus
+- Автоматизация - автоматическое обнаружение targets
+- Гибкость - поддержка фильтрации по services и tags
+- Интеграция - работает с любыми компонентами на canvas
+
+**Изменённые файлы**:
+- `src/core/serviceDiscovery/ConsulSD.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+
+#### 3. File Service Discovery ✅
+
+**Улучшение**: Реализован полноценный File Service Discovery для динамического обновления targets из файлов.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/serviceDiscovery/FileSD.ts`:
+  - Интерфейсы: `FileSDTarget`, `FileSDConfig`
+  - Класс `FileSD` с методами:
+    - `initialize()` - инициализация с конфигурацией
+    - `discoverTargets()` - обнаружение targets из виртуальных файлов или компонентов на canvas
+    - `getTargets()` - получение кэшированных targets с периодическим обновлением
+    - `updateNodes()` - обновление списка nodes при изменении canvas
+  - Поддержка виртуальных файлов через `virtual_files` в конфиге
+  - Формат файлов соответствует Prometheus file_sd_configs (JSON массив с targets и labels)
+  - Периодическое обновление targets (refresh_interval, по умолчанию 5 минут)
+  - Симуляция file watcher через периодическое чтение
+  - Автоматическое обнаружение компонентов на canvas (fallback если нет virtual_files)
+  - Использование `ServiceDiscovery` для разрешения портов и хостов
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `file_sd_configs` в `ScrapeConfig`
+  - Метод `initializeServiceDiscovery()` - инициализация File SD
+  - Обновлен `initializeTargetStatuses()` - включает targets из File SD
+  - Обновлен `performScraping()` - периодическое обновление targets из SD
+- ✅ Отсутствие хардкода:
+  - Все порты и хосты определяются через `ServiceDiscovery`
+  - Targets обновляются динамически при изменении файлов или компонентов
+  - Периодичность обновления настраивается (по умолчанию 5 минут)
+
+**Механизм работы**:
+1. **Инициализация** → FileSD получает конфигурацию с virtual_files или files
+2. **Discovery** → `discoverTargets()` читает виртуальные файлы или ищет компоненты на canvas
+3. **Парсинг** → Парсит JSON формат с targets и labels
+4. **Кэширование** → Targets кэшируются и обновляются периодически
+5. **Scraping** → Prometheus использует обнаруженные targets для scraping
+
+**Преимущества**:
+- Реалистичность - соответствует реальному поведению Prometheus
+- Гибкость - поддержка виртуальных файлов и автоматическое обнаружение
+- Динамичность - targets обновляются при изменении файлов
+- Интеграция - работает с любыми компонентами на canvas
+
+**Изменённые файлы**:
+- `src/core/serviceDiscovery/FileSD.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+
+#### 4. DNS Service Discovery ✅
+
+**Улучшение**: Реализован полноценный DNS Service Discovery для обнаружения сервисов через DNS запросы.
+
+**Реализовано**:
+- ✅ Создан файл `src/core/serviceDiscovery/DNSSD.ts`:
+  - Интерфейсы: `DNSSDTarget`, `DNSSDConfig`
+  - Класс `DNSSD` с методами:
+    - `initialize()` - инициализация с конфигурацией
+    - `discoverTargets()` - обнаружение targets через DNS resolution (симуляция)
+    - `resolveSRV()` - разрешение SRV записей (`_service._protocol.name`)
+    - `resolveA()` - разрешение A/AAAA записей (IPv4/IPv6)
+    - `getTargets()` - получение кэшированных targets с периодическим обновлением
+    - `updateNodes()` - обновление списка nodes при изменении canvas
+  - Поддержка типов DNS записей: A, AAAA, SRV
+  - Симуляция DNS resolution через поиск компонентов на canvas
+  - Автоматическое сопоставление DNS имен с компонентами по hostname/label
+  - Периодическое обновление targets (refresh_interval, по умолчанию 30 секунд)
+  - Использование `ServiceDiscovery` для разрешения портов и хостов
+- ✅ Интеграция в `PrometheusEmulationEngine.ts`:
+  - Добавлена поддержка `dns_sd_configs` в `ScrapeConfig`
+  - Метод `initializeServiceDiscovery()` - инициализация DNS SD
+  - Обновлен `initializeTargetStatuses()` - включает targets из DNS SD
+  - Обновлен `performScraping()` - периодическое обновление targets из SD
+- ✅ Отсутствие хардкода:
+  - Все порты и хосты определяются через `ServiceDiscovery`
+  - Targets обновляются динамически при изменении компонентов
+  - Периодичность обновления настраивается (по умолчанию 30 секунд)
+
+**Механизм работы**:
+1. **Инициализация** → DNSSD получает конфигурацию с DNS именами и типом записей
+2. **Discovery** → `discoverTargets()` выполняет DNS resolution (симуляция через поиск компонентов)
+3. **Разрешение** → Для SRV: парсит `_service._protocol.name`, для A/AAAA: ищет по hostname
+4. **Сопоставление** → Находит компоненты на canvas, соответствующие DNS именам
+5. **Кэширование** → Targets кэшируются и обновляются периодически
+6. **Scraping** → Prometheus использует обнаруженные targets для scraping
+
+**Преимущества**:
+- Реалистичность - соответствует реальному поведению Prometheus
+- Гибкость - поддержка различных типов DNS записей
+- Автоматизация - автоматическое обнаружение targets через DNS
+- Интеграция - работает с любыми компонентами на canvas
+
+**Изменённые файлы**:
+- `src/core/serviceDiscovery/DNSSD.ts` (новый)
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+
+#### 5. Интеграция Service Discovery в PrometheusEmulationEngine ✅
+
+**Улучшение**: Service Discovery полностью интегрирован в PrometheusEmulationEngine для автоматического обновления targets.
+
+**Реализовано**:
+- ✅ Обновлен `PrometheusEmulationEngine`:
+  - Конструктор принимает `ServiceDiscovery` экземпляр
+  - Метод `initializeServiceDiscovery()` - инициализация всех SD механизмов (Kubernetes, Consul, File, DNS)
+  - Метод `updateNodes()` - обновление nodes для всех SD
+  - Метод `updateKubernetesEngine()` - обновление Kubernetes engine для Kubernetes SD
+  - Обновлен `initializeTargetStatuses()` - включает targets из всех SD механизмов
+  - Обновлен `performScraping()` - периодическое обновление targets из SD (каждые 30 секунд)
+  - Поддержка `kubernetes_sd_configs`, `consul_sd_configs`, `file_sd_configs`, `dns_sd_configs` в `ScrapeConfig`
+  - Map для хранения экземпляров всех SD: `kubernetesSDs`, `consulSDs`, `fileSDs`, `dnsSDs`
+- ✅ Обновлен `EmulationEngine`:
+  - Создание `ServiceDiscovery` экземпляра
+  - Передача `ServiceDiscovery` в `PrometheusEmulationEngine` при инициализации
+  - Обновление Prometheus engines при изменении nodes через `updateNodesAndConnections()`
+  - Обновление Prometheus engines при изменении Kubernetes engine
+  - Обновление Prometheus engines при обновлении конфигурации
+- ✅ Отсутствие хардкода:
+  - Все настройки берутся из конфигурации
+  - Динамическое обновление при изменении ресурсов
+  - Использование ServiceDiscovery для разрешения имен и портов
+
+**Механизм работы**:
+1. **Инициализация** → При создании Prometheus компонента инициализируются все SD механизмы
+2. **Discovery** → SD механизмы периодически опрашивают источники (Kubernetes API, Consul API, файлы, DNS)
+3. **Обновление targets** → Targets обновляются в `targetStatuses` каждые 30 секунд (или согласно refresh_interval)
+4. **Scraping** → Prometheus использует обновленные targets для scraping
+
+**Преимущества**:
+- Автоматизация - автоматическое обнаружение и обновление targets через все основные SD механизмы
+- Реалистичность - соответствует реальному поведению Prometheus
+- Гибкость - поддержка множественных SD механизмов одновременно (Kubernetes, Consul, File, DNS)
+- Производительность - кэширование targets для снижения нагрузки
+- Полнота - поддержка всех основных Service Discovery механизмов Prometheus
+
+**Изменённые файлы**:
+- `src/core/PrometheusEmulationEngine.ts` (расширен)
+- `src/core/EmulationEngine.ts` (интеграция)
+- `src/core/serviceDiscovery/FileSD.ts` (новый)
+- `src/core/serviceDiscovery/DNSSD.ts` (новый)
+
+---
+
 ## Версия 0.1.8q - S3 Data Lake: Создание S3EmulationEngine, интеграция с EmulationEngine, визуализация на Canvas, обновление UI конфигурации и улучшение симуляции S3 паттернов
 
 ### S3 Data Lake: Улучшение симулятивности через отдельный EmulationEngine и расширение функциональности

@@ -96,6 +96,28 @@
   - Document Versioning для optimistic concurrency control
   - Метрики в реальном времени (operations, latency, cluster health, shard states, index metrics)
 
+- **[S3 Data Lake](./data/s3-datalake.md)** - Объектное хранилище для построения data lakes
+  - Buckets для хранения объектов с уникальными именами и регионами
+  - Operations: PUT, GET, DELETE, LIST, HEAD, Multipart Upload, Restore
+  - Versioning для защиты от случайного удаления и восстановления версий
+  - Storage Classes (STANDARD, STANDARD_IA, GLACIER, DEEP_ARCHIVE, INTELLIGENT_TIERING)
+  - Lifecycle Policies для автоматических переходов между storage classes и удаления объектов
+  - Multipart Upload для загрузки больших файлов по частям
+  - Restore Operations для восстановления объектов из Glacier/Deep Archive
+  - Encryption (AES256, aws:kms) для защиты данных
+  - Метрики в реальном времени (operations, latency, storage utilization, lifecycle transitions)
+
+### Компоненты мониторинга и наблюдаемости (Observability)
+
+- **[Prometheus](./observability/prometheus.md)** - Система мониторинга и сбора метрик с временными рядами
+  - Pull-based scraping метрик с автоматическим обнаружением через Service Discovery
+  - Service Discovery: Kubernetes, Consul, File, DNS, Static configs
+  - Alerting Rules с PromQL выражениями и поддержкой `for` duration
+  - Recording Rules для предварительного вычисления метрик
+  - Remote Write для отправки метрик в remote storage (Thanos, Cortex, M3DB)
+  - PromQL для анализа метрик
+  - Метрики самого Prometheus (TSDB, config, targets, alerting)
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -294,6 +316,8 @@
 - **ClickHouse:** [Документация ClickHouse](./data/clickhouse.md)
 - **Snowflake:** [Документация Snowflake](./data/snowflake.md)
 - **Elasticsearch:** [Документация Elasticsearch](./data/elasticsearch.md)
+- **S3 Data Lake:** [Документация S3 Data Lake](./data/s3-datalake.md)
+- **Prometheus:** [Документация Prometheus](./observability/prometheus.md)
 
 ## Обновления
 
@@ -328,3 +352,6 @@
 - [Официальная документация ClickHouse](https://clickhouse.com/docs/)
 - [Официальная документация Snowflake](https://docs.snowflake.com/)
 - [Официальная документация Elasticsearch](https://www.elastic.co/guide/en/elasticsearch/reference/current/index.html)
+- [Официальная документация AWS S3](https://docs.aws.amazon.com/s3/)
+- [Официальная документация Prometheus](https://prometheus.io/docs/)
+- [Prometheus Query Language (PromQL)](https://prometheus.io/docs/prometheus/latest/querying/basics/)

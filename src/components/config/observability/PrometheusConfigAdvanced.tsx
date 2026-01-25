@@ -17,6 +17,7 @@ import { showError, showSuccess } from '@/utils/toast';
 import { PageTitle, Description } from '@/components/ui/typography';
 import { exportPrometheusConfig, exportAlertingRules, exportRecordingRules } from '@/utils/prometheusYamlExporter';
 import { migrateConfigIfNeeded, needsMigration } from '@/utils/prometheusConfigMigrator';
+import { PrometheusTargetsView } from './PrometheusTargetsView';
 
 interface PrometheusConfigProps {
   componentId: string;
@@ -443,10 +444,14 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
         <Separator />
 
         {/* Tabs */}
-        <Tabs defaultValue="scraping" className="w-full">
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="scraping" className="gap-2">
+        <Tabs defaultValue="targets" className="w-full">
+          <TabsList className="grid w-full grid-cols-7">
+            <TabsTrigger value="targets" className="gap-2">
               <Activity className="h-4 w-4" />
+              Targets
+            </TabsTrigger>
+            <TabsTrigger value="scraping" className="gap-2">
+              <Settings className="h-4 w-4" />
               Scraping
             </TabsTrigger>
             <TabsTrigger value="service-discovery" className="gap-2">
@@ -470,6 +475,11 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
               Remote Write
             </TabsTrigger>
           </TabsList>
+
+          {/* Targets Tab */}
+          <TabsContent value="targets" className="mt-4">
+            <PrometheusTargetsView componentId={componentId} />
+          </TabsContent>
 
           {/* Scraping Tab */}
           <TabsContent value="scraping" className="mt-4 space-y-4">

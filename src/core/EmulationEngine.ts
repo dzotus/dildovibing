@@ -43,6 +43,7 @@ import { PostgreSQLConnectionPool, ConnectionPoolConfig } from './postgresql/Con
 import { PostgreSQLEmulationEngine, PostgreSQLConfig } from './PostgreSQLEmulationEngine';
 import { MongoDBEmulationEngine, MongoDBConfig } from './MongoDBEmulationEngine';
 import { PrometheusEmulationEngine } from './PrometheusEmulationEngine';
+import { ServiceDiscovery } from '@/services/connection/ServiceDiscovery';
 import { GrafanaEmulationEngine } from './GrafanaEmulationEngine';
 import { LokiEmulationEngine } from './LokiEmulationEngine';
 import { JaegerEmulationEngine } from './JaegerEmulationEngine';
@@ -285,6 +286,9 @@ export class EmulationEngine {
   
   // Prometheus emulation engines per node
   private prometheusEngines: Map<string, PrometheusEmulationEngine> = new Map();
+  
+  // Service Discovery для Prometheus
+  private serviceDiscovery: ServiceDiscovery = new ServiceDiscovery();
   
   // Grafana emulation engines per node
   private grafanaEngines: Map<string, GrafanaEmulationEngine> = new Map();
@@ -690,7 +694,22 @@ export class EmulationEngine {
           this.initializeS3EmulationEngine(node);
         }
         if (node.type === 'prometheus') {
-          this.initializePrometheusEngine(node);
+          if (!this.prometheusEngines.has(node.id)) {
+            this.initializePrometheusEngine(node);
+          } else {
+            // Update config if engine already exists
+            const engine = this.prometheusEngines.get(node.id)!;
+            engine.initializeConfig(node, this.nodes);
+            
+            // Обновляем Kubernetes engine если есть
+            const kubernetesNode = this.nodes.find(n => n.type === 'kubernetes');
+            if (kubernetesNode) {
+              const kubernetesEngine = this.kubernetesEngines.get(kubernetesNode.id);
+              if (kubernetesEngine) {
+                engine.updateKubernetesEngine(kubernetesEngine);
+              }
+            }
+          }
         }
         if (node.type === 'grafana') {
           this.initializeGrafanaEngine(node);
@@ -876,6 +895,20 @@ export class EmulationEngine {
   public updateNodesAndConnections(nodes: CanvasNode[], connections: CanvasConnection[]) {
     this.nodes = nodes;
     this.connections = connections;
+    
+    // Обновляем nodes в Prometheus engines
+    for (const prometheusEngine of this.prometheusEngines.values()) {
+      prometheusEngine.updateNodes(nodes);
+      
+      // Обновляем Kubernetes engine если есть
+      const kubernetesNode = nodes.find(n => n.type === 'kubernetes');
+      if (kubernetesNode) {
+        const kubernetesEngine = this.kubernetesEngines.get(kubernetesNode.id);
+        if (kubernetesEngine) {
+          prometheusEngine.updateKubernetesEngine(kubernetesEngine);
+        }
+      }
+    }
     
     // Update metrics for new nodes
     for (const node of nodes) {
@@ -9649,8 +9682,18 @@ export class EmulationEngine {
    * Initialize Prometheus Emulation Engine for Prometheus node
    */
   private initializePrometheusEngine(node: CanvasNode): void {
-    const prometheusEngine = new PrometheusEmulationEngine();
-    prometheusEngine.initializeConfig(node);
+    const prometheusEngine = new PrometheusEmulationEngine(this.serviceDiscovery);
+    prometheusEngine.initializeConfig(node, this.nodes);
+    
+    // Обновляем Kubernetes engine если есть
+    const kubernetesNode = this.nodes.find(n => n.type === 'kubernetes');
+    if (kubernetesNode) {
+      const kubernetesEngine = this.kubernetesEngines.get(kubernetesNode.id);
+      if (kubernetesEngine) {
+        prometheusEngine.updateKubernetesEngine(kubernetesEngine);
+      }
+    }
+    
     this.prometheusEngines.set(node.id, prometheusEngine);
   }
 
@@ -9966,6 +10009,11 @@ export class EmulationEngine {
     const engine = new KubernetesEmulationEngine();
     engine.initializeConfig(node);
     this.kubernetesEngines.set(node.id, engine);
+    
+    // Обновляем все Prometheus engines с новым Kubernetes engine
+    for (const prometheusEngine of this.prometheusEngines.values()) {
+      prometheusEngine.updateKubernetesEngine(engine);
+    }
   }
 
   /**
@@ -10838,6 +10886,13 @@ export class EmulationEngine {
    */
   getMongoDBEmulationEngine(nodeId: string): MongoDBEmulationEngine | undefined {
     return this.mongodbEmulationEngines.get(nodeId);
+  }
+
+  /**
+   * Get Prometheus Emulation Engine for a node
+   */
+  getPrometheusEmulationEngine(nodeId: string): PrometheusEmulationEngine | undefined {
+    return this.prometheusEngines.get(nodeId);
   }
 
   /**
