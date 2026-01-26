@@ -1,5 +1,256 @@
 # Patch Notes
 
+## Версия 0.1.8y - WAF/API Shield: Устранение хардкода, Расширение OWASP правил, API Shield функции, Connection Rules, No Hardcode
+
+### WAF/API Shield: Реалистичная симуляция WAF с полной поддержкой API Shield функций
+
+**Критическое улучшение**: Устранен весь хардкод из WAF компонента, расширены OWASP правила с поддержкой множества паттернов атак (SQL Injection, XSS, CSRF, SSRF, XXE, Command Injection, LDAP Injection, NoSQL Injection, Template Injection), реализованы API Shield функции (Schema Validation, JWT Validation, API Key Validation, GraphQL Query Protection), улучшен Rate Limiting с поддержкой разных стратегий (fixed-window, sliding-window, token-bucket), добавлена поддержка CIDR для IP блокировки, реализованы Bot Detection и Anomaly Detection, созданы Connection Rules для автоматической настройки WAF при подключении компонентов. Все реализовано без хардкода - используются только реальные данные из сообщений и контекста системы.
+
+#### 1. Устранение хардкода ✅
+
+**Улучшение**: Убраны все функции генерации случайных данных, используются только реальные данные из сообщений.
+
+**Реализовано**:
+- ✅ В `src/core/WAFEmulationEngine.ts`:
+  - Удален метод `generateRandomIP()` - используется IP из `request.sourceIP` или `'0.0.0.0'` как fallback
+  - Удален метод `generateRandomCountry()` - используется страна из `request.country` или `undefined`
+  - Удален метод `generateRandomRequest()` - используется только реальный поток данных
+  - Метод `simulateRequests()` больше не генерирует случайные запросы
+- ✅ В `src/core/WAFRoutingEngine.ts`:
+  - Используется `sourceIP` из запроса или `'0.0.0.0'` как fallback
+  - Все данные берутся из реальных сообщений
+- ✅ Отсутствие хардкода:
+  - Все IP адреса из сообщений или метаданных соединений
+  - Все страны из сообщений (если указаны)
+  - Все пути и методы из реальных запросов
+
+#### 2. Расширение OWASP правил ✅
+
+**Улучшение**: Добавлено множество паттернов для различных типов атак на основе OWASP ModSecurity CRS.
+
+**Реализовано**:
+- ✅ В `src/core/WAFRoutingEngine.ts`:
+  - Расширены SQL Injection паттерны:
+    - UNION-based SQL injection
+    - Boolean-based blind SQL injection
+    - Time-based blind SQL injection
+    - Error-based SQL injection
+    - Second-order SQL injection
+  - Расширены XSS паттерны:
+    - Stored XSS
+    - Reflected XSS
+    - DOM-based XSS
+    - Event handler injection
+    - CSS injection
+  - Добавлены паттерны для новых типов атак:
+    - CSRF (Cross-Site Request Forgery)
+    - SSRF (Server-Side Request Forgery)
+    - XXE (XML External Entity)
+    - Command Injection
+    - LDAP Injection
+    - NoSQL Injection
+    - Template Injection
+  - Обновлен интерфейс `WAFThreat` с новыми типами угроз
+- ✅ Отсутствие хардкода:
+  - Все паттерны основаны на реальных OWASP ModSecurity CRS правилах
+  - Проверка выполняется на реальных данных из запросов
+
+#### 3. Улучшение Rate Limiting ✅
+
+**Улучшение**: Добавлена поддержка разных стратегий rate limiting.
+
+**Реализовано**:
+- ✅ В `src/core/WAFRoutingEngine.ts`:
+  - Добавлена конфигурация `rateLimitStrategy`: 'fixed-window' | 'sliding-window' | 'token-bucket'
+  - Добавлена конфигурация `rateLimitBurst` для token-bucket
+  - Реализован метод `checkFixedWindowRateLimit()` - оригинальная стратегия
+  - Реализован метод `checkSlidingWindowRateLimit()` - более точная стратегия
+  - Реализован метод `checkTokenBucketRateLimit()` - позволяет bursts
+  - Метод `checkRateLimit()` выбирает стратегию на основе конфигурации
+- ✅ Отсутствие хардкода:
+  - Все параметры из конфигурации компонента
+
+#### 4. Улучшение Geo-blocking и IP блокировки ✅
+
+**Улучшение**: Добавлена поддержка CIDR нотации для IP блокировки.
+
+**Реализовано**:
+- ✅ В `src/core/WAFRoutingEngine.ts`:
+  - Добавлена конфигурация `ipBlacklist` с поддержкой CIDR
+  - Реализован метод `isIPInList()` для проверки IP в списке (поддержка CIDR)
+  - Реализован метод `isIPInCIDR()` для проверки IP в CIDR диапазоне
+  - IP whitelist также поддерживает CIDR нотацию
+  - Проверка IP blacklist выполняется перед whitelist
+- ✅ Отсутствие хардкода:
+  - Все IP адреса и CIDR диапазоны из конфигурации
+
+#### 5. API Shield функции ✅
+
+**Улучшение**: Реализованы функции API Shield для защиты API endpoints.
+
+**Реализовано**:
+- ✅ Schema Validation:
+  - Конфигурация `schemaValidation` с полями: enabled, schemaType, schema, validateRequest, validateResponse
+  - Метод `validateSchema()` для валидации запросов по JSON Schema
+  - Базовая валидация типов, required полей, структуры
+- ✅ JWT Validation:
+  - Конфигурация `jwtValidation` с полями: enabled, secret, publicKey, algorithm, issuer, audience, requireExpiration
+  - Метод `validateJWT()` для валидации JWT токенов
+  - Проверка структуры, expiration, issuer, audience
+- ✅ API Key Validation:
+  - Конфигурация `apiKeyValidation` с полями: enabled, keys, headerName
+  - Метод `validateAPIKey()` для валидации API ключей
+  - Поддержка per-key allowed paths и rate limits
+- ✅ GraphQL Query Protection:
+  - Конфигурация `graphQLProtection` с полями: enabled, maxDepth, maxComplexity, maxAliases, blockIntrospection
+  - Метод `validateGraphQL()` для защиты GraphQL запросов
+  - Методы `calculateGraphQLDepth()` и `calculateGraphQLComplexity()` для анализа запросов
+  - Блокировка introspection запросов (опционально)
+- ✅ Интеграция в `processRequest()`:
+  - Schema Validation выполняется перед OWASP правилами
+  - JWT Validation выполняется после Schema Validation
+  - API Key Validation выполняется после JWT Validation
+  - GraphQL Protection выполняется после API Key Validation
+- ✅ Отсутствие хардкода:
+  - Все конфигурации из UI компонента
+  - Все данные из реальных запросов
+
+#### 6. Реальные функции: Bot Detection и Anomaly Detection ✅
+
+**Улучшение**: Реализованы Bot Detection и Anomaly Detection для обнаружения подозрительной активности.
+
+**Реализовано**:
+- ✅ Bot Detection:
+  - Конфигурация `botDetection` с полями: enabled, methods, blockKnownBots, challengeSuspicious
+  - Метод `detectBot()` для обнаружения ботов
+  - User-Agent based detection (известные боты, подозрительные user agents)
+  - Behavioral detection (отсутствие cookies, подозрительные паттерны)
+  - Поддержка challenge для подозрительных запросов
+- ✅ Anomaly Detection:
+  - Конфигурация `anomalyDetection` с полями: enabled, threshold, windowSize
+  - Метод `detectAnomaly()` для обнаружения аномалий
+  - Отслеживание истории запросов по IP
+  - Статистическое обнаружение аномалий (порог отклонения от среднего)
+  - Использование moving average для анализа
+- ✅ Интеграция в `processRequest()`:
+  - Bot Detection выполняется перед rate limiting
+  - Anomaly Detection выполняется перед rate limiting
+- ✅ Отсутствие хардкода:
+  - Все параметры из конфигурации
+  - Анализ основан на реальных данных запросов
+
+#### 7. Connection Rules для WAF ✅
+
+**Улучшение**: Созданы Connection Rules для автоматической настройки WAF при подключении компонентов.
+
+**Реализовано**:
+- ✅ В `src/services/connection/rules/wafRules.ts`:
+  - Функция `createWAFRule(discovery: ServiceDiscovery): ConnectionRule`
+  - `updateSourceConfig` для обновления конфига источника:
+    - Для API Gateway: настройка WAF URL
+    - Для Load Balancer: настройка WAF перед backend
+    - Для CDN: настройка WAF для защиты origin
+  - `updateTargetConfig` для настройки WAF:
+    - Для REST API, GraphQL, gRPC: автоматическое включение OWASP правил и rate limiting
+    - Для GraphQL API: автоматическое включение GraphQL protection
+    - Для API Gateway: автоматическое создание правил для защиты endpoints
+    - Для Backend сервисов: базовая защита (OWASP, DDoS protection)
+  - `extractMetadata` для извлечения метаданных подключения
+  - `validateConnection` для валидации соединений
+- ✅ Зарегистрировано правило в `src/services/connection/rules/index.ts`
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонентов
+  - Автоматическая настройка основана на типах компонентов
+
+#### 8. Улучшение Challenge/CAPTCHA ✅
+
+**Улучшение**: Улучшена поддержка challenge action в правилах.
+
+**Реализовано**:
+- ✅ В `src/core/WAFRoutingEngine.ts`:
+  - Поддержка `action: 'challenge'` в правилах
+  - Challenge возвращается как отдельный тип ответа
+  - Bot Detection может выдавать challenge для подозрительных запросов
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Обработка challenge action в WAF handler
+  - Challenge устанавливает статус 'pending' для сообщения
+- ✅ Отсутствие хардкода:
+  - Challenge настраивается через правила и конфигурацию
+
+#### 9. Улучшение UI - Добавление вкладок для новых функций ✅
+
+**Улучшение**: Добавлены вкладки в UI для всех новых функций WAF/API Shield.
+
+**Реализовано**:
+- ✅ В `src/components/config/security/WAFConfigAdvanced.tsx`:
+  - Добавлена вкладка "Schema Validation" с полной конфигурацией:
+    - Включение/выключение валидации
+    - Выбор типа схемы (JSON Schema, OpenAPI)
+    - Редактор схемы (Textarea)
+    - Настройки валидации запросов и ответов
+  - Добавлена вкладка "JWT Validation" с полной конфигурацией:
+    - Включение/выключение валидации
+    - Выбор алгоритма (HS256, RS256, ES256)
+    - Поля для secret/publicKey в зависимости от алгоритма
+    - Настройки issuer, audience, requireExpiration
+  - Добавлена вкладка "API Keys" с управлением ключами:
+    - Список API ключей с возможностью добавления/удаления
+    - Настройка allowed paths для каждого ключа
+    - Настройка per-key rate limits
+    - Настройка header name
+  - Добавлена вкладка "GraphQL Protection" с полной конфигурацией:
+    - Включение/выключение защиты
+    - Настройка maxDepth, maxComplexity, maxAliases
+    - Опция блокировки introspection запросов
+  - Добавлена вкладка "Bot Detection" с полной конфигурацией:
+    - Включение/выключение обнаружения
+    - Выбор методов обнаружения (user-agent, behavioral, fingerprint)
+    - Опции blockKnownBots и challengeSuspicious
+  - Добавлена вкладка "Anomaly Detection" с полной конфигурацией:
+    - Включение/выключение обнаружения
+    - Настройка threshold (множитель)
+    - Настройка windowSize (секунды)
+  - Улучшена вкладка "Rate Limiting":
+    - Добавлен выбор стратегии (fixed-window, sliding-window, token-bucket)
+    - Добавлена настройка burst size для token-bucket
+  - Улучшена вкладка "Settings":
+    - Добавлена поддержка IP Blacklist с CIDR нотацией
+    - Улучшена поддержка IP Whitelist
+  - Добавлен экспорт логов угроз (Этап 8.3):
+    - Кнопки экспорта в JSON и CSV форматах в вкладке Threats
+    - Функции `exportThreatsToJSON()` и `exportThreatsToCSV()`
+    - Экспорт отфильтрованных угроз с полной информацией
+- ✅ Отсутствие хардкода:
+  - Все значения из конфигурации компонента
+  - Все изменения сохраняются в конфиг и применяются к WAF engine
+
+#### 10. Улучшение Utilization расчета ✅
+
+**Улучшение**: Utilization теперь учитывает все активные функции WAF для более точного расчета нагрузки.
+
+**Реализовано**:
+- ✅ В `src/core/EmulationEngine.ts` (метод `simulateWAF`):
+  - Улучшен расчет utilization с учетом всех функций:
+    - Rules factor (0.25 max) - количество активных правил
+    - RPS factor (0.25 max) - скорость запросов
+    - OWASP factor (0.12) - если включены OWASP правила
+    - Rate Limit factor (0.08) - если включен rate limiting
+    - Geo Block factor (0.04) - если включен geo-blocking
+    - DDoS factor (0.05) - если включена DDoS защита
+    - Schema Validation factor (0.06) - если включена валидация схем
+    - JWT Validation factor (0.05) - если включена JWT валидация
+    - API Key Validation factor (0.04) - если включена валидация API ключей
+    - GraphQL Protection factor (0.05) - если включена GraphQL защита
+    - Bot Detection factor (0.04) - если включено обнаружение ботов
+    - Anomaly Detection factor (0.05) - если включено обнаружение аномалий
+  - Utilization = 0.1 (базовая) + сумма всех активных факторов (максимум 0.95)
+  - Более точный расчет нагрузки на основе реальной конфигурации
+- ✅ Отсутствие хардкода:
+  - Все факторы рассчитываются на основе конфигурации компонента
+  - Utilization отражает реальную нагрузку от активных функций
+
+---
+
 ## Версия 0.1.8x - Keycloak: OAuth2/OIDC Flows, Connection Rules, Client Scopes, Protocol Mappers, Groups/Roles, No Hardcode
 
 ### Keycloak: Реалистичная симуляция IAM системы с полной поддержкой OAuth2/OIDC

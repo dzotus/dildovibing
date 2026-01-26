@@ -220,6 +220,22 @@
   - Connection Rules для автоматической настройки конфигов при подключении
   - Полный набор метрик производительности и использования
 
+- **[WAF / API Shield](./security/waf-api-shield.md)** - Комплексное решение для защиты веб-приложений и API
+  - OWASP Rules для защиты от OWASP Top 10 атак (SQL Injection, XSS, CSRF, SSRF, XXE, Path Traversal, RCE, Command Injection, LDAP Injection, NoSQL Injection, Template Injection)
+  - Rate Limiting с поддержкой стратегий (fixed-window, sliding-window, token-bucket)
+  - Geo-blocking для блокировки запросов по странам
+  - IP Whitelist/Blacklist с поддержкой CIDR
+  - DDoS Protection для защиты от распределенных атак
+  - Schema Validation для валидации запросов/ответов по JSON Schema или OpenAPI
+  - JWT Validation для валидации JWT токенов (HS256, RS256, ES256)
+  - API Key Validation с поддержкой per-key rate limits
+  - GraphQL Protection для защиты GraphQL API (depth, complexity, aliases, introspection blocking)
+  - Bot Detection для обнаружения ботов и автоматизированных запросов
+  - Anomaly Detection для статистического обнаружения аномалий в трафике
+  - Custom Rules для создания пользовательских правил с условиями и действиями
+  - Connection Rules для автоматической настройки конфигов при подключении компонентов
+  - Полный набор метрик производительности и безопасности
+
 ### Протоколы и API (Protocols & APIs)
 
 В системе симуляции протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) реализованы как **атрибуты соединений**, а не как отдельные узлы на канвасе. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
@@ -395,6 +411,7 @@
 - **OpenTelemetry Collector:** [Документация OpenTelemetry Collector](./observability/opentelemetry-collector.md)
 - **PagerDuty:** [Документация PagerDuty](./observability/pagerduty.md)
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
+- **WAF / API Shield:** [Документация WAF / API Shield](./security/waf-api-shield.md)
 
 ## Обновления
 

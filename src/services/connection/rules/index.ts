@@ -16,6 +16,7 @@ import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRu
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
 import { createKeycloakRule } from './keycloakRules';
+import { createWAFRule } from './wafRules';
 
 /**
  * Инициализировать все правила подключения
@@ -54,5 +55,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     
     // Security - Keycloak
     createKeycloakRule(discovery),
+    // Security - WAF
+    createWAFRule(discovery),
   ];
 }

@@ -10,10 +10,13 @@ export interface WAFEmulationConfig {
   owaspRuleset?: string;
   enableRateLimiting?: boolean;
   rateLimitPerMinute?: number;
+  rateLimitStrategy?: 'fixed-window' | 'sliding-window' | 'token-bucket';
+  rateLimitBurst?: number;
   enableGeoBlocking?: boolean;
   blockedCountries?: string[];
   enableIPWhitelist?: boolean;
   whitelistedIPs?: string[];
+  ipBlacklist?: string[];
   enableDDoSProtection?: boolean;
   ddosThreshold?: number;
   rules?: Array<{
@@ -29,6 +32,53 @@ export interface WAFEmulationConfig {
       value: string;
     }>;
   }>;
+  // API Shield functions
+  schemaValidation?: {
+    enabled: boolean;
+    schemaType: 'json-schema' | 'openapi';
+    schema: string;
+    validateRequest: boolean;
+    validateResponse: boolean;
+  };
+  jwtValidation?: {
+    enabled: boolean;
+    secret?: string;
+    publicKey?: string;
+    algorithm?: 'HS256' | 'RS256' | 'ES256';
+    issuer?: string;
+    audience?: string[];
+    requireExpiration?: boolean;
+  };
+  apiKeyValidation?: {
+    enabled: boolean;
+    keys: Array<{
+      id: string;
+      key: string;
+      enabled: boolean;
+      allowedPaths?: string[];
+      rateLimit?: number;
+    }>;
+    headerName?: string;
+  };
+  graphQLProtection?: {
+    enabled: boolean;
+    maxDepth?: number;
+    maxComplexity?: number;
+    maxAliases?: number;
+    blockIntrospection?: boolean;
+  };
+  // Real functions
+  botDetection?: {
+    enabled: boolean;
+    methods: Array<'user-agent' | 'behavioral' | 'fingerprint'>;
+    blockKnownBots?: boolean;
+    challengeSuspicious?: boolean;
+  };
+  anomalyDetection?: {
+    enabled: boolean;
+    threshold?: number;
+    windowSize?: number;
+  };
 }
 
 /**
@@ -109,13 +159,24 @@ export class WAFEmulationEngine {
       owaspRuleset: raw.owaspRuleset || '3.3',
       enableRateLimiting: raw.enableRateLimiting ?? true,
       rateLimitPerMinute: raw.rateLimitPerMinute || 100,
+      rateLimitStrategy: raw.rateLimitStrategy || 'fixed-window',
+      rateLimitBurst: raw.rateLimitBurst || (raw.rateLimitPerMinute || 100),
       enableGeoBlocking: raw.enableGeoBlocking ?? false,
       blockedCountries: Array.isArray(raw.blockedCountries) ? raw.blockedCountries : [],
       enableIPWhitelist: raw.enableIPWhitelist ?? false,
       whitelistedIPs: Array.isArray(raw.whitelistedIPs) ? raw.whitelistedIPs : [],
+      ipBlacklist: Array.isArray(raw.ipBlacklist) ? raw.ipBlacklist : [],
       enableDDoSProtection: raw.enableDDoSProtection ?? true,
       ddosThreshold: raw.ddosThreshold || 1000,
       rules: Array.isArray(raw.rules) ? raw.rules : [],
+      // API Shield functions
+      schemaValidation: raw.schemaValidation,
+      jwtValidation: raw.jwtValidation,
+      apiKeyValidation: raw.apiKeyValidation,
+      graphQLProtection: raw.graphQLProtection,
+      // Real functions
+      botDetection: raw.botDetection,
+      anomalyDetection: raw.anomalyDetection,
     };
 
     // Инициализируем routing engine
@@ -147,14 +208,15 @@ export class WAFEmulationEngine {
     const startTime = performance.now();
 
     // Создаем WAF request
+    // Используем реальные данные из сообщения, без генерации случайных значений
     const wafRequest = {
       path: request.path || '/',
       method: request.method || 'GET',
       headers: request.headers,
       query: request.query,
       body: request.body,
-      sourceIP: request.sourceIP || this.generateRandomIP(),
-      country: request.country || this.generateRandomCountry(),
+      sourceIP: request.sourceIP || '0.0.0.0', // Fallback вместо генерации случайного IP
+      country: request.country, // undefined если не указано - не генерируем случайную страну
       userAgent: request.userAgent || 'Mozilla/5.0',
       timestamp: Date.now(),
     };
@@ -206,103 +268,16 @@ export class WAFEmulationEngine {
 
   /**
    * Симуляция обработки запросов (для расчета метрик без реальных запросов)
+   * УДАЛЕНО: generateRandomRequest - используем только реальные запросы из потока данных
+   * Если нет реальных запросов, метрики будут рассчитываться на основе нагрузки из upstream компонентов
    */
   public simulateRequests(requestRate: number): void {
-    const now = Date.now();
-    const deltaTime = now - this.lastSimulationTime;
-    this.lastSimulationTime = now;
-
-    if (deltaTime <= 0 || requestRate <= 0) {
-      return;
-    }
-
-    // Количество запросов за прошедшее время
-    const requestsCount = Math.floor((requestRate * deltaTime) / 1000);
-
-    if (requestsCount === 0) {
-      return;
-    }
-
-    // Генерируем случайные запросы
-    for (let i = 0; i < requestsCount; i++) {
-      const request = this.generateRandomRequest();
-      this.processRequest(request);
-    }
-
-    // Обновляем метрики из stats
+    // Сохраняем скорость запросов для расчета метрик
+    this.simulatedRequestRate = requestRate;
+    
+    // Не генерируем случайные запросы - используем только реальные из потока данных
+    // Метрики будут рассчитываться на основе реальной нагрузки
     this.updateMetricsFromStats();
-  }
-
-  /**
-   * Генерация случайного запроса для симуляции
-   */
-  private generateRandomRequest(): {
-    path: string;
-    method: string;
-    headers?: Record<string, string>;
-    body?: unknown;
-    sourceIP?: string;
-    country?: string;
-    userAgent?: string;
-  } {
-    const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
-    const paths = ['/api/users', '/api/products', '/api/orders', '/api/auth', '/api/data'];
-    const countries = ['US', 'GB', 'DE', 'FR', 'CN', 'RU', 'JP'];
-    const userAgents = [
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-    ];
-
-    // Иногда генерируем подозрительные запросы (для симуляции угроз)
-    const isSuspicious = Math.random() < 0.05; // 5% подозрительных запросов
-
-    let path = paths[Math.floor(Math.random() * paths.length)];
-    let body: unknown = null;
-
-    if (isSuspicious) {
-      // SQL injection attempt
-      if (Math.random() < 0.5) {
-        path += "?id=1' OR '1'='1";
-        body = { query: "SELECT * FROM users WHERE id = '1' OR '1'='1'" };
-      } else {
-        // XSS attempt
-        body = { content: '<script>alert("XSS")</script>' };
-      }
-    } else {
-      // Нормальный запрос
-      if (Math.random() < 0.3) {
-        body = { data: Math.random().toString(36).substring(7) };
-      }
-    }
-
-    return {
-      path,
-      method: methods[Math.floor(Math.random() * methods.length)],
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
-      },
-      body,
-      sourceIP: this.generateRandomIP(),
-      country: countries[Math.floor(Math.random() * countries.length)],
-      userAgent: userAgents[Math.floor(Math.random() * userAgents.length)],
-    };
-  }
-
-  /**
-   * Генерация случайного IP адреса
-   */
-  private generateRandomIP(): string {
-    return `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
-  }
-
-  /**
-   * Генерация случайной страны
-   */
-  private generateRandomCountry(): string {
-    const countries = ['US', 'GB', 'DE', 'FR', 'CN', 'RU', 'JP', 'BR', 'IN', 'AU'];
-    return countries[Math.floor(Math.random() * countries.length)];
   }
 
   /**

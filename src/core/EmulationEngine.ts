@@ -7188,13 +7188,39 @@ export class EmulationEngine {
     }
 
     // Utilization — функция от количества правил, RPS и сложности проверок
-    const rulesFactor = Math.min(0.4, (wafMetrics.activeRules || 0) / 50);
-    const rpsFactor = Math.min(0.3, load.requestsPerSecond / 1000);
-    const owaspFactor = wafConfig?.enableOWASP ? 0.15 : 0;
-    const rateLimitFactor = wafConfig?.enableRateLimiting ? 0.1 : 0;
-    const geoBlockFactor = wafConfig?.enableGeoBlocking ? 0.05 : 0;
+    // Учитываем все активные функции WAF для более точного расчета
+    const rulesFactor = Math.min(0.25, (wafMetrics.activeRules || 0) / 50);
+    const rpsFactor = Math.min(0.25, load.requestsPerSecond / 1000);
+    const owaspFactor = wafConfig?.enableOWASP ? 0.12 : 0;
+    const rateLimitFactor = wafConfig?.enableRateLimiting ? 0.08 : 0;
+    const geoBlockFactor = wafConfig?.enableGeoBlocking ? 0.04 : 0;
+    const ddosFactor = wafConfig?.enableDDoSProtection ? 0.05 : 0;
+    
+    // API Shield функции (более ресурсоемкие)
+    const schemaValidationFactor = wafConfig?.schemaValidation?.enabled ? 0.06 : 0;
+    const jwtValidationFactor = wafConfig?.jwtValidation?.enabled ? 0.05 : 0;
+    const apiKeyValidationFactor = wafConfig?.apiKeyValidation?.enabled ? 0.04 : 0;
+    const graphQLProtectionFactor = wafConfig?.graphQLProtection?.enabled ? 0.05 : 0;
+    
+    // Реальные функции
+    const botDetectionFactor = wafConfig?.botDetection?.enabled ? 0.04 : 0;
+    const anomalyDetectionFactor = wafConfig?.anomalyDetection?.enabled ? 0.05 : 0;
 
-    metrics.utilization = Math.min(0.95, 0.1 + rulesFactor + rpsFactor + owaspFactor + rateLimitFactor + geoBlockFactor);
+    metrics.utilization = Math.min(0.95, 
+      0.1 + 
+      rulesFactor + 
+      rpsFactor + 
+      owaspFactor + 
+      rateLimitFactor + 
+      geoBlockFactor + 
+      ddosFactor +
+      schemaValidationFactor +
+      jwtValidationFactor +
+      apiKeyValidationFactor +
+      graphQLProtectionFactor +
+      botDetectionFactor +
+      anomalyDetectionFactor
+    );
 
     metrics.customMetrics = {
       ...(metrics.customMetrics || {}),
