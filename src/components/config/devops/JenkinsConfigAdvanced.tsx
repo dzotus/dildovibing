@@ -79,6 +79,22 @@ interface Pipeline {
     enabled: boolean;
     config?: any;
   }>;
+  // New fields for dynamic configuration
+  scmConfig?: {
+    type: 'git' | 'svn' | 'mercurial';
+    url: string;
+    credentials?: string;
+    branch?: string;
+  };
+  workspacePath?: string;
+  buildTool?: 'maven' | 'gradle' | 'npm' | 'make' | 'custom';
+  buildCommand?: string;
+  stages?: Array<{
+    name: string;
+    type: 'sequential' | 'parallel';
+    steps?: string[];
+  }>;
+  artifactPatterns?: string[];
 }
 
 interface JenkinsNodeConfig {
@@ -623,7 +639,10 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
         }
         // Обновляем конфигурацию pipeline в эмуляции для triggers, parameters, etc.
         if (updates.triggers !== undefined || updates.parameters !== undefined || 
-            updates.environmentVariables !== undefined || updates.postBuildActions !== undefined) {
+            updates.environmentVariables !== undefined || updates.postBuildActions !== undefined ||
+            updates.scmConfig !== undefined || updates.buildTool !== undefined || 
+            updates.buildCommand !== undefined || updates.stages !== undefined || 
+            updates.artifactPatterns !== undefined || updates.workspacePath !== undefined) {
           const pipeline = updatedPipelines.find(p => p.id === pipelineId);
           if (pipeline) {
             jenkinsEngine.updatePipelineConfig(pipelineId, {
@@ -631,6 +650,12 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
               parameters: pipeline.parameters || [],
               environmentVariables: pipeline.environmentVariables || {},
               postBuildActions: pipeline.postBuildActions || [],
+              scmConfig: pipeline.scmConfig,
+              buildTool: pipeline.buildTool,
+              buildCommand: pipeline.buildCommand,
+              stages: pipeline.stages,
+              artifactPatterns: pipeline.artifactPatterns,
+              workspacePath: pipeline.workspacePath,
             });
           }
         }
@@ -1716,8 +1741,24 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
         
         {/* Edit Pipeline Dialog */}
         {editingPipeline && (() => {
-          const pipeline = pipelines.find(p => p.id === editingPipeline);
+          let pipeline = pipelines.find(p => p.id === editingPipeline);
           if (!pipeline) return null;
+          
+          // Получаем полную конфигурацию из эмуляции, если доступна
+          if (jenkinsEngine) {
+            const pipelineConfig = jenkinsEngine.getPipelineConfig(editingPipeline);
+            if (pipelineConfig) {
+              pipeline = {
+                ...pipeline,
+                scmConfig: pipelineConfig.scmConfig,
+                buildTool: pipelineConfig.buildTool,
+                buildCommand: pipelineConfig.buildCommand,
+                stages: pipelineConfig.stages,
+                artifactPatterns: pipelineConfig.artifactPatterns,
+                workspacePath: pipelineConfig.workspacePath,
+              };
+            }
+          }
           
           return (
             <Dialog open={!!editingPipeline} onOpenChange={(open) => !open && setEditingPipeline(null)}>
@@ -1729,8 +1770,9 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
                   </DialogDescription>
                 </DialogHeader>
                 <Tabs defaultValue="basic" className="w-full">
-                  <TabsList className="grid w-full grid-cols-5">
+                  <TabsList className="grid w-full grid-cols-6">
                     <TabsTrigger value="basic">Basic</TabsTrigger>
+                    <TabsTrigger value="build">Build Config</TabsTrigger>
                     <TabsTrigger value="triggers">Triggers</TabsTrigger>
                     <TabsTrigger value="parameters">Parameters</TabsTrigger>
                     <TabsTrigger value="environment">Environment</TabsTrigger>
@@ -1799,6 +1841,271 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
                           {pipeline.lastBuild === 0 
                             ? 'Pipeline has never been built. Status will be determined after first build.'
                             : `Status is determined by the last build (#${pipeline.lastBuild}).`}
+                        </p>
+                      </div>
+                    </div>
+                  </TabsContent>
+                  
+                  <TabsContent value="build" className="space-y-4 py-4">
+                    {/* SCM Configuration */}
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">SCM Configuration</h4>
+                        <p className="text-xs text-muted-foreground mb-4">Configure source control management</p>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <Label>SCM Type</Label>
+                          <Select
+                            value={pipeline.scmConfig?.type || 'git'}
+                            onValueChange={(value: 'git' | 'svn' | 'mercurial') => {
+                              savePipeline(pipeline.id, {
+                                scmConfig: {
+                                  ...(pipeline.scmConfig || {}),
+                                  type: value,
+                                  url: pipeline.scmConfig?.url || '',
+                                },
+                              });
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="git">Git</SelectItem>
+                              <SelectItem value="svn">Subversion (SVN)</SelectItem>
+                              <SelectItem value="mercurial">Mercurial</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Repository URL *</Label>
+                          <Input
+                            placeholder="https://github.com/example/repo.git"
+                            value={pipeline.scmConfig?.url || ''}
+                            onChange={(e) => {
+                              const url = e.target.value;
+                              savePipeline(pipeline.id, {
+                                scmConfig: {
+                                  ...(pipeline.scmConfig || { type: 'git' }),
+                                  url: url,
+                                },
+                              });
+                            }}
+                            onBlur={(e) => {
+                              const url = e.target.value.trim();
+                              if (url && !/^(https?|git|ssh):\/\//.test(url)) {
+                                toast({
+                                  title: "Invalid URL",
+                                  description: "Please enter a valid repository URL",
+                                  variant: "destructive",
+                                });
+                              }
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">Repository URL for source code</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Branch</Label>
+                          <Input
+                            placeholder="main"
+                            value={pipeline.scmConfig?.branch || pipeline.branch || 'main'}
+                            onChange={(e) => {
+                              savePipeline(pipeline.id, {
+                                scmConfig: {
+                                  ...(pipeline.scmConfig || { type: 'git', url: pipeline.scmConfig?.url || '' }),
+                                  branch: e.target.value,
+                                },
+                              });
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Credentials (optional)</Label>
+                          <Input
+                            placeholder="credentials-id"
+                            value={pipeline.scmConfig?.credentials || ''}
+                            onChange={(e) => {
+                              savePipeline(pipeline.id, {
+                                scmConfig: {
+                                  ...(pipeline.scmConfig || { type: 'git', url: pipeline.scmConfig?.url || '' }),
+                                  credentials: e.target.value || undefined,
+                                },
+                              });
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">Jenkins credentials ID for authentication</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <Separator />
+                    
+                    {/* Build Tool Configuration */}
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Build Tool</h4>
+                        <p className="text-xs text-muted-foreground mb-4">Select build tool and configure build commands</p>
+                      </div>
+                      <div className="space-y-3">
+                        <div className="space-y-2">
+                          <Label>Build Tool</Label>
+                          <Select
+                            value={pipeline.buildTool || 'gradle'}
+                            onValueChange={(value: 'maven' | 'gradle' | 'npm' | 'make' | 'custom') => {
+                              savePipeline(pipeline.id, { buildTool: value });
+                            }}
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="maven">Maven</SelectItem>
+                              <SelectItem value="gradle">Gradle</SelectItem>
+                              <SelectItem value="npm">npm/yarn</SelectItem>
+                              <SelectItem value="make">Make</SelectItem>
+                              <SelectItem value="custom">Custom</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {(pipeline.buildTool === 'custom' || !pipeline.buildTool) && (
+                          <div className="space-y-2">
+                            <Label>Custom Build Command</Label>
+                            <Input
+                              placeholder="./build.sh"
+                              value={pipeline.buildCommand || ''}
+                              onChange={(e) => {
+                                savePipeline(pipeline.id, { buildCommand: e.target.value });
+                              }}
+                            />
+                            <p className="text-xs text-muted-foreground">Custom command to execute for building</p>
+                          </div>
+                        )}
+                        <div className="space-y-2">
+                          <Label>Workspace Path (optional)</Label>
+                          <Input
+                            placeholder={"/var/jenkins_home/workspace/${JOB_NAME}"}
+                            value={pipeline.workspacePath || ''}
+                            onChange={(e) => {
+                              savePipeline(pipeline.id, { workspacePath: e.target.value || undefined });
+                            }}
+                          />
+                          <p className="text-xs text-muted-foreground">Custom workspace path (supports {'${JOB_NAME}'}, {'${WORKSPACE}'} variables)</p>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <Separator />
+                    
+                    {/* Stages Configuration */}
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="text-sm font-medium mb-2">Pipeline Stages</h4>
+                          <p className="text-xs text-muted-foreground">Configure build stages (leave empty to use defaults)</p>
+                        </div>
+                        <Button size="sm" variant="outline" onClick={() => {
+                          const newStages = [...(pipeline.stages || []), { name: 'New Stage', type: 'sequential' as const }];
+                          savePipeline(pipeline.id, { stages: newStages });
+                        }}>
+                          <Plus className="h-4 w-4 mr-1" />
+                          Add Stage
+                        </Button>
+                      </div>
+                      {(pipeline.stages || []).length > 0 ? (
+                        <div className="space-y-3">
+                          {pipeline.stages!.map((stage, idx) => (
+                            <Card key={idx} className="p-4">
+                              <div className="space-y-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-2">
+                                    <Label>Stage Name</Label>
+                                    <Input
+                                      value={stage.name}
+                                      onChange={(e) => {
+                                        const newStages = [...(pipeline.stages || [])];
+                                        newStages[idx] = { ...stage, name: e.target.value };
+                                        savePipeline(pipeline.id, { stages: newStages });
+                                      }}
+                                    />
+                                  </div>
+                                  <div className="space-y-2">
+                                    <Label>Type</Label>
+                                    <Select
+                                      value={stage.type}
+                                      onValueChange={(value: 'sequential' | 'parallel') => {
+                                        const newStages = [...(pipeline.stages || [])];
+                                        newStages[idx] = { ...stage, type: value };
+                                        savePipeline(pipeline.id, { stages: newStages });
+                                      }}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="sequential">Sequential</SelectItem>
+                                        <SelectItem value="parallel">Parallel</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+                                <div className="space-y-2">
+                                  <Label>Steps (one per line, optional)</Label>
+                                  <Textarea
+                                    rows={3}
+                                    value={stage.steps?.join('\n') || ''}
+                                    onChange={(e) => {
+                                      const steps = e.target.value.split('\n').map(s => s.trim()).filter(s => s);
+                                      const newStages = [...(pipeline.stages || [])];
+                                      newStages[idx] = { ...stage, steps: steps.length > 0 ? steps : undefined };
+                                      savePipeline(pipeline.id, { stages: newStages });
+                                    }}
+                                    placeholder="echo 'Building...'&#10;npm run build"
+                                  />
+                                </div>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    const newStages = (pipeline.stages || []).filter((_, i) => i !== idx);
+                                    savePipeline(pipeline.id, { stages: newStages.length > 0 ? newStages : undefined });
+                                  }}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-1" />
+                                  Remove Stage
+                                </Button>
+                              </div>
+                            </Card>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-8 text-muted-foreground text-sm border border-dashed rounded-md">
+                          No custom stages configured. Default stages will be used based on build tool.
+                        </div>
+                      )}
+                    </div>
+                    
+                    <Separator />
+                    
+                    {/* Artifact Patterns */}
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="text-sm font-medium mb-2">Artifact Patterns</h4>
+                        <p className="text-xs text-muted-foreground mb-4">Configure patterns for artifact archiving (leave empty to use defaults)</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Artifact Patterns (one per line)</Label>
+                        <Textarea
+                          rows={4}
+                          value={(pipeline.artifactPatterns || []).join('\n')}
+                          onChange={(e) => {
+                            const patterns = e.target.value.split('\n').map(p => p.trim()).filter(p => p);
+                            savePipeline(pipeline.id, { artifactPatterns: patterns.length > 0 ? patterns : undefined });
+                          }}
+                          placeholder="**/*.jar&#10;target/*.war&#10;dist/**/*"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Examples: **/*.jar, target/*.war, dist/**/*. Use wildcards (*) for pattern matching.
                         </p>
                       </div>
                     </div>
@@ -2161,17 +2468,40 @@ export function JenkinsConfigAdvanced({ componentId }: JenkinsConfigProps) {
                           </div>
                           {action.type === 'email' && (
                             <div className="space-y-2">
-                              <Label>Recipients (comma-separated)</Label>
+                              <Label>Recipients (comma-separated) *</Label>
                               <Input
                                 placeholder="dev@example.com, team@example.com"
                                 defaultValue={action.config?.recipients?.join(', ')}
                                 onBlur={(e) => {
                                   const recipients = e.target.value.split(',').map(r => r.trim()).filter(r => r);
+                                  // Validate email addresses
+                                  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                                  const invalidEmails = recipients.filter(r => !emailRegex.test(r));
+                                  
+                                  if (invalidEmails.length > 0) {
+                                    toast({
+                                      title: "Invalid email addresses",
+                                      description: `Invalid emails: ${invalidEmails.join(', ')}`,
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  
+                                  if (recipients.length === 0) {
+                                    toast({
+                                      title: "No recipients",
+                                      description: "At least one email recipient is required",
+                                      variant: "destructive",
+                                    });
+                                    return;
+                                  }
+                                  
                                   const newActions = [...(pipeline.postBuildActions || [])];
                                   newActions[idx] = { ...action, config: { ...action.config, recipients } };
                                   savePipeline(pipeline.id, { postBuildActions: newActions });
                                 }}
                               />
+                              <p className="text-xs text-muted-foreground">Comma-separated list of email addresses</p>
                             </div>
                           )}
                           {action.type === 'archive' && (

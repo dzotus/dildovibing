@@ -1,5 +1,266 @@
 # Patch Notes
 
+## Версия 0.1.8zc - Jenkins: Устранение хардкода, Динамические параметры, Полный парсер cron, Поддержка разных build tools, Конфигурируемые артефакты, Расширяемые плагины
+
+### Jenkins: Полная реализация симуляции с устранением хардкода, динамическими параметрами, полным парсером cron, поддержкой разных build tools, конфигурируемыми артефактами и расширяемыми плагинами
+
+**Критическое улучшение**: Устранен весь хардкод из Jenkins - используются только реальные данные из конфигурации. Реализованы динамические параметры pipeline (SCM конфигурация, workspace пути, build tools, stages, паттерны артефактов). Создан полный парсер cron выражений с поддержкой Jenkins-специфичных расширений. Добавлена поддержка разных build tools (Maven, Gradle, npm, make, custom) с реалистичными логами для каждого. Реализованы конфигурируемые паттерны артефактов с реалистичными размерами. Расширена система плагинов с метаданными (50+ плагинов) и поддержкой версий. Все реализовано без хардкода - используются только реальные данные из конфигурации.
+
+#### 1. Расширение конфигурации pipeline и динамические параметры ✅
+
+**Улучшение**: Расширена конфигурация pipeline для поддержки динамических параметров вместо хардкода.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Расширен интерфейс `JenkinsEmulationConfig` с новыми полями:
+    - `scmConfig?: { type: 'git' | 'svn' | 'mercurial'; url: string; credentials?: string; branch?: string }`
+    - `workspacePath?: string` (дефолт: `/var/jenkins_home/workspace/${JOB_NAME}`)
+    - `buildTool?: 'maven' | 'gradle' | 'npm' | 'make' | 'custom'`
+    - `buildCommand?: string` (кастомная команда)
+    - `stages?: Array<{ name: string; type: 'sequential' | 'parallel'; steps?: string[] }>`
+    - `artifactPatterns?: string[]` (паттерны для архивирования)
+    - `defaultWorkspacePath?: string` (глобальная настройка workspace)
+  - Обновлен `initializePipelines()` для чтения и сохранения новых полей
+  - Обновлен `updateConfig()` для синхронизации новых полей при обновлении конфигурации
+- ✅ Реализована генерация реалистичных commit hash (SHA-1 формат, 40 символов)
+  - Метод `generateCommitHash()` генерирует валидные SHA-1 хеши
+  - Commit hash сохраняется в build для консистентности
+
+**Преимущества**:
+- Нет хардкода - все значения из конфига
+- Гибкая конфигурация pipeline
+- Поддержка разных SCM и build tools
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Динамические SCM репозитории ✅
+
+**Улучшение**: Реализована поддержка разных типов SCM (Git, SVN, Mercurial) с генерацией реалистичных логов.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Переделан метод `generateBuildLogs()` для использования `scmConfig` из конфига pipeline
+  - Созданы методы генерации логов для каждого типа SCM:
+    - `generateGitLogs()` - Git команды и вывод (rev-parse, fetch, checkout, clean)
+    - `generateSvnLogs()` - SVN команды и вывод (checkout, update)
+    - `generateMercurialLogs()` - Mercurial команды и вывод (clone, update, identify)
+  - Используются реальные URL из конфига вместо хардкода `https://github.com/example/`
+  - Генерируются реалистичные версии SCM инструментов
+  - Поддержка переменных окружения в workspace путях (${JOB_NAME}, ${WORKSPACE})
+
+**Преимущества**:
+- Реалистичные логи для разных SCM
+- Нет хардкода URL и путей
+- Поддержка всех популярных SCM систем
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. Поддержка разных build tools ✅
+
+**Улучшение**: Реализована поддержка разных build tools с реалистичными логами для каждого.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Создан метод `generateBuildToolLogs()` для роутинга к нужному генератору
+  - Реализованы генераторы логов для каждого build tool:
+    - `generateMavenLogs()` - Maven команды и вывод (mvn clean package, mvn test)
+    - `generateGradleLogs()` - Gradle команды и вывод (./gradlew build, ./gradlew test)
+    - `generateNpmLogs()` - npm/yarn команды и вывод (npm run build, npm test)
+    - `generateMakeLogs()` - make команды и вывод (make, make test)
+    - `generateCustomLogs()` - кастомные команды из конфига
+    - `generateGenericLogs()` - общие логи для неизвестных build tools
+  - Поддержка кастомных команд через `buildCommand` в конфиге
+  - Реалистичные логи с правильными форматами вывода для каждого build tool
+
+**Преимущества**:
+- Реалистичные логи для разных build tools
+- Поддержка кастомных команд
+- Легко добавлять новые build tools
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. Динамические stages ✅
+
+**Улучшение**: Реализованы динамические stages из конфига pipeline вместо статических.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Создан метод `generateStagesFromConfig()` для генерации stages из конфига
+  - Создан метод `getDefaultStages()` для генерации дефолтных stages на основе build tool
+  - Поддержка параллельных stages (type: 'parallel')
+  - Поддержка кастомных steps в stages
+  - Обновлен `startBuild()` для использования динамических stages
+  - Обновлен `updateBuildLogs()` для работы с динамическими stages
+
+**Преимущества**:
+- Гибкая конфигурация stages
+- Поддержка параллельных stages
+- Дефолтные stages на основе build tool
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 5. Полный парсер cron выражений ✅
+
+**Улучшение**: Реализован полный парсер cron выражений с поддержкой Jenkins-специфичных расширений.
+
+**Реализовано**:
+- ✅ В `src/utils/cronParser.ts`:
+  - Создан класс `CronParser` с полным парсингом cron выражений
+  - Поддержка всех полей cron (minute, hour, day, month, weekday)
+  - Поддержка специальных символов: `*`, `,`, `-`, `/`, `H`, `?`
+  - Поддержка Jenkins-специфичных макросов: `@yearly`, `@monthly`, `@weekly`, `@daily`, `@hourly`
+  - Реализованы методы:
+    - `parse()` - парсинг cron выражения
+    - `shouldTrigger()` - проверка срабатывания в указанное время
+    - `getNextTriggerTime()` - вычисление следующего времени срабатывания
+    - `validate()` - валидация cron выражения
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Обновлен `shouldTriggerCron()` для использования `CronParser`
+  - Правильная обработка Jenkins hash (H) символа
+  - Защита от множественных срабатываний в одну минуту
+
+**Преимущества**:
+- Полная поддержка cron синтаксиса Jenkins
+- Правильная симуляция времени срабатывания
+- Валидация cron выражений
+
+**Изменённые файлы**:
+- `src/utils/cronParser.ts` ✅ **СОЗДАН**
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 6. Конфигурируемые паттерны артефактов ✅
+
+**Улучшение**: Реализованы конфигурируемые паттерны артефактов с реалистичными размерами.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Переделан метод `generateArtifacts()` для использования `artifactPatterns` из конфига
+  - Создан метод `generateArtifactsFromPattern()` для парсинга паттернов (поддержка wildcards: **/*.jar, target/*.war)
+  - Создан метод `generateDefaultArtifacts()` для генерации дефолтных артефактов на основе build tool
+  - Создан метод `estimateArtifactSize()` для реалистичных размеров артефактов:
+    - JAR: 10-50 MB
+    - WAR: 20-100 MB
+    - EAR: 30-150 MB
+    - npm packages: 5-30 MB
+    - XML/HTML: 100 KB - 5 MB
+    - Вариативность ±20-30%
+  - Поддержка разных типов артефактов (JAR, WAR, EAR, npm packages, Docker images, etc.)
+
+**Преимущества**:
+- Гибкая конфигурация артефактов
+- Реалистичные размеры
+- Поддержка паттернов wildcards
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 7. Расширяемые плагины с метаданными ✅
+
+**Улучшение**: Расширена система плагинов с метаданными и поддержкой версий.
+
+**Реализовано**:
+- ✅ В `src/data/jenkinsPlugins.ts`:
+  - Создан файл с метаданными плагинов (50+ плагинов)
+  - Добавлены категории плагинов (scm, build, deploy, ui, security, notification, integration, other)
+  - Метаданные включают: name, latestVersion, description, dependencies, category
+  - Созданы утилиты: `getPluginMetadata()`, `getPluginsByCategory()`, `getAllPlugins()`
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Обновлен интерфейс `JenkinsEmulationConfig` для поддержки версий плагинов:
+    - `plugins?: Array<string | { name: string; version?: string; enabled?: boolean }>`
+  - Обновлен `initializePlugins()` для использования метаданных из базы данных плагинов
+  - Реализована валидация версий плагинов (`isValidVersion()`)
+  - Поддержка версий из конфига или дефолтных из метаданных
+
+**Преимущества**:
+- Расширяемая база данных плагинов
+- Поддержка версий плагинов
+- Категоризация плагинов
+
+**Изменённые файлы**:
+- `src/data/jenkinsPlugins.ts` ✅ **СОЗДАН**
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 8. UI для конфигурации Build Configuration ✅
+
+**Улучшение**: Добавлен полный UI для конфигурации всех динамических параметров pipeline в диалоге редактирования.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/JenkinsConfigAdvanced.tsx`:
+  - Добавлена новая вкладка "Build Configuration" в диалог редактирования pipeline
+  - Реализован UI для конфигурации SCM:
+    - Выбор типа SCM (Git, SVN, Mercurial)
+    - Поле для Repository URL с валидацией формата
+    - Поле для Branch
+    - Поле для Credentials (опционально)
+  - Реализован UI для конфигурации Build Tool:
+    - Выбор build tool (Maven, Gradle, npm, Make, Custom)
+    - Поле для кастомной команды (если выбран Custom)
+    - Поле для Workspace Path с поддержкой переменных (${JOB_NAME}, ${WORKSPACE})
+  - Реализован редактор Stages:
+    - Добавление/удаление stages
+    - Редактирование имени и типа stage (Sequential/Parallel)
+    - Многострочное поле для steps (опционально)
+    - Поддержка параллельных stages
+  - Реализован редактор Artifact Patterns:
+    - Многострочное поле для паттернов артефактов
+    - Поддержка wildcards (**/*.jar, target/*.war)
+    - Подсказки с примерами
+  - Добавлена валидация email адресов в Post-Build Actions:
+    - Проверка формата email (regex валидация)
+    - Обязательность хотя бы одного получателя
+    - Понятные сообщения об ошибках
+  - Обновлен интерфейс `Pipeline` для поддержки новых полей
+  - Обновлен метод `savePipeline()` для сохранения новых полей в конфиг и эмуляцию
+  - Интеграция с эмуляцией: получение полной конфигурации из `jenkinsEngine.getPipelineConfig()`
+
+**Преимущества**:
+- Полный UI для всех динамических параметров
+- Валидация всех полей ввода
+- Интуитивный интерфейс с подсказками
+- Синхронизация с эмуляцией в реальном времени
+
+**Изменённые файлы**:
+- `src/components/config/devops/JenkinsConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 8. Устранение хардкода из UI ✅
+
+**Улучшение**: Убран хардкод email адреса из post-build actions.
+
+**Реализовано**:
+- ✅ В `src/core/JenkinsEmulationEngine.ts`:
+  - Обновлен `executePostBuildActions()` для удаления хардкода `default@example.com`
+  - Email отправляется только если есть получатели в конфиге
+  - Добавлено логирование пропуска email при отсутствии получателей
+
+**Преимущества**:
+- Нет хардкода email адресов
+- Валидация получателей
+
+**Изменённые файлы**:
+- `src/core/JenkinsEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
 ## Версия 0.1.8zb - IDS/IPS: Устранение хардкода, Статистические базовые линии, Протокольный анализ, Connection Rules, Улучшенный поведенческий анализ, Поддержка Snort Rules, Валидация сигнатур, Улучшение отображения алертов, Управление сигнатурами, Исправление бесконечного цикла обновлений, Улучшение адаптивности
 
 ### IDS/IPS: Полная реализация симуляции с устранением хардкода, статистическими базовыми линиями, протокольным анализом и Connection Rules

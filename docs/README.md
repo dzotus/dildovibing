@@ -172,6 +172,24 @@
   - Service Management для управления сервисами с integration keys
   - Полный набор метрик производительности и использования
 
+### Компоненты DevOps (DevOps)
+
+- **[Jenkins](./devops/jenkins.md)** - Open-source сервер автоматизации для CI/CD
+  - Pipeline Management для управления CI/CD pipelines с автоматическим вычислением статусов
+  - Build Management для симуляции builds с прогрессом, stages, длительностью и результатами
+  - Executor Management для управления executors на master node и agent nodes
+  - Node Management для управления Jenkins nodes (master и agents)
+  - Plugin System для системы плагинов с зависимостями и enabled/disabled статусами
+  - Build Triggers для поддержки триггеров: webhook, cron, SCM polling, manual
+  - Dynamic Stages для динамических stages из конфигурации pipeline
+  - Build Tools Support для поддержки различных build tools (Maven, Gradle, npm, Make, custom)
+  - SCM Integration для интеграции с SCM системами (Git, SVN, Mercurial)
+  - Artifact Management для управления артефактами с retention policy
+  - Build Parameters для поддержки параметров builds (string, choice, boolean, password)
+  - Environment Variables для поддержки environment variables для builds
+  - Post-Build Actions для email notifications, archive artifacts, publish results, deploy
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -430,6 +448,7 @@
 - **MuleSoft Integration:** [Документация MuleSoft Integration](./integration/mulesoft.md)
 - **GraphQL Gateway:** [Документация GraphQL Gateway](./integration/graphql-gateway.md)
 - **BFF Service:** [Документация BFF Service](./integration/bff-service.md)
+- **Jenkins:** [Документация Jenkins](./devops/jenkins.md)
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 
 ### По базам данных

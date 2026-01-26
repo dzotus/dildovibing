@@ -1,5 +1,7 @@
 import { CanvasNode } from '@/types';
 import { ComponentMetrics } from './EmulationEngine';
+import { CronParser } from '@/utils/cronParser';
+import { JENKINS_PLUGINS, getPluginMetadata } from '@/data/jenkinsPlugins';
 
 /**
  * Jenkins Build Status
@@ -122,6 +124,25 @@ export interface PostBuildAction {
 }
 
 /**
+ * SCM Configuration
+ */
+export interface SCMConfig {
+  type: 'git' | 'svn' | 'mercurial';
+  url: string;
+  credentials?: string;
+  branch?: string;
+}
+
+/**
+ * Build Stage Configuration
+ */
+export interface BuildStageConfig {
+  name: string;
+  type: 'sequential' | 'parallel';
+  steps?: string[];
+}
+
+/**
  * Jenkins Configuration
  */
 export interface JenkinsEmulationConfig {
@@ -129,11 +150,12 @@ export interface JenkinsEmulationConfig {
   enableCSRF?: boolean;
   executorCount?: number;
   enablePlugins?: boolean;
-  plugins?: string[];
+  plugins?: Array<string | { name: string; version?: string; enabled?: boolean }>;
   enablePipeline?: boolean;
   enableBlueOcean?: boolean;
   enableArtifactArchiving?: boolean;
   retentionDays?: number;
+  defaultWorkspacePath?: string; // Default workspace path template
   pipelines?: Array<{
     id: string;
     name: string;
@@ -146,6 +168,13 @@ export interface JenkinsEmulationConfig {
     parameters?: BuildParameter[];
     environmentVariables?: Record<string, string>;
     postBuildActions?: PostBuildAction[];
+    // New fields for dynamic configuration
+    scmConfig?: SCMConfig;
+    workspacePath?: string; // Pipeline-specific workspace path
+    buildTool?: 'maven' | 'gradle' | 'npm' | 'make' | 'custom';
+    buildCommand?: string; // Custom build command
+    stages?: BuildStageConfig[]; // Dynamic stages configuration
+    artifactPatterns?: string[]; // Patterns for artifact archiving (e.g., "**/*.jar", "target/*.war")
   }>;
   nodes?: Array<{
     id: string;
@@ -262,6 +291,7 @@ export class JenkinsEmulationEngine {
       enableBlueOcean: config.enableBlueOcean ?? false,
       enableArtifactArchiving: config.enableArtifactArchiving ?? true,
       retentionDays: config.retentionDays || 30,
+      defaultWorkspacePath: config.defaultWorkspacePath || '/var/jenkins_home/workspace/${JOB_NAME}',
       pipelines: config.pipelines || [],
       nodes: config.nodes || [],
       buildTriggerRate: config.buildTriggerRate || 0.5, // 0.5 builds per minute per pipeline
@@ -308,16 +338,35 @@ export class JenkinsEmulationEngine {
         nextBuildNumber: lastBuildNumber + 1,
       };
       
-      // Сохраняем полную конфигурацию pipeline (triggers, parameters, postBuildActions, environmentVariables)
+      // Сохраняем полную конфигурацию pipeline (triggers, parameters, postBuildActions, environmentVariables, и новые поля)
       (pipeline as any).config = {
         triggers: pipelineConfig.triggers || [],
         parameters: pipelineConfig.parameters || [],
         environmentVariables: pipelineConfig.environmentVariables || {},
         postBuildActions: pipelineConfig.postBuildActions || [],
+        // Новые поля для динамической конфигурации
+        scmConfig: pipelineConfig.scmConfig,
+        workspacePath: pipelineConfig.workspacePath,
+        buildTool: pipelineConfig.buildTool || 'gradle',
+        buildCommand: pipelineConfig.buildCommand,
+        stages: pipelineConfig.stages,
+        artifactPatterns: pipelineConfig.artifactPatterns,
       };
       
       this.pipelines.set(pipeline.id, pipeline);
     }
+  }
+  
+  /**
+   * Генерирует реалистичный commit hash в формате SHA-1 (40 символов)
+   */
+  private generateCommitHash(): string {
+    const chars = '0123456789abcdef';
+    let hash = '';
+    for (let i = 0; i < 40; i++) {
+      hash += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return hash;
   }
   
   /**
@@ -381,45 +430,41 @@ export class JenkinsEmulationEngine {
     
     if (!this.config || !this.config.enablePlugins) return;
     
-    // Популярные плагины Jenkins с описаниями
-    const popularPlugins: Record<string, { version: string; description: string; dependencies?: string[] }> = {
-      'git': { version: '4.11.0', description: 'Git integration plugin' },
-      'docker': { version: '1.2.9', description: 'Docker pipeline plugin', dependencies: ['workflow-aggregator'] },
-      'kubernetes': { version: '1.31.1', description: 'Kubernetes plugin for dynamic agent provisioning' },
-      'workflow-aggregator': { version: '2.6', description: 'Pipeline plugin aggregator' },
-      'blue-ocean': { version: '1.25.3', description: 'Blue Ocean UI for Jenkins', dependencies: ['workflow-aggregator'] },
-      'credentials': { version: '2.6.1', description: 'Credentials management plugin' },
-      'ssh-slaves': { version: '1.32.0', description: 'SSH agent plugin' },
-      'junit': { version: '1.53', description: 'JUnit test result publisher' },
-      'maven-plugin': { version: '3.20', description: 'Maven integration plugin' },
-      'gradle': { version: '1.36.1', description: 'Gradle plugin' },
-    };
-    
     const pluginConfigs = this.config.plugins || [];
     for (const pluginConfig of pluginConfigs) {
       // Поддерживаем как строки (старый формат), так и объекты (новый формат)
       let pluginName: string;
+      let pluginVersion: string | undefined;
       let pluginEnabled: boolean = true;
       
       if (typeof pluginConfig === 'string') {
         pluginName = pluginConfig;
       } else {
         pluginName = pluginConfig.name || pluginConfig;
+        pluginVersion = pluginConfig.version;
         pluginEnabled = pluginConfig.enabled !== false;
       }
       
-      const pluginInfo = popularPlugins[pluginName] || {
-        version: '1.0.0',
-        description: `${pluginName} plugin`,
-      };
+      // Получаем метаданные плагина из базы данных плагинов
+      const pluginMetadata = getPluginMetadata(pluginName);
+      
+      // Используем версию из конфига, если указана, иначе из метаданных, иначе дефолт
+      const version = pluginVersion || pluginMetadata?.latestVersion || '1.0.0';
+      const description = pluginMetadata?.description || `${pluginName} plugin`;
+      const dependencies = pluginMetadata?.dependencies || [];
+      
+      // Валидация версии (базовая проверка формата semver)
+      if (!this.isValidVersion(version)) {
+        console.warn(`Invalid plugin version format: ${version} for plugin ${pluginName}, using default`);
+      }
       
       const plugin: JenkinsPlugin = {
         name: pluginName,
-        version: pluginInfo.version,
-        description: pluginInfo.description,
+        version: version,
+        description: description,
         enabled: pluginEnabled,
         active: pluginEnabled, // Будет пересчитываться с учетом зависимостей
-        dependencies: pluginInfo.dependencies,
+        dependencies: dependencies,
       };
       
       this.plugins.set(pluginName, plugin);
@@ -427,6 +472,14 @@ export class JenkinsEmulationEngine {
     
     // Пересчитываем active статус с учетом зависимостей
     this.updatePluginActiveStatus();
+  }
+  
+  /**
+   * Валидирует формат версии (базовая проверка semver)
+   */
+  private isValidVersion(version: string): boolean {
+    // Простая проверка: версия должна содержать хотя бы одну цифру и точку
+    return /^\d+\.\d+/.test(version);
   }
   
   /**
@@ -696,18 +749,28 @@ export class JenkinsEmulationEngine {
    * Проверяет, должен ли сработать cron триггер
    */
   private shouldTriggerCron(schedule: string, pipelineId: string, currentTime: number): boolean {
-    // Простая симуляция - проверяем каждую минуту
-    // В реальности нужен полный парсер cron
-    const lastTrigger = this.lastBuildTrigger.get(`${pipelineId}-cron`) || 0;
-    const minuteMs = 60 * 1000;
-    
-    // Если прошла хотя бы минута, срабатываем (упрощенная логика)
-    if (currentTime - lastTrigger >= minuteMs) {
-      this.lastBuildTrigger.set(`${pipelineId}-cron`, currentTime);
-      return true;
+    try {
+      const currentDate = new Date(currentTime);
+      const shouldTrigger = CronParser.shouldTrigger(schedule, currentDate);
+      
+      if (shouldTrigger) {
+        // Проверяем, не срабатывал ли уже триггер в эту минуту
+        const lastTrigger = this.lastBuildTrigger.get(`${pipelineId}-cron`) || 0;
+        const currentMinute = Math.floor(currentTime / (60 * 1000));
+        const lastTriggerMinute = Math.floor(lastTrigger / (60 * 1000));
+        
+        // Срабатываем только если это новая минута
+        if (currentMinute > lastTriggerMinute) {
+          this.lastBuildTrigger.set(`${pipelineId}-cron`, currentTime);
+          return true;
+        }
+      }
+      
+      return false;
+    } catch (error) {
+      console.error(`Error parsing cron expression "${schedule}":`, error);
+      return false;
     }
-    
-    return false;
   }
   
   /**
@@ -789,12 +852,6 @@ export class JenkinsEmulationEngine {
     const durationVariation = estimatedDuration * 0.3;
     const actualEstimatedDuration = estimatedDuration + (Math.random() * 2 - 1) * durationVariation;
     
-    // Генерируем начальные логи
-    const initialLogs = this.generateBuildLogs(buildNumber, pipeline.name, pipeline.branch || 'main');
-    
-    // Генерируем артефакты (симуляция)
-    const artifacts = this.generateArtifacts(pipeline.name, buildNumber);
-    
     // Получаем параметры и environment variables из конфига pipeline
     const config = (pipeline as any).config || {};
     const buildParameters = options?.parameters || {};
@@ -810,6 +867,23 @@ export class JenkinsEmulationEngine {
     Object.assign(resolvedParameters, buildParameters);
     const envVars = { ...(config.environmentVariables || {}), ...resolvedParameters };
     
+    // Генерируем commit hash если не передан
+    const commitHash = options?.commit || this.generateCommitHash();
+    
+    // Генерируем начальные логи с использованием конфигурации pipeline
+    const initialLogs = this.generateBuildLogs(
+      buildNumber, 
+      pipeline, 
+      options?.branch || pipeline.branch || 'main',
+      commitHash
+    );
+    
+    // Генерируем stages из конфига или дефолтные
+    const stages = this.generateStagesFromConfig(config, buildNumber, currentTime);
+    
+    // Генерируем артефакты (симуляция) с использованием конфигурации
+    const artifacts = this.generateArtifacts(pipeline.name, buildNumber, config);
+    
     const build: JenkinsBuild = {
       id: buildId,
       number: buildNumber,
@@ -819,16 +893,11 @@ export class JenkinsEmulationEngine {
       estimatedDuration: actualEstimatedDuration,
       progress: 0,
       branch: options?.branch || pipeline.branch,
-      commit: options?.commit,
+      commit: commitHash,
       logs: initialLogs,
       artifacts: artifacts.map(a => a.name),
       triggeredBy: options?.triggeredBy || 'system',
-      stages: [
-        { name: 'Checkout', status: 'running', startTime: currentTime },
-        { name: 'Build', status: 'pending' },
-        { name: 'Test', status: 'pending' },
-        { name: 'Deploy', status: 'pending' },
-      ],
+      stages: stages,
     };
     
     // Сохраняем параметры и env vars в build
@@ -856,70 +925,98 @@ export class JenkinsEmulationEngine {
   }
   
   /**
-   * Генерирует логи для build
+   * Генерирует логи для build с использованием конфигурации pipeline
    */
-  private generateBuildLogs(buildNumber: number, pipelineName: string, branch: string): string[] {
+  private generateBuildLogs(
+    buildNumber: number, 
+    pipeline: JenkinsPipeline, 
+    branch: string,
+    commitHash: string
+  ): string[] {
     const logs: string[] = [];
+    const config = (pipeline as any).config || {};
+    const pipelineName = pipeline.name;
+    
+    // Определяем workspace path
+    const defaultWorkspacePath = this.config?.defaultWorkspacePath || '/var/jenkins_home/workspace/${JOB_NAME}';
+    const workspacePath = config.workspacePath || defaultWorkspacePath.replace('${JOB_NAME}', pipelineName);
+    
     logs.push(`Started by system`);
-    logs.push(`Building on master in workspace /var/jenkins_home/workspace/${pipelineName}`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git rev-parse --is-inside-work-tree`);
-    logs.push(`true`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git config remote.origin.url https://github.com/example/${pipelineName}.git`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git --version`);
-    logs.push(`git version 2.39.0`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git fetch --tags --force --progress -- https://github.com/example/${pipelineName}.git +refs/heads/${branch}:refs/remotes/origin/${branch}`);
-    logs.push(`From https://github.com/example/${pipelineName}`);
-    logs.push(` * [new branch]      ${branch}       -> origin/${branch}`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git rev-parse "refs/remotes/origin/${branch}^{commit}"`);
-    logs.push(`abc123def456789`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git checkout -f abc123def456789`);
-    logs.push(`HEAD is now at abc123def456789 Commit message for build #${buildNumber}`);
-    logs.push(`[${pipelineName}] $ /usr/bin/git clean -fdx`);
-    logs.push(`Removing .gradle/`);
-    logs.push(`Removing build/`);
+    logs.push(`Building on master in workspace ${workspacePath}`);
+    
+    // SCM checkout логи
+    const scmConfig = config.scmConfig;
+    if (scmConfig) {
+      switch (scmConfig.type) {
+        case 'git':
+          logs.push(...this.generateGitLogs(pipelineName, branch, commitHash, scmConfig.url, workspacePath));
+          break;
+        case 'svn':
+          logs.push(...this.generateSvnLogs(pipelineName, branch, commitHash, scmConfig.url, workspacePath));
+          break;
+        case 'mercurial':
+          logs.push(...this.generateMercurialLogs(pipelineName, branch, commitHash, scmConfig.url, workspacePath));
+          break;
+      }
+    } else {
+      // Дефолтный Git (для обратной совместимости)
+      logs.push(...this.generateGitLogs(pipelineName, branch, commitHash, `https://github.com/example/${pipelineName}.git`, workspacePath));
+    }
+    
     logs.push(`[Pipeline] Start of Pipeline`);
     logs.push(`[Pipeline] node`);
-    logs.push(`Running on Jenkins in /var/jenkins_home/workspace/${pipelineName}`);
+    logs.push(`Running on Jenkins in ${workspacePath}`);
     logs.push(`[Pipeline] {`);
-    logs.push(`[Pipeline] stage`);
-    logs.push(`[Pipeline] { (Checkout)`);
-    logs.push(`[Pipeline] checkout`);
-    logs.push(`Checking out abc123def456789 from ${branch}`);
-    logs.push(`[Pipeline] }`);
-    logs.push(`[Pipeline] // stage`);
-    logs.push(`[Pipeline] stage`);
-    logs.push(`[Pipeline] { (Build)`);
-    logs.push(`[Pipeline] sh`);
-    logs.push(`+ echo "Building application..."`);
-    logs.push(`Building application...`);
-    logs.push(`[Pipeline] sh`);
-    logs.push(`+ ./gradlew build -x test`);
-    logs.push(`> Task :compileJava`);
-    logs.push(`> Task :processResources`);
-    logs.push(`> Task :classes`);
-    logs.push(`> Task :jar`);
-    logs.push(`BUILD SUCCESSFUL in 45s`);
-    logs.push(`[Pipeline] }`);
-    logs.push(`[Pipeline] // stage`);
-    logs.push(`[Pipeline] stage`);
-    logs.push(`[Pipeline] { (Test)`);
-    logs.push(`[Pipeline] sh`);
-    logs.push(`+ echo "Running tests..."`);
-    logs.push(`Running tests...`);
-    logs.push(`[Pipeline] sh`);
-    logs.push(`+ ./gradlew test`);
-    logs.push(`> Task :test`);
-    logs.push(`Test results: 127 passed, 0 failed`);
-    logs.push(`BUILD SUCCESSFUL in 30s`);
-    logs.push(`[Pipeline] }`);
-    logs.push(`[Pipeline] // stage`);
-    logs.push(`[Pipeline] stage`);
-    logs.push(`[Pipeline] { (Deploy)`);
-    logs.push(`[Pipeline] sh`);
-    logs.push(`+ echo "Deploying to staging..."`);
-    logs.push(`Deploying to staging...`);
-    logs.push(`[Pipeline] }`);
-    logs.push(`[Pipeline] // stage`);
+    
+    // Генерируем логи для stages
+    const stages = config.stages || this.getDefaultStages(config.buildTool || 'gradle');
+    const buildTool = config.buildTool || 'gradle';
+    const buildCommand = config.buildCommand;
+    
+    for (const stageConfig of stages) {
+      logs.push(`[Pipeline] stage`);
+      logs.push(`[Pipeline] { (${stageConfig.name})`);
+      
+      if (stageConfig.type === 'parallel') {
+        logs.push(`[Pipeline] parallel`);
+        logs.push(`[Pipeline] {`);
+        if (stageConfig.steps && stageConfig.steps.length > 0) {
+          for (const step of stageConfig.steps) {
+            logs.push(`[Pipeline] sh`);
+            logs.push(`+ ${step}`);
+            logs.push(`${step} executed successfully`);
+          }
+        }
+        logs.push(`[Pipeline] }`);
+      } else {
+        // Sequential stage
+        if (stageConfig.name.toLowerCase() === 'checkout') {
+          logs.push(`[Pipeline] checkout`);
+          logs.push(`Checking out ${commitHash.substring(0, 7)} from ${branch}`);
+        } else if (stageConfig.name.toLowerCase() === 'build') {
+          logs.push(...this.generateBuildToolLogs(buildTool, buildCommand, stageConfig.name));
+        } else if (stageConfig.name.toLowerCase() === 'test') {
+          logs.push(...this.generateBuildToolLogs(buildTool, buildCommand, stageConfig.name, true));
+        } else {
+          // Generic stage
+          if (stageConfig.steps && stageConfig.steps.length > 0) {
+            for (const step of stageConfig.steps) {
+              logs.push(`[Pipeline] sh`);
+              logs.push(`+ ${step}`);
+              logs.push(`${step} executed successfully`);
+            }
+          } else {
+            logs.push(`[Pipeline] sh`);
+            logs.push(`+ echo "Executing ${stageConfig.name} stage..."`);
+            logs.push(`Executing ${stageConfig.name} stage...`);
+          }
+        }
+      }
+      
+      logs.push(`[Pipeline] }`);
+      logs.push(`[Pipeline] // stage`);
+    }
+    
     logs.push(`[Pipeline] }`);
     logs.push(`[Pipeline] // node`);
     logs.push(`[Pipeline] End of Pipeline`);
@@ -928,18 +1025,420 @@ export class JenkinsEmulationEngine {
   }
   
   /**
-   * Генерирует артефакты для build
+   * Генерирует дефолтные stages на основе build tool
    */
-  private generateArtifacts(pipelineName: string, buildNumber: number): Array<{ name: string; size: number }> {
-    const artifacts: Array<{ name: string; size: number }> = [];
+  private getDefaultStages(buildTool: string): BuildStageConfig[] {
+    switch (buildTool) {
+      case 'maven':
+        return [
+          { name: 'Checkout', type: 'sequential' },
+          { name: 'Build', type: 'sequential' },
+          { name: 'Test', type: 'sequential' },
+          { name: 'Package', type: 'sequential' },
+        ];
+      case 'npm':
+        return [
+          { name: 'Checkout', type: 'sequential' },
+          { name: 'Install', type: 'sequential' },
+          { name: 'Build', type: 'sequential' },
+          { name: 'Test', type: 'sequential' },
+        ];
+      case 'make':
+        return [
+          { name: 'Checkout', type: 'sequential' },
+          { name: 'Build', type: 'sequential' },
+          { name: 'Test', type: 'sequential' },
+        ];
+      case 'gradle':
+      default:
+        return [
+          { name: 'Checkout', type: 'sequential' },
+          { name: 'Build', type: 'sequential' },
+          { name: 'Test', type: 'sequential' },
+          { name: 'Deploy', type: 'sequential' },
+        ];
+    }
+  }
+  
+  /**
+   * Генерирует stages из конфига
+   */
+  private generateStagesFromConfig(config: any, buildNumber: number, startTime: number): BuildStage[] {
+    const stagesConfig = config.stages || this.getDefaultStages(config.buildTool || 'gradle');
     
-    // Типичные артефакты
-    artifacts.push({ name: `app-${buildNumber}.jar`, size: 15 * 1024 * 1024 }); // 15 MB
-    artifacts.push({ name: `app-${buildNumber}-sources.jar`, size: 3 * 1024 * 1024 }); // 3 MB
-    artifacts.push({ name: `test-results-${buildNumber}.xml`, size: 512 * 1024 }); // 512 KB
-    artifacts.push({ name: `coverage-report-${buildNumber}.html`, size: 2 * 1024 * 1024 }); // 2 MB
+    return stagesConfig.map((stageConfig: BuildStageConfig, index: number) => ({
+      name: stageConfig.name,
+      status: index === 0 ? 'running' : 'pending',
+      startTime: index === 0 ? startTime : undefined,
+    }));
+  }
+  
+  /**
+   * Генерирует логи для Git SCM
+   */
+  private generateGitLogs(pipelineName: string, branch: string, commitHash: string, url: string, workspacePath: string): string[] {
+    const logs: string[] = [];
+    logs.push(`[${pipelineName}] $ /usr/bin/git rev-parse --is-inside-work-tree`);
+    logs.push(`true`);
+    logs.push(`[${pipelineName}] $ /usr/bin/git config remote.origin.url ${url}`);
+    logs.push(`[${pipelineName}] $ /usr/bin/git --version`);
+    logs.push(`git version ${this.getGitVersion()}`);
+    logs.push(`[${pipelineName}] $ /usr/bin/git fetch --tags --force --progress -- ${url} +refs/heads/${branch}:refs/remotes/origin/${branch}`);
+    logs.push(`From ${url}`);
+    logs.push(` * [new branch]      ${branch}       -> origin/${branch}`);
+    logs.push(`[${pipelineName}] $ /usr/bin/git rev-parse "refs/remotes/origin/${branch}^{commit}"`);
+    logs.push(commitHash);
+    logs.push(`[${pipelineName}] $ /usr/bin/git checkout -f ${commitHash}`);
+    logs.push(`HEAD is now at ${commitHash.substring(0, 7)} Commit message for build #${pipelineName}`);
+    logs.push(`[${pipelineName}] $ /usr/bin/git clean -fdx`);
+    logs.push(`Removing .gradle/`);
+    logs.push(`Removing build/`);
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для SVN SCM
+   */
+  private generateSvnLogs(pipelineName: string, branch: string, commitHash: string, url: string, workspacePath: string): string[] {
+    const logs: string[] = [];
+    logs.push(`[${pipelineName}] $ /usr/bin/svn --version`);
+    logs.push(`svn, version 1.14.2`);
+    logs.push(`[${pipelineName}] $ /usr/bin/svn checkout ${url}/${branch} ${workspacePath}`);
+    logs.push(`Checked out revision ${commitHash.substring(0, 7)}.`);
+    logs.push(`[${pipelineName}] $ /usr/bin/svn update`);
+    logs.push(`At revision ${commitHash.substring(0, 7)}.`);
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для Mercurial SCM
+   */
+  private generateMercurialLogs(pipelineName: string, branch: string, commitHash: string, url: string, workspacePath: string): string[] {
+    const logs: string[] = [];
+    logs.push(`[${pipelineName}] $ /usr/bin/hg --version`);
+    logs.push(`Mercurial Distributed SCM (version 6.4.2)`);
+    logs.push(`[${pipelineName}] $ /usr/bin/hg clone ${url} ${workspacePath}`);
+    logs.push(`updating to branch ${branch}`);
+    logs.push(`[${pipelineName}] $ /usr/bin/hg update ${branch}`);
+    logs.push(`0 files updated, 0 files merged, 0 files removed, 0 files unresolved`);
+    logs.push(`[${pipelineName}] $ /usr/bin/hg identify`);
+    logs.push(`${commitHash.substring(0, 12)} ${branch}`);
+    return logs;
+  }
+  
+  /**
+   * Генерирует версию Git (реалистичная версия)
+   */
+  private getGitVersion(): string {
+    const versions = ['2.39.0', '2.40.0', '2.41.0', '2.42.0', '2.43.0'];
+    return versions[Math.floor(Math.random() * versions.length)];
+  }
+  
+  /**
+   * Генерирует логи для build tool
+   */
+  private generateBuildToolLogs(buildTool: string, buildCommand: string | undefined, stageName: string, isTest: boolean = false): string[] {
+    const logs: string[] = [];
+    
+    switch (buildTool) {
+      case 'maven':
+        return this.generateMavenLogs(buildCommand, stageName, isTest);
+      case 'gradle':
+        return this.generateGradleLogs(buildCommand, stageName, isTest);
+      case 'npm':
+        return this.generateNpmLogs(buildCommand, stageName, isTest);
+      case 'make':
+        return this.generateMakeLogs(buildCommand, stageName, isTest);
+      case 'custom':
+        return this.generateCustomLogs(buildCommand || '', stageName, isTest);
+      default:
+        return this.generateGenericLogs(stageName, isTest);
+    }
+  }
+  
+  /**
+   * Генерирует логи для Maven
+   */
+  private generateMavenLogs(buildCommand: string | undefined, stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    const command = buildCommand || (isTest ? 'mvn test' : 'mvn clean package -DskipTests');
+    
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ ${command}`);
+    
+    if (isTest) {
+      logs.push(`[INFO] Scanning for projects...`);
+      logs.push(`[INFO] Building project 1.0.0-SNAPSHOT`);
+      logs.push(`[INFO] --- maven-surefire-plugin:3.0.0-M7:test (default-test) @ project ---`);
+      logs.push(`[INFO] Tests run: 127, Failures: 0, Errors: 0, Skipped: 0`);
+      logs.push(`[INFO] BUILD SUCCESS`);
+    } else {
+      logs.push(`[INFO] Scanning for projects...`);
+      logs.push(`[INFO] Building project 1.0.0-SNAPSHOT`);
+      logs.push(`[INFO] --- maven-compiler-plugin:3.11.0:compile (default-compile) @ project ---`);
+      logs.push(`[INFO] Changes detected - recompiling the module!`);
+      logs.push(`[INFO] Compiling 42 source files to target/classes`);
+      logs.push(`[INFO] --- maven-jar-plugin:3.3.0:jar (default-jar) @ project ---`);
+      logs.push(`[INFO] Building jar: target/project-1.0.0-SNAPSHOT.jar`);
+      logs.push(`[INFO] BUILD SUCCESS`);
+    }
+    
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для Gradle
+   */
+  private generateGradleLogs(buildCommand: string | undefined, stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    const command = buildCommand || (isTest ? './gradlew test' : './gradlew build -x test');
+    
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ ${command}`);
+    
+    if (isTest) {
+      logs.push(`> Task :compileJava`);
+      logs.push(`> Task :processResources`);
+      logs.push(`> Task :classes`);
+      logs.push(`> Task :compileTestJava`);
+      logs.push(`> Task :processTestResources`);
+      logs.push(`> Task :testClasses`);
+      logs.push(`> Task :test`);
+      logs.push(`Test results: 127 passed, 0 failed`);
+      logs.push(`BUILD SUCCESSFUL in 30s`);
+    } else {
+      logs.push(`> Task :compileJava`);
+      logs.push(`> Task :processResources`);
+      logs.push(`> Task :classes`);
+      logs.push(`> Task :jar`);
+      logs.push(`BUILD SUCCESSFUL in 45s`);
+    }
+    
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для npm
+   */
+  private generateNpmLogs(buildCommand: string | undefined, stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    const command = buildCommand || (isTest ? 'npm test' : 'npm run build');
+    
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ ${command}`);
+    
+    if (isTest) {
+      logs.push(`> project@1.0.0 test`);
+      logs.push(`> jest`);
+      logs.push(`PASS  src/App.test.js`);
+      logs.push(`Test Suites: 1 passed, 1 total`);
+      logs.push(`Tests:       127 passed, 127 total`);
+    } else {
+      logs.push(`> project@1.0.0 build`);
+      logs.push(`> react-scripts build`);
+      logs.push(`Creating an optimized production build...`);
+      logs.push(`Compiled successfully!`);
+      logs.push(`File sizes after gzip:`);
+      logs.push(`  build/static/js/main.abc123.js: 145.23 KB`);
+    }
+    
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для make
+   */
+  private generateMakeLogs(buildCommand: string | undefined, stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    const command = buildCommand || (isTest ? 'make test' : 'make');
+    
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ ${command}`);
+    
+    if (isTest) {
+      logs.push(`gcc -o test test.c`);
+      logs.push(`./test`);
+      logs.push(`All tests passed (127 assertions)`);
+    } else {
+      logs.push(`gcc -c main.c -o main.o`);
+      logs.push(`gcc -c utils.c -o utils.o`);
+      logs.push(`gcc main.o utils.o -o app`);
+      logs.push(`Build completed successfully`);
+    }
+    
+    return logs;
+  }
+  
+  /**
+   * Генерирует логи для кастомной команды
+   */
+  private generateCustomLogs(buildCommand: string, stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ ${buildCommand || 'echo "Custom build step"'}`);
+    logs.push(`${buildCommand || 'Custom build step'} executed successfully`);
+    return logs;
+  }
+  
+  /**
+   * Генерирует общие логи для неизвестного build tool
+   */
+  private generateGenericLogs(stageName: string, isTest: boolean): string[] {
+    const logs: string[] = [];
+    logs.push(`[Pipeline] sh`);
+    logs.push(`+ echo "Executing ${stageName} stage..."`);
+    logs.push(`Executing ${stageName} stage...`);
+    logs.push(`${stageName} completed successfully`);
+    return logs;
+  }
+  
+  /**
+   * Генерирует артефакты для build с использованием конфигурации pipeline
+   */
+  private generateArtifacts(pipelineName: string, buildNumber: number, config: any): Array<{ name: string; size: number }> {
+    const artifacts: Array<{ name: string; size: number }> = [];
+    const buildTool = config.buildTool || 'gradle';
+    const artifactPatterns = config.artifactPatterns;
+    
+    if (artifactPatterns && artifactPatterns.length > 0) {
+      // Генерируем артефакты на основе паттернов
+      for (const pattern of artifactPatterns) {
+        const generatedArtifacts = this.generateArtifactsFromPattern(pattern, pipelineName, buildNumber, buildTool);
+        artifacts.push(...generatedArtifacts);
+      }
+    } else {
+      // Генерируем дефолтные артефакты на основе build tool
+      artifacts.push(...this.generateDefaultArtifacts(pipelineName, buildNumber, buildTool));
+    }
     
     return artifacts;
+  }
+  
+  /**
+   * Генерирует артефакты из паттерна
+   */
+  private generateArtifactsFromPattern(pattern: string, pipelineName: string, buildNumber: number, buildTool: string): Array<{ name: string; size: number }> {
+    const artifacts: Array<{ name: string; size: number }> = [];
+    
+    // Простой парсер паттернов (поддержка wildcards)
+    // Примеры: "**/*.jar", "target/*.war", "dist/**/*"
+    
+    if (pattern.includes('*.jar')) {
+      const baseName = pattern.replace('**/*.jar', '').replace('*.jar', '').replace('**/', '');
+      artifacts.push({
+        name: `${baseName || pipelineName}-${buildNumber}.jar`,
+        size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.jar`, buildTool),
+      });
+      artifacts.push({
+        name: `${baseName || pipelineName}-${buildNumber}-sources.jar`,
+        size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}-sources.jar`, buildTool),
+      });
+    } else if (pattern.includes('*.war')) {
+      const baseName = pattern.replace('**/*.war', '').replace('*.war', '').replace('**/', '');
+      artifacts.push({
+        name: `${baseName || pipelineName}-${buildNumber}.war`,
+        size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.war`, buildTool),
+      });
+    } else if (pattern.includes('*.tar.gz') || pattern.includes('*.tgz')) {
+      artifacts.push({
+        name: `${pipelineName}-${buildNumber}.tar.gz`,
+        size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.tar.gz`, buildTool),
+      });
+    } else if (pattern.includes('*.zip')) {
+      artifacts.push({
+        name: `${pipelineName}-${buildNumber}.zip`,
+        size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.zip`, buildTool),
+      });
+    } else if (pattern.includes('*.xml')) {
+      artifacts.push({
+        name: `test-results-${buildNumber}.xml`,
+        size: this.estimateArtifactSize(`test-results-${buildNumber}.xml`, buildTool),
+      });
+    } else if (pattern.includes('*.html') || pattern.includes('*.htm')) {
+      artifacts.push({
+        name: `coverage-report-${buildNumber}.html`,
+        size: this.estimateArtifactSize(`coverage-report-${buildNumber}.html`, buildTool),
+      });
+    } else {
+      // Общий паттерн - генерируем один артефакт
+      const fileName = pattern.replace('**/', '').replace('**/*', `${pipelineName}-${buildNumber}`);
+      artifacts.push({
+        name: fileName,
+        size: this.estimateArtifactSize(fileName, buildTool),
+      });
+    }
+    
+    return artifacts;
+  }
+  
+  /**
+   * Генерирует дефолтные артефакты на основе build tool
+   */
+  private generateDefaultArtifacts(pipelineName: string, buildNumber: number, buildTool: string): Array<{ name: string; size: number }> {
+    const artifacts: Array<{ name: string; size: number }> = [];
+    
+    switch (buildTool) {
+      case 'maven':
+        artifacts.push({ name: `${pipelineName}-${buildNumber}.jar`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.jar`, 'maven') });
+        artifacts.push({ name: `${pipelineName}-${buildNumber}-sources.jar`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}-sources.jar`, 'maven') });
+        artifacts.push({ name: `test-results-${buildNumber}.xml`, size: this.estimateArtifactSize(`test-results-${buildNumber}.xml`, 'maven') });
+        break;
+      case 'gradle':
+        artifacts.push({ name: `${pipelineName}-${buildNumber}.jar`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.jar`, 'gradle') });
+        artifacts.push({ name: `${pipelineName}-${buildNumber}-sources.jar`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}-sources.jar`, 'gradle') });
+        artifacts.push({ name: `test-results-${buildNumber}.xml`, size: this.estimateArtifactSize(`test-results-${buildNumber}.xml`, 'gradle') });
+        artifacts.push({ name: `coverage-report-${buildNumber}.html`, size: this.estimateArtifactSize(`coverage-report-${buildNumber}.html`, 'gradle') });
+        break;
+      case 'npm':
+        artifacts.push({ name: `${pipelineName}-${buildNumber}.tgz`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.tgz`, 'npm') });
+        artifacts.push({ name: `build-${buildNumber}.zip`, size: this.estimateArtifactSize(`build-${buildNumber}.zip`, 'npm') });
+        break;
+      case 'make':
+        artifacts.push({ name: `${pipelineName}-${buildNumber}.tar.gz`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.tar.gz`, 'make') });
+        break;
+      default:
+        artifacts.push({ name: `${pipelineName}-${buildNumber}.jar`, size: this.estimateArtifactSize(`${pipelineName}-${buildNumber}.jar`, 'gradle') });
+        artifacts.push({ name: `test-results-${buildNumber}.xml`, size: this.estimateArtifactSize(`test-results-${buildNumber}.xml`, 'gradle') });
+    }
+    
+    return artifacts;
+  }
+  
+  /**
+   * Оценивает размер артефакта на основе имени и build tool
+   */
+  private estimateArtifactSize(artifactName: string, buildTool: string): number {
+    // Базовые размеры для разных типов артефактов
+    const baseSizes: Record<string, { min: number; max: number }> = {
+      'jar': { min: 10 * 1024 * 1024, max: 50 * 1024 * 1024 }, // 10-50 MB
+      'war': { min: 20 * 1024 * 1024, max: 100 * 1024 * 1024 }, // 20-100 MB
+      'ear': { min: 30 * 1024 * 1024, max: 150 * 1024 * 1024 }, // 30-150 MB
+      'sources.jar': { min: 2 * 1024 * 1024, max: 10 * 1024 * 1024 }, // 2-10 MB
+      'tgz': { min: 5 * 1024 * 1024, max: 30 * 1024 * 1024 }, // 5-30 MB
+      'tar.gz': { min: 5 * 1024 * 1024, max: 30 * 1024 * 1024 }, // 5-30 MB
+      'zip': { min: 3 * 1024 * 1024, max: 20 * 1024 * 1024 }, // 3-20 MB
+      'xml': { min: 100 * 1024, max: 2 * 1024 * 1024 }, // 100 KB - 2 MB
+      'html': { min: 500 * 1024, max: 5 * 1024 * 1024 }, // 500 KB - 5 MB
+    };
+    
+    // Определяем тип артефакта
+    let artifactType = 'jar';
+    if (artifactName.includes('.war')) artifactType = 'war';
+    else if (artifactName.includes('.ear')) artifactType = 'ear';
+    else if (artifactName.includes('sources.jar')) artifactType = 'sources.jar';
+    else if (artifactName.includes('.tgz') || artifactName.includes('.tar.gz')) artifactType = 'tgz';
+    else if (artifactName.includes('.zip')) artifactType = 'zip';
+    else if (artifactName.includes('.xml')) artifactType = 'xml';
+    else if (artifactName.includes('.html') || artifactName.includes('.htm')) artifactType = 'html';
+    
+    const sizeRange = baseSizes[artifactType] || baseSizes['jar'];
+    
+    // Генерируем размер с вариативностью ±20-30%
+    const baseSize = (sizeRange.min + sizeRange.max) / 2;
+    const variation = baseSize * (0.2 + Math.random() * 0.1); // ±20-30%
+    const size = Math.floor(baseSize + (Math.random() * 2 - 1) * variation);
+    
+    return Math.max(sizeRange.min, Math.min(sizeRange.max, size));
   }
   
   /**
@@ -1080,9 +1579,13 @@ export class JenkinsEmulationEngine {
         case 'email':
           // Симулируем отправку email
           if (build.logs) {
-            const recipients = action.config?.recipients || ['default@example.com'];
-            build.logs.push(`[Post-Build] Sending email notification to: ${recipients.join(', ')}`);
-            build.logs.push(`[Post-Build] Email subject: Build ${build.status === 'success' ? 'SUCCESS' : 'FAILED'} - ${build.pipelineId} #${build.number}`);
+            const recipients = action.config?.recipients || [];
+            if (recipients.length > 0) {
+              build.logs.push(`[Post-Build] Sending email notification to: ${recipients.join(', ')}`);
+              build.logs.push(`[Post-Build] Email subject: Build ${build.status === 'success' ? 'SUCCESS' : 'FAILED'} - ${build.pipelineId} #${build.number}`);
+            } else {
+              build.logs.push(`[Post-Build] Email notification skipped - no recipients configured`);
+            }
           }
           break;
         case 'archive':
@@ -1420,12 +1923,19 @@ export class JenkinsEmulationEngine {
         existingPipeline.branch = pipelineConfig.branch || 'main';
         existingPipeline.enabled = pipelineConfig.enabled !== false;
         
-        // Синхронизируем полную конфигурацию pipeline (triggers, parameters, postBuildActions, environmentVariables)
+        // Синхронизируем полную конфигурацию pipeline (triggers, parameters, postBuildActions, environmentVariables, и новые поля)
         (existingPipeline as any).config = {
           triggers: pipelineConfig.triggers || [],
           parameters: pipelineConfig.parameters || [],
           environmentVariables: pipelineConfig.environmentVariables || {},
           postBuildActions: pipelineConfig.postBuildActions || [],
+          // Новые поля для динамической конфигурации
+          scmConfig: pipelineConfig.scmConfig,
+          workspacePath: pipelineConfig.workspacePath,
+          buildTool: pipelineConfig.buildTool || 'gradle',
+          buildCommand: pipelineConfig.buildCommand,
+          stages: pipelineConfig.stages,
+          artifactPatterns: pipelineConfig.artifactPatterns,
         };
         
         // Статус и lastBuild не обновляем - они управляются builds
