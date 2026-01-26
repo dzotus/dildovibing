@@ -106,49 +106,15 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
   const enableAuth = config.enableAuth ?? true;
   const authMethod = config.authMethod || 'token';
   const tokenTTL = config.tokenTTL || '24h';
-  const secrets = config.secrets || [
-    {
-      id: '1',
-      path: 'secret/app/database',
-      key: 'password',
-      value: '••••••••',
-      version: 1,
-      created: new Date().toISOString(),
-      updated: new Date().toISOString(),
-      visible: false,
-    },
-    {
-      id: '2',
-      path: 'secret/app/api',
-      key: 'api-key',
-      value: '••••••••',
-      version: 1,
-      created: new Date().toISOString(),
-      updated: new Date().toISOString(),
-      visible: false,
-    },
-  ];
-  const engines = config.engines || [
-    { id: '1', name: 'secret/', type: 'kv', enabled: true, version: 2, description: 'Key-Value secrets' },
-    { id: '2', name: 'transit/', type: 'transit', enabled: true, description: 'Encryption as a service' },
-  ];
-  const policies = config.policies || [
-    {
-      id: '1',
-      name: 'admin',
-      rules: 'path "*" { capabilities = ["create", "read", "update", "delete", "list"] }',
-      enabled: true,
-    },
-    {
-      id: '2',
-      name: 'readonly',
-      rules: 'path "*" { capabilities = ["read", "list"] }',
-      enabled: true,
-    },
-  ];
+  // Use real config values, no hardcoded defaults
+  const secrets = Array.isArray(config.secrets) ? config.secrets : [];
+  const engines = Array.isArray(config.engines) ? config.engines : [];
+  const policies = Array.isArray(config.policies) ? config.policies : [];
   // Get real-time metrics from emulation
   const vaultMetrics = vaultEngine?.getMetrics();
   const vaultConfig = vaultEngine?.getConfig();
+  const sealState = vaultEngine?.getSealState();
+  const isSealed = sealState?.sealed ?? config.sealed ?? true;
   
   // Use real metrics if available, otherwise fallback to config
   const totalSecrets = vaultMetrics?.secretsTotal ?? config.totalSecrets ?? secrets.length;
@@ -165,9 +131,11 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
   const [showCreateSecret, setShowCreateSecret] = useState(false);
   const [showCreateEngine, setShowCreateEngine] = useState(false);
   const [showCreatePolicy, setShowCreatePolicy] = useState(false);
+  const [editingEngineId, setEditingEngineId] = useState<string | null>(null);
+  const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
   const [copiedSecretId, setCopiedSecretId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [newSecretForm, setNewSecretForm] = useState({ path: 'secret/', key: '', value: '' });
+  const [newSecretForm, setNewSecretForm] = useState({ path: '', key: '', value: '' });
   const [newEngineForm, setNewEngineForm] = useState({ name: '', type: 'kv' as const, version: 2 });
   const [newPolicyForm, setNewPolicyForm] = useState({ name: '', rules: 'path "*" { capabilities = ["read"] }' });
   const [formErrors, setFormErrors] = useState<{
@@ -175,6 +143,8 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
     engine?: { name?: string };
     policy?: { name?: string; rules?: string };
   }>({});
+  const [showUnsealDialog, setShowUnsealDialog] = useState(false);
+  const [unsealKeys, setUnsealKeys] = useState<string[]>(['', '', '']);
 
   // Filter secrets based on search query
   const filteredSecrets = useMemo(() => {
@@ -214,11 +184,35 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
     }
   };
 
+  const validateSecretPath = (path: string): string | undefined => {
+    if (!path?.trim()) {
+      return 'Path is required';
+    }
+    
+    // Check for invalid characters - allow letters, numbers, /, _, and -
+    if (!/^[a-zA-Z0-9/_-]+$/.test(path)) {
+      return 'Path contains invalid characters. Use only letters, numbers, /, _, and -';
+    }
+    
+    // Check for duplicates (only if key is already set)
+    if (newSecretForm.key?.trim()) {
+      const duplicate = secrets.find((s) => s.path === path && s.key === newSecretForm.key);
+      if (duplicate) {
+        return 'A secret with this path and key already exists';
+      }
+    }
+    
+    return undefined;
+  };
+
   const addSecret = () => {
     const errors: { path?: string; key?: string; value?: string } = {};
-    if (!newSecretForm.path?.trim()) {
-      errors.path = 'Path is required';
+    
+    const pathError = validateSecretPath(newSecretForm.path);
+    if (pathError) {
+      errors.path = pathError;
     }
+    
     if (!newSecretForm.key?.trim()) {
       errors.key = 'Key is required';
     }
@@ -244,11 +238,17 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
     };
     updateConfig({ secrets: [...secrets, newSecret] });
     setShowCreateSecret(false);
-    setNewSecretForm({ path: 'secret/', key: '', value: '' });
+    setNewSecretForm({ path: '', key: '', value: '' });
     toast({
       title: 'Secret Created',
       description: `Secret ${newSecretForm.path}/${newSecretForm.key} created successfully`,
     });
+  };
+
+  const handleCancelSecretForm = () => {
+    setShowCreateSecret(false);
+    setFormErrors({ ...formErrors, secret: undefined });
+    setNewSecretForm({ path: '', key: '', value: '' });
   };
 
   const removeSecret = (id: string) => {
@@ -285,10 +285,36 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
     }
   };
 
+  const validateEngineName = (name: string, excludeId?: string): string | undefined => {
+    if (!name?.trim()) {
+      return 'Engine name is required';
+    }
+    
+    // Engine name should end with /
+    if (!name.endsWith('/')) {
+      return 'Engine name must end with /';
+    }
+    
+    // Check for duplicates (excluding current engine if editing)
+    const duplicate = engines.find((e) => e.name === name && e.id !== excludeId);
+    if (duplicate) {
+      return 'An engine with this name already exists';
+    }
+    
+    // Check for invalid characters
+    if (!/^[a-zA-Z0-9/_-]+$/.test(name)) {
+      return 'Engine name contains invalid characters';
+    }
+    
+    return undefined;
+  };
+
   const addEngine = () => {
     const errors: { name?: string } = {};
-    if (!newEngineForm.name?.trim()) {
-      errors.name = 'Engine name is required';
+    
+    const nameError = validateEngineName(newEngineForm.name);
+    if (nameError) {
+      errors.name = nameError;
     }
 
     if (Object.keys(errors).length > 0) {
@@ -311,6 +337,52 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
       title: 'Engine Created',
       description: `Secret engine ${newEngineForm.name} created successfully`,
     });
+  };
+
+  const handleEditEngine = (engine: SecretEngine) => {
+    setEditingEngineId(engine.id);
+    setNewEngineForm({
+      name: engine.name,
+      type: engine.type,
+      version: engine.version || 2,
+    });
+    setShowCreateEngine(true);
+    setFormErrors({ ...formErrors, engine: undefined });
+  };
+
+  const handleSaveEngine = () => {
+    if (editingEngineId) {
+      const errors: { name?: string } = {};
+      const nameError = validateEngineName(newEngineForm.name, editingEngineId);
+      if (nameError) {
+        errors.name = nameError;
+      }
+      if (Object.keys(errors).length > 0) {
+        setFormErrors({ ...formErrors, engine: errors });
+        return;
+      }
+      updateEngine(editingEngineId, 'name', newEngineForm.name);
+      updateEngine(editingEngineId, 'type', newEngineForm.type);
+      if (newEngineForm.type === 'kv') {
+        updateEngine(editingEngineId, 'version', newEngineForm.version);
+      }
+      setShowCreateEngine(false);
+      setEditingEngineId(null);
+      setNewEngineForm({ name: '', type: 'kv', version: 2 });
+      toast({
+        title: 'Engine Updated',
+        description: 'Secret engine updated successfully',
+      });
+    } else {
+      addEngine();
+    }
+  };
+
+  const handleCancelEngineForm = () => {
+    setShowCreateEngine(false);
+    setEditingEngineId(null);
+    setFormErrors({ ...formErrors, engine: undefined });
+    setNewEngineForm({ name: '', type: 'kv', version: 2 });
   };
 
   const removeEngine = (id: string) => {
@@ -355,6 +427,47 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
     });
   };
 
+  const handleEditPolicy = (policy: Policy) => {
+    setEditingPolicyId(policy.id);
+    setNewPolicyForm({
+      name: policy.name,
+      rules: policy.rules,
+    });
+    setShowCreatePolicy(true);
+    setFormErrors({ ...formErrors, policy: undefined });
+  };
+
+  const handleSavePolicy = () => {
+    if (editingPolicyId) {
+      if (!newPolicyForm.name || !newPolicyForm.rules) {
+        toast({
+          title: 'Validation Error',
+          description: 'Please fill in all required fields',
+          variant: 'destructive',
+        });
+        return;
+      }
+      updatePolicy(editingPolicyId, 'name', newPolicyForm.name);
+      updatePolicy(editingPolicyId, 'rules', newPolicyForm.rules);
+      setShowCreatePolicy(false);
+      setEditingPolicyId(null);
+      setNewPolicyForm({ name: '', rules: 'path "*" { capabilities = ["read"] }' });
+      toast({
+        title: 'Policy Updated',
+        description: 'Access policy updated successfully',
+      });
+    } else {
+      addPolicy();
+    }
+  };
+
+  const handleCancelPolicyForm = () => {
+    setShowCreatePolicy(false);
+    setEditingPolicyId(null);
+    setFormErrors({ ...formErrors, policy: undefined });
+    setNewPolicyForm({ name: '', rules: 'path "*" { capabilities = ["read"] }' });
+  };
+
   const removePolicy = (id: string) => {
     const policy = policies.find((p) => p.id === id);
     if (policy) {
@@ -371,6 +484,46 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
       p.id === id ? { ...p, [field]: value } : p
     );
     updateConfig({ policies: newPolicies });
+  };
+
+  const handleSeal = () => {
+    if (vaultEngine) {
+      vaultEngine.seal();
+      updateConfig({ sealed: true });
+      toast({
+        title: 'Vault Sealed',
+        description: 'Vault has been sealed. All operations are now blocked.',
+      });
+    }
+  };
+
+  const handleUnseal = () => {
+    if (vaultEngine) {
+      const validKeys = unsealKeys.filter((k) => k && k.trim().length > 0);
+      const result = vaultEngine.unseal(validKeys);
+      
+      if (result.success) {
+        updateConfig({ sealed: false });
+        setShowUnsealDialog(false);
+        setUnsealKeys(['', '', '']);
+        toast({
+          title: 'Vault Unsealed',
+          description: 'Vault has been successfully unsealed.',
+        });
+      } else {
+        toast({
+          title: 'Unseal Progress',
+          description: result.error || `Progress: ${result.progress}/${result.threshold}`,
+          variant: result.progress > 0 ? 'default' : 'destructive',
+        });
+        // Update progress but keep dialog open
+        if (result.progress < result.threshold) {
+          // Add more input fields if needed
+          const needed = result.threshold - result.progress;
+          setUnsealKeys([...unsealKeys, ...Array(needed).fill('')]);
+        }
+      }
+    }
   };
 
   return (
@@ -460,8 +613,12 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
           </Card>
         </div>
 
-        <Tabs defaultValue="secrets" className="space-y-4">
+        <Tabs defaultValue="status" className="space-y-4">
           <TabsList>
+            <TabsTrigger value="status">
+              <Activity className="h-4 w-4 mr-2" />
+              Status
+            </TabsTrigger>
             <TabsTrigger value="secrets">
               <Key className="h-4 w-4 mr-2" />
               Secrets ({secrets.length})
@@ -487,6 +644,106 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
               Settings
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="status" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Vault Status</CardTitle>
+                <CardDescription>Current state and seal status</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex items-center justify-between p-4 border rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <div className={`h-3 w-3 rounded-full ${isSealed ? 'bg-red-500' : 'bg-green-500'}`} />
+                    <div>
+                      <p className="font-semibold">{isSealed ? 'Sealed' : 'Unsealed'}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {isSealed
+                          ? 'Vault is sealed. Operations are blocked.'
+                          : 'Vault is unsealed. Operations are allowed.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {isSealed ? (
+                      <Button onClick={() => setShowUnsealDialog(true)} size="sm">
+                        <Lock className="h-4 w-4 mr-2" />
+                        Unseal Vault
+                      </Button>
+                    ) : (
+                      <Button onClick={handleSeal} size="sm" variant="destructive">
+                        <Lock className="h-4 w-4 mr-2" />
+                        Seal Vault
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                
+                {sealState && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-muted-foreground">Unseal Threshold</Label>
+                      <p className="text-lg font-semibold">{sealState.unsealThreshold}</p>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Unseal Progress</Label>
+                      <p className="text-lg font-semibold">
+                        {sealState.unsealProgress} / {sealState.unsealThreshold}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {vaultConfig?.storageBackend && (
+                  <div className="p-4 border rounded-lg">
+                    <Label className="text-muted-foreground">Storage Backend</Label>
+                    <p className="text-lg font-semibold capitalize">{vaultConfig.storageBackend.type}</p>
+                    {vaultConfig.storageBackend.haEnabled && (
+                      <Badge variant="outline" className="mt-2">HA Enabled</Badge>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Unseal Dialog */}
+            <Dialog open={showUnsealDialog} onOpenChange={setShowUnsealDialog}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Unseal Vault</DialogTitle>
+                  <DialogDescription>
+                    Provide unseal keys to unseal the vault. You need {sealState?.unsealThreshold || 3} keys.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  {unsealKeys.map((key, index) => (
+                    <div key={index} className="space-y-2">
+                      <Label>Unseal Key {index + 1}</Label>
+                      <Input
+                        type="password"
+                        value={key}
+                        onChange={(e) => {
+                          const newKeys = [...unsealKeys];
+                          newKeys[index] = e.target.value;
+                          setUnsealKeys(newKeys);
+                        }}
+                        placeholder={`Enter unseal key ${index + 1}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => {
+                    setShowUnsealDialog(false);
+                    setUnsealKeys(['', '', '']);
+                  }}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleUnseal}>Unseal</Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </TabsContent>
 
           <TabsContent value="secrets" className="space-y-4">
             <>
@@ -517,21 +774,99 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                           </Button>
                         )}
                       </div>
-                      <Button onClick={() => setShowCreateSecret(true)} size="sm">
-                        <Plus className="h-4 w-4 mr-2" />
-                        Create Secret
-                      </Button>
+                      {!showCreateSecret && (
+                        <Button onClick={() => {
+                          setShowCreateSecret(true);
+                          setNewSecretForm({ path: '', key: '', value: '' });
+                          setFormErrors({ ...formErrors, secret: undefined });
+                        }} size="sm">
+                          <Plus className="h-4 w-4 mr-2" />
+                          Create Secret
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  {filteredSecrets.length === 0 ? (
-                    <div className="text-center py-8 text-muted-foreground">
-                      {searchQuery ? 'No secrets found matching your search' : 'No secrets configured'}
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {filteredSecrets.map((secret) => (
+                  <div className="space-y-4">
+                    {showCreateSecret && (
+                      <Card className="border-l-4 border-l-blue-500 bg-card">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between">
+                            <CardTitle>Create New Secret</CardTitle>
+                            <Button variant="ghost" size="icon" onClick={handleCancelSecretForm}>
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="space-y-2">
+                            <Label>Path</Label>
+                            <Input
+                              value={newSecretForm.path}
+                              onChange={(e) => {
+                                setNewSecretForm({ ...newSecretForm, path: e.target.value });
+                                if (formErrors.secret?.path) {
+                                  setFormErrors({ ...formErrors, secret: { ...formErrors.secret, path: undefined } });
+                                }
+                              }}
+                              placeholder="secret/app/database"
+                              className={formErrors.secret?.path ? 'border-destructive' : ''}
+                            />
+                            {formErrors.secret?.path && (
+                              <p className="text-sm text-destructive">{formErrors.secret.path}</p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Key</Label>
+                            <Input
+                              value={newSecretForm.key}
+                              onChange={(e) => {
+                                setNewSecretForm({ ...newSecretForm, key: e.target.value });
+                                if (formErrors.secret?.key) {
+                                  setFormErrors({ ...formErrors, secret: { ...formErrors.secret, key: undefined } });
+                                }
+                              }}
+                              placeholder="password"
+                              className={formErrors.secret?.key ? 'border-destructive' : ''}
+                            />
+                            {formErrors.secret?.key && (
+                              <p className="text-sm text-destructive">{formErrors.secret.key}</p>
+                            )}
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Value</Label>
+                            <Input
+                              type="password"
+                              value={newSecretForm.value}
+                              onChange={(e) => {
+                                setNewSecretForm({ ...newSecretForm, value: e.target.value });
+                                if (formErrors.secret?.value) {
+                                  setFormErrors({ ...formErrors, secret: { ...formErrors.secret, value: undefined } });
+                                }
+                              }}
+                              placeholder="Enter secret value"
+                              className={formErrors.secret?.value ? 'border-destructive' : ''}
+                            />
+                            {formErrors.secret?.value && (
+                              <p className="text-sm text-destructive">{formErrors.secret.value}</p>
+                            )}
+                          </div>
+                          <div className="flex justify-end gap-2 pt-4">
+                            <Button variant="outline" onClick={handleCancelSecretForm}>
+                              Cancel
+                            </Button>
+                            <Button onClick={addSecret}>Create</Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+                    {filteredSecrets.length === 0 && !showCreateSecret ? (
+                      <div className="text-center py-8 text-muted-foreground">
+                        {searchQuery ? 'No secrets found matching your search' : 'No secrets configured'}
+                      </div>
+                    ) : (
+                      filteredSecrets.map((secret) => (
                       <Card key={secret.id} className="border-l-4 border-l-green-500">
                         <CardHeader className="pb-3">
                           <div className="flex items-center justify-between">
@@ -599,87 +934,11 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                           </div>
                         </CardContent>
                       </Card>
-                    ))}
+                      ))
+                    )}
                   </div>
-                )}
-              </CardContent>
+                </CardContent>
             </Card>
-
-            {/* Create Secret Dialog */}
-            <Dialog open={showCreateSecret} onOpenChange={setShowCreateSecret}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Create New Secret</DialogTitle>
-                  <DialogDescription>
-                    Add a new secret to the vault
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Path</Label>
-                    <Input
-                      value={newSecretForm.path}
-                      onChange={(e) => {
-                        setNewSecretForm({ ...newSecretForm, path: e.target.value });
-                        if (formErrors.secret?.path) {
-                          setFormErrors({ ...formErrors, secret: { ...formErrors.secret, path: undefined } });
-                        }
-                      }}
-                      placeholder="secret/app/database"
-                      className={formErrors.secret?.path ? 'border-destructive' : ''}
-                    />
-                    {formErrors.secret?.path && (
-                      <p className="text-sm text-destructive">{formErrors.secret.path}</p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Key</Label>
-                    <Input
-                      value={newSecretForm.key}
-                      onChange={(e) => {
-                        setNewSecretForm({ ...newSecretForm, key: e.target.value });
-                        if (formErrors.secret?.key) {
-                          setFormErrors({ ...formErrors, secret: { ...formErrors.secret, key: undefined } });
-                        }
-                      }}
-                      placeholder="password"
-                      className={formErrors.secret?.key ? 'border-destructive' : ''}
-                    />
-                    {formErrors.secret?.key && (
-                      <p className="text-sm text-destructive">{formErrors.secret.key}</p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Value</Label>
-                    <Input
-                      type="password"
-                      value={newSecretForm.value}
-                      onChange={(e) => {
-                        setNewSecretForm({ ...newSecretForm, value: e.target.value });
-                        if (formErrors.secret?.value) {
-                          setFormErrors({ ...formErrors, secret: { ...formErrors.secret, value: undefined } });
-                        }
-                      }}
-                      placeholder="Enter secret value"
-                      className={formErrors.secret?.value ? 'border-destructive' : ''}
-                    />
-                    {formErrors.secret?.value && (
-                      <p className="text-sm text-destructive">{formErrors.secret.value}</p>
-                    )}
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => {
-                    setShowCreateSecret(false);
-                    setFormErrors({ ...formErrors, secret: undefined });
-                    setNewSecretForm({ path: 'secret/', key: '', value: '' });
-                  }}>
-                    Cancel
-                  </Button>
-                  <Button onClick={addSecret}>Create</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
             </>
           </TabsContent>
 
@@ -691,14 +950,98 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                     <CardTitle>Secret Engines</CardTitle>
                     <CardDescription>Configure secret storage engines</CardDescription>
                   </div>
-                  <Button onClick={() => setShowCreateEngine(true)} size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Enable Engine
-                  </Button>
+                  {!showCreateEngine && (
+                    <Button onClick={() => {
+                      setShowCreateEngine(true);
+                      setEditingEngineId(null);
+                      setNewEngineForm({ name: '', type: 'kv', version: 2 });
+                      setFormErrors({ ...formErrors, engine: undefined });
+                    }} size="sm">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Enable Engine
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  {showCreateEngine && (
+                    <Card className="border-l-4 border-l-blue-500 bg-card">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle>{editingEngineId ? 'Edit Engine' : 'Enable Secret Engine'}</CardTitle>
+                          <Button variant="ghost" size="icon" onClick={handleCancelEngineForm}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Engine Name</Label>
+                          <Input
+                            value={newEngineForm.name}
+                            onChange={(e) => {
+                              setNewEngineForm({ ...newEngineForm, name: e.target.value });
+                              if (formErrors.engine?.name) {
+                                setFormErrors({ ...formErrors, engine: { name: undefined } });
+                              }
+                            }}
+                            placeholder="secret/"
+                            className={formErrors.engine?.name ? 'border-destructive' : ''}
+                          />
+                          {formErrors.engine?.name && (
+                            <p className="text-sm text-destructive">{formErrors.engine.name}</p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Engine Type</Label>
+                          <Select
+                            value={newEngineForm.type}
+                            onValueChange={(value: 'kv' | 'transit' | 'pki' | 'database' | 'aws' | 'azure') =>
+                              setNewEngineForm({ ...newEngineForm, type: value })
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="kv">Key-Value (KV)</SelectItem>
+                              <SelectItem value="transit">Transit</SelectItem>
+                              <SelectItem value="pki">PKI</SelectItem>
+                              <SelectItem value="database">Database</SelectItem>
+                              <SelectItem value="aws">AWS</SelectItem>
+                              <SelectItem value="azure">Azure</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {newEngineForm.type === 'kv' && (
+                          <div className="space-y-2">
+                            <Label>KV Version</Label>
+                            <Select
+                              value={newEngineForm.version.toString()}
+                              onValueChange={(value) => setNewEngineForm({ ...newEngineForm, version: Number(value) })}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="1">Version 1</SelectItem>
+                                <SelectItem value="2">Version 2</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        )}
+                        <div className="flex justify-end gap-2 pt-4">
+                          <Button variant="outline" onClick={handleCancelEngineForm}>
+                            Cancel
+                          </Button>
+                          <Button onClick={handleSaveEngine}>
+                            {editingEngineId ? 'Update' : 'Enable'}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                   {engines.map((engine) => (
                     <Card key={engine.id} className="border-l-4 border-l-blue-500">
                       <CardHeader className="pb-3">
@@ -716,6 +1059,13 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEditEngine(engine)}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
                             <Switch
                               checked={engine.enabled}
                               onCheckedChange={(checked) => updateEngine(engine.id, 'enabled', checked)}
@@ -731,48 +1081,19 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-4">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label>Engine Name</Label>
-                            <Input
-                              value={engine.name}
-                              onChange={(e) => updateEngine(engine.id, 'name', e.target.value)}
-                            />
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <span className="text-muted-foreground">Name:</span>
+                            <span className="ml-2 font-semibold">{engine.name}</span>
                           </div>
-                          <div className="space-y-2">
-                            <Label>Engine Type</Label>
-                            <Select
-                              value={engine.type}
-                              onValueChange={(value: 'kv' | 'transit' | 'pki' | 'database' | 'aws' | 'azure') => updateEngine(engine.id, 'type', value)}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="kv">Key-Value (KV)</SelectItem>
-                                <SelectItem value="transit">Transit</SelectItem>
-                                <SelectItem value="pki">PKI</SelectItem>
-                                <SelectItem value="database">Database</SelectItem>
-                                <SelectItem value="aws">AWS</SelectItem>
-                                <SelectItem value="azure">Azure</SelectItem>
-                              </SelectContent>
-                            </Select>
+                          <div>
+                            <span className="text-muted-foreground">Type:</span>
+                            <span className="ml-2 font-semibold">{engine.type}</span>
                           </div>
-                          {engine.type === 'kv' && (
-                            <div className="space-y-2">
-                              <Label>KV Version</Label>
-                              <Select
-                                value={engine.version?.toString() || '2'}
-                                onValueChange={(value) => updateEngine(engine.id, 'version', Number(value))}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="1">Version 1</SelectItem>
-                                  <SelectItem value="2">Version 2</SelectItem>
-                                </SelectContent>
-                              </Select>
+                          {engine.version && (
+                            <div>
+                              <span className="text-muted-foreground">Version:</span>
+                              <span className="ml-2 font-semibold">v{engine.version}</span>
                             </div>
                           )}
                         </div>
@@ -782,85 +1103,6 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                 </div>
               </CardContent>
             </Card>
-
-            {/* Create Engine Dialog */}
-            <Dialog open={showCreateEngine} onOpenChange={setShowCreateEngine}>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Enable Secret Engine</DialogTitle>
-                  <DialogDescription>
-                    Configure a new secret storage engine
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Engine Name</Label>
-                    <Input
-                      value={newEngineForm.name}
-                      onChange={(e) => {
-                        setNewEngineForm({ ...newEngineForm, name: e.target.value });
-                        if (formErrors.engine?.name) {
-                          setFormErrors({ ...formErrors, engine: { name: undefined } });
-                        }
-                      }}
-                      placeholder="secret/"
-                      className={formErrors.engine?.name ? 'border-destructive' : ''}
-                    />
-                    {formErrors.engine?.name && (
-                      <p className="text-sm text-destructive">{formErrors.engine.name}</p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Engine Type</Label>
-                    <Select
-                      value={newEngineForm.type}
-                      onValueChange={(value: 'kv' | 'transit' | 'pki' | 'database' | 'aws' | 'azure') =>
-                        setNewEngineForm({ ...newEngineForm, type: value })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="kv">Key-Value (KV)</SelectItem>
-                        <SelectItem value="transit">Transit</SelectItem>
-                        <SelectItem value="pki">PKI</SelectItem>
-                        <SelectItem value="database">Database</SelectItem>
-                        <SelectItem value="aws">AWS</SelectItem>
-                        <SelectItem value="azure">Azure</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {newEngineForm.type === 'kv' && (
-                    <div className="space-y-2">
-                      <Label>KV Version</Label>
-                      <Select
-                        value={newEngineForm.version.toString()}
-                        onValueChange={(value) => setNewEngineForm({ ...newEngineForm, version: Number(value) })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1">Version 1</SelectItem>
-                          <SelectItem value="2">Version 2</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => {
-                    setShowCreateEngine(false);
-                    setFormErrors({ ...formErrors, engine: undefined });
-                    setNewEngineForm({ name: '', type: 'kv', version: 2 });
-                  }}>
-                    Cancel
-                  </Button>
-                  <Button onClick={addEngine}>Enable</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
           </TabsContent>
 
           <TabsContent value="policies" className="space-y-4">
@@ -871,14 +1113,78 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                     <CardTitle>Access Policies</CardTitle>
                     <CardDescription>Configure access control policies</CardDescription>
                   </div>
-                  <Button onClick={() => setShowCreatePolicy(true)} size="sm">
-                    <Plus className="h-4 w-4 mr-2" />
-                    Create Policy
-                  </Button>
+                  {!showCreatePolicy && (
+                    <Button onClick={() => {
+                      setShowCreatePolicy(true);
+                      setEditingPolicyId(null);
+                      setNewPolicyForm({ name: '', rules: 'path "*" { capabilities = ["read"] }' });
+                      setFormErrors({ ...formErrors, policy: undefined });
+                    }} size="sm">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Create Policy
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  {showCreatePolicy && (
+                    <Card className="border-l-4 border-l-purple-500 bg-card">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle>{editingPolicyId ? 'Edit Policy' : 'Create Access Policy'}</CardTitle>
+                          <Button variant="ghost" size="icon" onClick={handleCancelPolicyForm}>
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                          <Label>Policy Name</Label>
+                          <Input
+                            value={newPolicyForm.name}
+                            onChange={(e) => {
+                              setNewPolicyForm({ ...newPolicyForm, name: e.target.value });
+                              if (formErrors.policy?.name) {
+                                setFormErrors({ ...formErrors, policy: { ...formErrors.policy, name: undefined } });
+                              }
+                            }}
+                            placeholder="readonly"
+                            className={formErrors.policy?.name ? 'border-destructive' : ''}
+                          />
+                          {formErrors.policy?.name && (
+                            <p className="text-sm text-destructive">{formErrors.policy.name}</p>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Policy Rules (HCL)</Label>
+                          <Textarea
+                            value={newPolicyForm.rules}
+                            onChange={(e) => {
+                              setNewPolicyForm({ ...newPolicyForm, rules: e.target.value });
+                              if (formErrors.policy?.rules) {
+                                setFormErrors({ ...formErrors, policy: { ...formErrors.policy, rules: undefined } });
+                              }
+                            }}
+                            rows={8}
+                            className={`font-mono text-sm ${formErrors.policy?.rules ? 'border-destructive' : ''}`}
+                            placeholder='path "*" { capabilities = ["read", "list"] }'
+                          />
+                          {formErrors.policy?.rules && (
+                            <p className="text-sm text-destructive">{formErrors.policy.rules}</p>
+                          )}
+                        </div>
+                        <div className="flex justify-end gap-2 pt-4">
+                          <Button variant="outline" onClick={handleCancelPolicyForm}>
+                            Cancel
+                          </Button>
+                          <Button onClick={handleSavePolicy}>
+                            {editingPolicyId ? 'Update' : 'Create'}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                   {policies.map((policy) => (
                     <Card key={policy.id} className="border-l-4 border-l-purple-500">
                       <CardHeader className="pb-3">
@@ -892,6 +1198,13 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleEditPolicy(policy)}
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
                             <Switch
                               checked={policy.enabled}
                               onCheckedChange={(checked) => updatePolicy(policy.id, 'enabled', checked)}
@@ -908,20 +1221,12 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                       </CardHeader>
                       <CardContent className="space-y-4">
                         <div className="space-y-2">
-                          <Label>Policy Name</Label>
-                          <Input
-                            value={policy.name}
-                            onChange={(e) => updatePolicy(policy.id, 'name', e.target.value)}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Policy Rules (HCL)</Label>
-                          <Textarea
-                            value={policy.rules}
-                            onChange={(e) => updatePolicy(policy.id, 'rules', e.target.value)}
-                            rows={6}
-                            className="font-mono text-sm"
-                          />
+                          <div className="text-sm">
+                            <span className="text-muted-foreground">Rules:</span>
+                            <pre className="mt-2 p-3 bg-muted rounded-md text-xs font-mono overflow-x-auto">
+                              {policy.rules}
+                            </pre>
+                          </div>
                         </div>
                       </CardContent>
                     </Card>
@@ -929,65 +1234,6 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                 </div>
               </CardContent>
             </Card>
-
-            {/* Create Policy Dialog */}
-            <Dialog open={showCreatePolicy} onOpenChange={setShowCreatePolicy}>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Create Access Policy</DialogTitle>
-                  <DialogDescription>
-                    Define access control rules using HCL syntax
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Policy Name</Label>
-                    <Input
-                      value={newPolicyForm.name}
-                      onChange={(e) => {
-                        setNewPolicyForm({ ...newPolicyForm, name: e.target.value });
-                        if (formErrors.policy?.name) {
-                          setFormErrors({ ...formErrors, policy: { ...formErrors.policy, name: undefined } });
-                        }
-                      }}
-                      placeholder="readonly"
-                      className={formErrors.policy?.name ? 'border-destructive' : ''}
-                    />
-                    {formErrors.policy?.name && (
-                      <p className="text-sm text-destructive">{formErrors.policy.name}</p>
-                    )}
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Policy Rules (HCL)</Label>
-                    <Textarea
-                      value={newPolicyForm.rules}
-                      onChange={(e) => {
-                        setNewPolicyForm({ ...newPolicyForm, rules: e.target.value });
-                        if (formErrors.policy?.rules) {
-                          setFormErrors({ ...formErrors, policy: { ...formErrors.policy, rules: undefined } });
-                        }
-                      }}
-                      rows={8}
-                      className={`font-mono text-sm ${formErrors.policy?.rules ? 'border-destructive' : ''}`}
-                      placeholder='path "*" { capabilities = ["read", "list"] }'
-                    />
-                    {formErrors.policy?.rules && (
-                      <p className="text-sm text-destructive">{formErrors.policy.rules}</p>
-                    )}
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => {
-                    setShowCreatePolicy(false);
-                    setFormErrors({ ...formErrors, policy: undefined });
-                    setNewPolicyForm({ name: '', rules: 'path "*" { capabilities = ["read"] }' });
-                  }}>
-                    Cancel
-                  </Button>
-                  <Button onClick={addPolicy}>Create</Button>
-                </DialogFooter>
-              </DialogContent>
-            </Dialog>
           </TabsContent>
 
           <TabsContent value="tokens" className="space-y-4">
@@ -1152,6 +1398,50 @@ export function SecretsVaultConfigAdvanced({ componentId }: SecretsVaultConfigPr
                 <CardDescription>General vault configuration</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                <Separator />
+                <div className="space-y-4">
+                  <Label className="text-base font-semibold">Storage Backend</Label>
+                  <div className="space-y-2">
+                    <Label>Storage Type</Label>
+                    <Select
+                      value={config.storageBackend?.type || 'consul'}
+                      onValueChange={(value: 'consul' | 'etcd' | 'file' | 's3' | 'inmem') => {
+                        updateConfig({
+                          storageBackend: {
+                            type: value,
+                            haEnabled: config.storageBackend?.haEnabled ?? false,
+                          },
+                        });
+                      }}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="consul">Consul</SelectItem>
+                        <SelectItem value="etcd">etcd</SelectItem>
+                        <SelectItem value="file">File</SelectItem>
+                        <SelectItem value="s3">S3</SelectItem>
+                        <SelectItem value="inmem">In-Memory</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="flex items-center justify-between">
+                      <Label>High Availability</Label>
+                      <Switch
+                        checked={config.storageBackend?.haEnabled ?? false}
+                        onCheckedChange={(checked) => {
+                          updateConfig({
+                            storageBackend: {
+                              type: config.storageBackend?.type || 'consul',
+                              haEnabled: checked,
+                            },
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <Separator />
                 <div className="space-y-2">
                   <Label>Vault Type</Label>
                   <Select

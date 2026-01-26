@@ -249,6 +249,19 @@
   - Connection Rules для автоматической настройки конфигов при подключении компонентов
   - Полный набор метрик производительности и безопасности
 
+- **[Secrets Vault](./security/secrets-vault.md)** - Система управления секретами для безопасного хранения и управления секретами
+  - Seal/Unseal механизм с поддержкой Shamir's Secret Sharing
+  - KV Secrets Engine v1/v2 для key-value хранилища секретов
+  - Versioning для версионирования секретов с историей изменений (KV v2)
+  - CAS (Check-and-Set) операции для предотвращения конфликтов при обновлении
+  - List Operations для просмотра списка секретов по path
+  - Transit Engine для шифрования и расшифровки данных
+  - Token Authentication для аутентификации через токены с TTL
+  - Policies для HCL-based access control
+  - Storage Backend для поддержки различных storage backends (Consul, etcd, file, S3, inmem)
+  - Connection Rules для автоматической настройки конфигов при подключении компонентов
+  - Полный набор метрик производительности и использования
+
 ### Протоколы и API (Protocols & APIs)
 
 В системе симуляции протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) реализованы как **атрибуты соединений**, а не как отдельные узлы на канвасе. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
@@ -426,6 +439,7 @@
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 - **WAF / API Shield:** [Документация WAF / API Shield](./security/waf-api-shield.md)
 - **Network Firewall:** [Документация Network Firewall](./security/firewall.md)
+- **Secrets Vault:** [Документация Secrets Vault](./security/secrets-vault.md)
 
 ## Обновления
 

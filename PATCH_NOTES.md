@@ -1,5 +1,255 @@
 # Patch Notes
 
+## Версия 0.1.8za - Vault: Connection Rules, Seal/Unseal, KV v1/v2 различия, List операции, Storage Backend, Устранение хардкода
+
+### Vault: Полная реализация симуляции с Connection Rules, Seal/Unseal механизмом, различиями KV v1/v2 и устранением хардкода
+
+**Критическое улучшение**: Реализованы Connection Rules для автоматической настройки Vault при подключении компонентов, реализован Seal/Unseal механизм с поддержкой Shamir's Secret Sharing, реализованы различия между KV v1 и v2 (версионирование, CAS, soft delete), добавлены List операции, реализована симуляция Storage Backend с влиянием на латентность, устранен весь хардкод из UI - используются только реальные данные из конфига. Все реализовано без хардкода - используются только реальные данные из конфигурации и контекста системы.
+
+#### 1. Connection Rules для Vault ✅
+
+**Улучшение**: Созданы правила подключения для автоматической настройки Vault при подключении компонентов.
+
+**Реализовано**:
+- ✅ Создан `src/services/connection/rules/vaultRules.ts`:
+  - Правила для подключения к Vault (secrets-vault)
+  - Автоматическая настройка vaultAddress в source компоненте
+  - Интеграция с REST API, GraphQL, gRPC, WebSocket, Webhook
+  - Интеграция с API Gateway (настройка secrets provider)
+  - Интеграция с Kong Gateway (Vault plugin)
+  - Интеграция с базами данных (настройка получения credentials из Vault)
+  - Валидация подключений
+- ✅ Зарегистрировано в `src/services/connection/rules/index.ts`:
+  - Добавлен `createVaultRule(discovery)` в `initializeConnectionRules`
+  - Приоритет 10 для security компонентов
+
+**Преимущества**:
+- Автоматическая настройка Vault адреса при подключении компонентов
+- Автоматическая настройка интеграции для различных типов компонентов
+- Поддержка получения credentials из Vault для баз данных
+- Упрощенная конфигурация компонентов
+
+**Изменённые файлы**:
+- `src/services/connection/rules/vaultRules.ts` ✅ **СОЗДАН**
+- `src/services/connection/rules/index.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Seal/Unseal механизм ✅
+
+**Улучшение**: Реализован Seal/Unseal механизм для реалистичной симуляции HashiCorp Vault.
+
+**Реализовано**:
+- ✅ В `src/core/VaultEmulationEngine.ts`:
+  - Добавлено состояние `sealed: boolean` в `VaultEmulationConfig` и `SealConfig`
+  - Реализованы методы:
+    - `seal()` - запечатать Vault
+    - `unseal(shards: string[])` - распечатать Vault (Shamir's Secret Sharing)
+    - `isSealed(): boolean` - проверить состояние
+    - `getSealState(): SealConfig` - получить состояние seal
+  - Модифицированы все операции (read, write, delete, auth, encrypt, decrypt, list):
+    - Проверяют `sealed` состояние
+    - Возвращают ошибку "Vault is sealed" если sealed
+  - Добавлены метрики:
+    - `vaultSealed: boolean`
+    - `unsealAttemptsTotal: number`
+    - `unsealSuccessTotal: number`
+  - Vault стартует в sealed состоянии по умолчанию
+  - Поддержка настройки unseal threshold и shares
+- ✅ В `src/components/config/security/SecretsVaultConfigAdvanced.tsx`:
+  - Добавлена вкладка "Status" с отображением состояния Vault
+  - Визуальный индикатор состояния (Sealed/Unsealed)
+  - Кнопки "Seal Vault" и "Unseal Vault"
+  - Диалог для ввода unseal keys (shards)
+  - Отображение unseal progress и threshold
+
+**Преимущества**:
+- Реалистичная симуляция работы Vault
+- Vault требует unsealing перед операциями
+- Поддержка Shamir's Secret Sharing для безопасности
+- Визуальная индикация состояния в UI
+
+**Изменённые файлы**:
+- `src/core/VaultEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/security/SecretsVaultConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. KV v1 vs v2 различия ✅
+
+**Улучшение**: Реализованы правильные различия между KV v1 и v2 с поддержкой версионирования, CAS и soft delete.
+
+**Реализовано**:
+- ✅ В `src/core/VaultEmulationEngine.ts`:
+  - Добавлены интерфейсы:
+    - `KV2SecretVersion` - метаданные версии секрета
+    - `KV2Secret` - структура KV v2 секрета с версионированием
+  - Модифицирована структура хранения секретов:
+    - Для KV v1: простой `Map<string, VaultSecret>` (key-value)
+    - Для KV v2: `Map<string, KV2Secret>` с версионированием
+  - Модифицированы операции:
+    - `processReadRequest()` - поддержка чтения конкретной версии для KV v2
+    - `processWriteRequest()` - поддержка CAS (check-and-set) для KV v2, автоматическое версионирование
+    - `processDeleteRequest()` - поддержка soft delete для KV v2, hard delete для KV v1
+  - Автоматическое разделение секретов на KV v1 и v2 при инициализации
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Обновлена обработка операций для поддержки version и cas параметров
+  - Поддержка чтения конкретной версии через `payload.version`
+  - Поддержка CAS операций через `payload.cas`
+
+**Реалистичность**:
+- KV v1: `/v1/secret/` - простой key-value, нет версий, hard delete
+- KV v2: `/v1/secret/data/` - версионирование, metadata, CAS, soft delete
+- KV v2: поддержка чтения конкретной версии
+- KV v2: CAS операции для предотвращения race conditions
+
+**Изменённые файлы**:
+- `src/core/VaultEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. List операции ✅
+
+**Улучшение**: Реализованы List операции для просмотра секретов по path.
+
+**Реализовано**:
+- ✅ В `src/core/VaultEmulationEngine.ts`:
+  - Добавлен метод `processListRequest(path: string, token?: string)`:
+    - Возвращает список секретов по path
+    - Для KV v1: список ключей
+    - Для KV v2: список paths с metadata
+    - Проверка seal состояния и аутентификации
+    - Учет storage backend latency
+  - Обновлена метрика `listRequestsTotal`
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Добавлена обработка операции `list` в `createVaultHandler()`
+  - Поддержка через `operation: 'list'` или `operation: 'ls'`
+
+**Преимущества**:
+- Возможность просмотра списка секретов
+- Поддержка иерархической структуры paths
+- Различное поведение для KV v1 и v2
+
+**Изменённые файлы**:
+- `src/core/VaultEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 5. Storage Backend симуляция ✅
+
+**Улучшение**: Реализована симуляция Storage Backend с влиянием на латентность операций.
+
+**Реализовано**:
+- ✅ В `src/core/VaultEmulationEngine.ts`:
+  - Добавлен интерфейс `StorageBackendConfig`:
+    - Типы: `consul`, `etcd`, `file`, `s3`, `inmem`
+    - Поддержка HA (High Availability)
+  - Добавлено поле `storageBackend` в `VaultEmulationConfig`
+  - Реализован метод `getStorageLatency()`:
+    - Consul: +2ms (низкая латентность, высокая доступность)
+    - etcd: +5ms (средняя латентность)
+    - File: +10ms (высокая латентность, низкая доступность)
+    - S3: +15ms (высокая латентность, высокая доступность)
+    - Inmem: +0ms (очень низкая латентность, нет персистентности)
+  - Storage latency учитывается во всех операциях (read, write, delete, list)
+- ✅ В `src/components/config/security/SecretsVaultConfigAdvanced.tsx`:
+  - Добавлен выбор storage backend в Settings
+  - Поддержка настройки HA режима
+  - Отображение текущего storage backend в Status
+
+**Преимущества**:
+- Реалистичное влияние storage на производительность
+- Различные характеристики для разных типов storage
+- Настраиваемый storage backend через UI
+
+**Изменённые файлы**:
+- `src/core/VaultEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/security/SecretsVaultConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 6. Устранение хардкода и улучшение UI/UX ✅
+
+**Улучшение**: Убран весь хардкод из UI, добавлена валидация, улучшен пользовательский интерфейс.
+
+**Реализовано**:
+- ✅ В `src/components/config/security/SecretsVaultConfigAdvanced.tsx`:
+  - Удален хардкод дефолтных значений (строки 109-148):
+    - Удалены хардкод дефолтных secrets
+    - Удалены хардкод дефолтных engines
+    - Удалены хардкод дефолтных policies
+    - Используются только значения из конфига или пустые массивы
+  - Добавлена валидация путей секретов:
+    - Должны начинаться с engine name (например, `secret/`)
+    - Не должны содержать недопустимые символы
+    - Не должны быть дубликатами
+  - Добавлена валидация engine names:
+    - Должны заканчиваться на `/`
+    - Не должны быть дубликатами
+    - Проверка на недопустимые символы
+  - Улучшения UI:
+    - Добавлена вкладка "Status" с визуальными индикаторами
+    - Отображение состояния Vault (Sealed/Unsealed)
+    - Отображение storage backend
+    - Улучшенное отображение секретов с версиями (KV v2)
+
+**Преимущества**:
+- Нет хардкода - все значения из конфига
+- Улучшенная валидация предотвращает ошибки
+- Более понятный и информативный UI
+- Соответствие правилам курсора (безопасный доступ к данным)
+
+**Изменённые файлы**:
+- `src/components/config/security/SecretsVaultConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### Измененные файлы
+- `src/services/connection/rules/vaultRules.ts` ✅ **СОЗДАН**
+- `src/services/connection/rules/index.ts` ✅ **ОБНОВЛЕН**
+- `src/core/VaultEmulationEngine.ts` ✅ **ОБНОВЛЕН**:
+  - Добавлен Seal/Unseal механизм
+  - Добавлена поддержка KV v1/v2 различий
+  - Добавлены List операции
+  - Добавлена симуляция Storage Backend
+  - Обновлены метрики
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**:
+  - Поддержка List операций
+  - Поддержка version и cas параметров
+- `src/components/config/security/SecretsVaultConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**:
+  - Удален весь хардкод
+  - Добавлена валидация
+  - Добавлена вкладка Status
+  - Добавлен UI для Seal/Unseal
+  - Добавлен выбор Storage Backend
+
+---
+
+#### ✅ Итоговый статус реализации
+
+**Все критические и важные этапы разработки компонента Vault завершены.**
+
+**Завершено**:
+- ✅ Connection Rules для автоматической настройки компонентов
+- ✅ Seal/Unseal механизм с поддержкой Shamir's Secret Sharing
+- ✅ Различия между KV v1 и v2 (версионирование, CAS, soft delete)
+- ✅ List операции для просмотра секретов
+- ✅ Storage Backend симуляция с влиянием на латентность
+- ✅ Полное устранение хардкода (все значения из конфига)
+- ✅ Валидация путей и engine names
+- ✅ UI для управления Seal/Unseal состоянием
+
+**Не реализовано (низкий приоритет, не требуется для базовой симуляции)**:
+- ⏳ Audit Devices
+- ⏳ Dynamic Secrets (Database, AWS engines)
+- ⏳ PKI Engine операции
+
+Компонент Vault полностью функционален для базовой симуляции работы HashiCorp Vault. Все реализовано без хардкода - используются только реальные данные из конфигурации и контекста системы.
+
+---
+
 ## Версия 0.1.8z - Firewall: Connection Rules, Улучшение Stateful Inspection, Устранение хардкода, Реалистичная симуляция
 
 ### Firewall: Полная реализация симуляции с Connection Rules, улучшенным Stateful Inspection и устранением хардкода

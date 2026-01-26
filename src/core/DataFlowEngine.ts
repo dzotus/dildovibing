@@ -6167,7 +6167,8 @@ export class DataFlowEngine {
           if (opLower.includes('write') || opLower === 'create' || opLower === 'update') {
             // Write operation
             const data = payload?.data || payload?.value || {};
-            result = engine.processWriteRequest(path, data, token);
+            const cas = payload?.cas !== undefined ? Number(payload.cas) : undefined;
+            result = engine.processWriteRequest(path, data, token, cas);
           } else if (opLower.includes('delete') || opLower === 'remove') {
             // Delete operation
             result = engine.processDeleteRequest(path, token);
@@ -6181,6 +6182,9 @@ export class DataFlowEngine {
             const ciphertext = payload?.ciphertext || payload?.data || '';
             const keyName = payload?.key || payload?.keyName || 'default';
             result = engine.processDecryptRequest(ciphertext, keyName, token);
+          } else if (opLower.includes('list') || opLower === 'ls') {
+            // List operation
+            result = engine.processListRequest(path, token);
           } else if (opLower.includes('auth') || opLower === 'login' || opLower === 'authenticate') {
             // Authentication operation
             const authMethod = payload?.method || payload?.authMethod || 'token';
@@ -6191,12 +6195,14 @@ export class DataFlowEngine {
           } else {
             // Default: read operation
             const key = payload?.key;
-            result = engine.processReadRequest(path, key, token);
+            const version = payload?.version ? Number(payload.version) : undefined;
+            result = engine.processReadRequest(path, key, token, version);
           }
         } else {
           // Default: read operation
           const key = payload?.key;
-          result = engine.processReadRequest(path, key, token);
+          const version = payload?.version ? Number(payload.version) : undefined;
+          result = engine.processReadRequest(path, key, token, version);
         }
 
         message.latency = (message.latency || 0) + result.latency;
