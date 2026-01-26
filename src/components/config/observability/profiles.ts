@@ -555,13 +555,17 @@ export const OBSERVABILITY_PROFILES: Record<string, ComponentProfile> = {
     docsUrl: 'https://www.pagerduty.com/',
     defaults: {
       integrationKey: '',
-      serviceName: 'archiphoenix-service',
-      escalationPolicy: 'default',
+      serviceName: '',
+      escalationPolicy: '',
       enableAutoResolve: true,
       resolveTimeout: 300,
       enableWebhooks: false,
       webhookUrl: '',
       severityMapping: 'standard',
+      services: [],
+      escalationPolicies: [],
+      onCallUsers: [],
+      schedules: [],
     },
     sections: [
       {

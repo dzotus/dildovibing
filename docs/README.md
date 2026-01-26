@@ -161,6 +161,17 @@
   - Memory Limiting для защиты от перегрузки памяти
   - Полный набор метрик производительности и использования
 
+- **[PagerDuty](./observability/pagerduty.md)** - Платформа для управления инцидентами и планирования дежурств
+  - Events API v2 для приема событий (trigger, acknowledge, resolve)
+  - Incident Management для создания, управления и разрешения инцидентов
+  - Escalation Policies для многоуровневой эскалации с таймаутами
+  - On-Call Schedules для планирования дежурств с ротациями и ограничениями
+  - Auto-Resolve для автоматического разрешения инцидентов при отсутствии активности
+  - Webhooks для отправки уведомлений при изменениях инцидентов
+  - Severity Mapping для маппинга уровней серьезности алертов
+  - Service Management для управления сервисами с integration keys
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -365,6 +376,7 @@
 - **Loki:** [Документация Loki](./observability/loki.md)
 - **Jaeger:** [Документация Jaeger](./observability/jaeger.md)
 - **OpenTelemetry Collector:** [Документация OpenTelemetry Collector](./observability/opentelemetry-collector.md)
+- **PagerDuty:** [Документация PagerDuty](./observability/pagerduty.md)
 
 ## Обновления
 
@@ -417,3 +429,8 @@
 - [OpenTelemetry Collector Architecture](https://opentelemetry.io/docs/collector/architecture/)
 - [OpenTelemetry Collector Configuration](https://opentelemetry.io/docs/collector/configuration/)
 - [OpenTelemetry Transformation Language (OTTL)](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/pkg/ottl)
+- [Официальная документация PagerDuty](https://developer.pagerduty.com/docs)
+- [PagerDuty Events API v2](https://developer.pagerduty.com/docs/events-api-v2/overview/)
+- [PagerDuty Escalation Policies](https://support.pagerduty.com/docs/escalation-policies)
+- [PagerDuty Schedules](https://support.pagerduty.com/docs/schedules)
+- [PagerDuty Webhooks](https://developer.pagerduty.com/docs/webhooks-v2-overview/)

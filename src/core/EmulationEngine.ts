@@ -733,7 +733,12 @@ export class EmulationEngine {
           this.initializeOpenTelemetryCollectorEngine(node);
         }
         if (node.type === 'pagerduty') {
-          this.initializePagerDutyEngine(node);
+          if (!this.pagerDutyEngines.has(node.id)) {
+            this.initializePagerDutyEngine(node);
+          } else {
+            const engine = this.pagerDutyEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
         }
         if (node.type === 'keycloak') {
           try {
@@ -8392,12 +8397,20 @@ export class EmulationEngine {
     metrics.errorRate = load.errorRate;
     metrics.utilization = load.utilization;
 
+    const webhookStatus = pagerDutyEngine.getWebhookStatus();
+    
     metrics.customMetrics = {
       'incidents_total': engineMetrics.incidentsTotal,
       'incidents_active': engineMetrics.incidentsActive,
       'incidents_resolved': engineMetrics.incidentsResolved,
       'notifications_sent': engineMetrics.notificationsSent,
       'escalations_triggered': engineMetrics.escalationsTriggered,
+      'webhook_calls': engineMetrics.webhooksPerSecond * 300, // Total in observation window
+      'webhook_success_rate': webhookStatus ? webhookStatus.successRate : 0,
+      'webhook_total': webhookStatus ? webhookStatus.total : 0,
+      'webhook_success': webhookStatus ? webhookStatus.success : 0,
+      'webhook_failed': webhookStatus ? webhookStatus.failed : 0,
+      'webhook_pending': webhookStatus ? webhookStatus.pending : 0,
       'acknowledgements': engineMetrics.acknowledgements,
       'average_ack_latency_ms': engineMetrics.averageAckLatency,
       'average_resolve_latency_ms': engineMetrics.averageResolveLatency,
@@ -11576,6 +11589,39 @@ export class EmulationEngine {
     const engine = this.pagerDutyEngines.get(nodeId);
     if (!engine) return;
     engine.resolveIncidentManually(Date.now(), incidentId);
+  }
+
+  /**
+   * Get PagerDuty webhook status for a specific PagerDuty node
+   */
+  public getPagerDutyWebhookStatus(nodeId: string): {
+    total: number;
+    success: number;
+    failed: number;
+    pending: number;
+    successRate: number;
+  } | null {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return null;
+    return engine.getWebhookStatus();
+  }
+
+  /**
+   * Get PagerDuty schedules for a specific PagerDuty node
+   */
+  public getPagerDutySchedules(nodeId: string): import('./PagerDutyEmulationEngine').PagerDutySchedule[] {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return [];
+    return engine.getSchedules();
+  }
+
+  /**
+   * Get current on-call user IDs from a schedule
+   */
+  public getPagerDutyScheduleOnCallUsers(nodeId: string, scheduleId: string): string[] {
+    const engine = this.pagerDutyEngines.get(nodeId);
+    if (!engine) return [];
+    return engine.getScheduleOnCallUsers(scheduleId);
   }
 
   /**
