@@ -236,6 +236,19 @@
   - Connection Rules для автоматической настройки конфигов при подключении компонентов
   - Полный набор метрик производительности и безопасности
 
+- **[Network Firewall](./security/firewall.md)** - Сетевой файрвол для контроля и фильтрации сетевого трафика
+  - Packet Filtering для фильтрации пакетов по IP адресам, портам и протоколам
+  - Stateful Inspection для отслеживания состояний соединений (TCP, UDP, ICMP)
+  - Connection Tracking для отслеживания активных соединений с timeout для разных протоколов
+  - CIDR Support для поддержки CIDR нотации для IP адресов и сетей
+  - Rule Priority для приоритета правил с первым совпадением
+  - Default Policy для политики по умолчанию для несовпадающих пакетов (allow/deny/reject)
+  - Packet Logging для логирования всех обработанных пакетов
+  - Protocol Support для поддержки TCP, UDP, ICMP и всех протоколов
+  - Port Filtering для фильтрации по source и destination портам
+  - Connection Rules для автоматической настройки конфигов при подключении компонентов
+  - Полный набор метрик производительности и безопасности
+
 ### Протоколы и API (Protocols & APIs)
 
 В системе симуляции протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) реализованы как **атрибуты соединений**, а не как отдельные узлы на канвасе. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
@@ -412,6 +425,7 @@
 - **PagerDuty:** [Документация PagerDuty](./observability/pagerduty.md)
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 - **WAF / API Shield:** [Документация WAF / API Shield](./security/waf-api-shield.md)
+- **Network Firewall:** [Документация Network Firewall](./security/firewall.md)
 
 ## Обновления
 

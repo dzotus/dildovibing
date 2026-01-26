@@ -6344,6 +6344,26 @@ export class DataFlowEngine {
         const protocol = payload?.protocol || message.metadata?.protocol || 'tcp';
         const port = payload?.port || message.metadata?.port || payload?.destinationPort;
         const sourcePort = payload?.sourcePort || message.metadata?.sourcePort;
+        
+        // Извлекаем TCP flags для улучшенного stateful inspection
+        const tcpFlags = payload?.tcpFlags || message.metadata?.tcpFlags;
+        const extractedTcpFlags = tcpFlags ? {
+          syn: tcpFlags.syn || false,
+          ack: tcpFlags.ack || false,
+          fin: tcpFlags.fin || false,
+          rst: tcpFlags.rst || false,
+          psh: tcpFlags.psh || false,
+          urg: tcpFlags.urg || false,
+        } : undefined;
+        
+        // Извлекаем ICMP type и code для ICMP tracking
+        const icmpType = payload?.icmpType || message.metadata?.icmpType;
+        const icmpCode = payload?.icmpCode || message.metadata?.icmpCode;
+        
+        // Извлекаем размер пакета для расчета метрик
+        const bytes = payload?.bytes || message.metadata?.bytes || 
+          (typeof message.payload === 'string' ? message.payload.length : 
+           (message.payload ? JSON.stringify(message.payload).length : 0));
 
         // Обрабатываем пакет через Firewall
         const result = engine.processPacket({
@@ -6352,6 +6372,11 @@ export class DataFlowEngine {
           protocol: protocol as 'tcp' | 'udp' | 'icmp' | 'all',
           port,
           sourcePort,
+          tcpFlags: extractedTcpFlags,
+          icmpType,
+          icmpCode,
+          bytes,
+          timestamp: message.timestamp || Date.now(),
         });
 
         message.latency = (message.latency || 0) + result.latency;

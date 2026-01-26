@@ -1027,11 +1027,11 @@ export class WAFRoutingEngine {
 
     // LDAP Injection patterns
     const ldapInjectionPatterns = [
-      /(\*\)\s*\(/i,
-      /(\|\s*\(/i,
-      /(&\s*\(/i,
-      /(\)\s*\(/i,
-      /(\([^)]*\)\s*\(/i,
+      /\*\)\s*\(/i,
+      /\|\s*\(/i,
+      /&\s*\(/i,
+      /\)\s*\(/i,
+      /\([^)]*\)\s*\(/i,
     ];
 
     for (const pattern of ldapInjectionPatterns) {

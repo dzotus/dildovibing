@@ -17,6 +17,7 @@ import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
 import { createKeycloakRule } from './keycloakRules';
 import { createWAFRule } from './wafRules';
+import { createFirewallRule } from './firewallRules';
 
 /**
  * Инициализировать все правила подключения
@@ -57,5 +58,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     createKeycloakRule(discovery),
     // Security - WAF
     createWAFRule(discovery),
+    // Security - Firewall
+    createFirewallRule(discovery),
   ];
 }

@@ -1,5 +1,178 @@
 # Patch Notes
 
+## Версия 0.1.8z - Firewall: Connection Rules, Улучшение Stateful Inspection, Устранение хардкода, Реалистичная симуляция
+
+### Firewall: Полная реализация симуляции с Connection Rules, улучшенным Stateful Inspection и устранением хардкода
+
+**Критическое улучшение**: Реализованы Connection Rules для автоматической настройки Firewall при подключении компонентов, улучшен Stateful Inspection с полной поддержкой TCP states (SYN, SYN-ACK, ACK, FIN, RST), UDP и ICMP tracking, устранен весь хардкод из симуляции - используются только реальные данные из правил, подключенных компонентов и истории пакетов. Реализована реалистичная латентность обработки пакетов с учетом количества правил, stateful inspection и нагрузки. Все реализовано без хардкода - используются только реальные данные из сообщений и контекста системы.
+
+#### 1. Connection Rules для Firewall ✅
+
+**Улучшение**: Созданы правила подключения для автоматической настройки Firewall при подключении компонентов.
+
+**Реализовано**:
+- ✅ Создан `src/services/connection/rules/firewallRules.ts`:
+  - Правила для подключения через Firewall (транзитный компонент)
+  - Автоматическое создание правил allow для защищаемых компонентов
+  - Интеграция с Load Balancers, API Gateways, CDN
+  - Автоматическая настройка stateful inspection и логирования
+  - Строгая защита для баз данных (deny by default)
+  - Валидация подключений
+- ✅ Зарегистрировано в `src/services/connection/rules/index.ts`:
+  - Добавлен `createFirewallRule(discovery)` в `initializeConnectionRules`
+  - Приоритет 10 для security компонентов
+
+**Преимущества**:
+- Автоматическая настройка Firewall при подключении компонентов
+- Автоматическое создание правил для защищаемых компонентов
+- Интеграция с различными типами компонентов (Load Balancers, API Gateways, Databases)
+- Строгая защита по умолчанию для критичных компонентов
+
+**Изменённые файлы**:
+- `src/services/connection/rules/firewallRules.ts` ✅ **СОЗДАН**
+- `src/services/connection/rules/index.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Улучшение Stateful Inspection ✅
+
+**Улучшение**: Реализована полная поддержка TCP states, UDP и ICMP tracking с реалистичными timeout для разных протоколов.
+
+**Реализовано**:
+- ✅ В `src/core/FirewallRoutingEngine.ts`:
+  - Расширен `ConnectionState` interface:
+    - Полные TCP states: `new`, `syn-sent`, `syn-received`, `established`, `fin-wait-1`, `fin-wait-2`, `close-wait`, `closing`, `last-ack`, `time-wait`, `closed`
+    - UDP states: `new`, `established`
+    - ICMP states: `new`, `established`, `related`
+    - TCP flags tracking: `syn`, `ack`, `fin`, `rst`
+    - Direction tracking: `original`, `reply`
+    - Bytes tracking для расчета метрик
+  - Добавлена поддержка TCP flags в `FirewallPacket`:
+    - `tcpFlags` (syn, ack, fin, rst, psh, urg)
+    - `icmpType` и `icmpCode` для ICMP
+    - `bytes` для расчета метрик
+  - Реализован `processTCPStateful()`:
+    - Обработка TCP handshake (SYN, SYN-ACK, ACK)
+    - Обработка FIN для закрытия соединения
+    - Обработка RST для сброса соединения
+    - Отслеживание всех TCP states
+  - Реализован `processUDPStateful()`:
+    - UDP session tracking (30 секунд timeout)
+    - Обновление существующих UDP сессий
+  - Реализован `processICMPStateful()`:
+    - ICMP echo request/reply tracking
+    - ICMP error messages для связанных TCP/UDP соединений
+  - Улучшен `cleanupConnections()`:
+    - Разные timeout для разных протоколов:
+      - TCP established: 1 hour
+      - TCP time-wait: 2 minutes
+      - TCP new: 2 minutes
+      - UDP: 30 seconds
+      - ICMP: 30 seconds
+    - Ограничение размера таблицы соединений (MAX_CONNECTIONS)
+    - Приоритетная очистка старых соединений
+
+**Преимущества**:
+- Реалистичное отслеживание TCP соединений с полным жизненным циклом
+- Поддержка UDP и ICMP tracking
+- Оптимизированные timeout для разных протоколов
+- Эффективное управление памятью
+
+**Изменённые файлы**:
+- `src/core/FirewallRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. Устранение хардкода ✅
+
+**Улучшение**: Убраны все функции генерации случайных данных, используются только реальные данные из правил, подключенных компонентов и истории пакетов.
+
+**Реализовано**:
+- ✅ В `src/core/FirewallEmulationEngine.ts`:
+  - Удален метод `generateRandomPacket()` с генерацией случайных IP адресов
+  - Реализован новый `generateRandomPacket()` с приоритетами:
+    1. Использование реальных пакетов из истории (`recentPackets`)
+    2. Использование реальных IP из правил Firewall
+    3. Использование реальных хостов из подключенных компонентов
+    4. Fallback на дефолтные значения (не случайные)
+  - Добавлен метод `hostnameToIP()` для преобразования hostname в IP (стабильное преобразование на основе хеша)
+  - Добавлено сохранение реальных пакетов в `recentPackets` для использования в симуляции
+  - Добавлен метод `updateNodesAndConnections()` для обновления nodes и connections
+  - Обновлен `initializeConfig()` для приема nodes и connections
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Обновлен `initializeFirewallEngine()` для передачи nodes и connections
+  - Обновлен `updateNodesAndConnections()` для обновления Firewall engines
+  - Обновлен вызов `initializeConfig()` для существующих engines
+
+**Преимущества**:
+- Полное отсутствие хардкода - все данные из реального контекста системы
+- Реалистичная симуляция на основе реальных подключений
+- Стабильные IP адреса для компонентов (на основе hostname)
+
+**Изменённые файлы**:
+- `src/core/FirewallEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. Реалистичная симуляция пакетов ✅
+
+**Улучшение**: Реализована реалистичная латентность обработки пакетов с учетом количества правил, stateful inspection и нагрузки.
+
+**Реализовано**:
+- ✅ В `src/core/FirewallRoutingEngine.ts`:
+  - Реалистичная базовая латентность: 0.5ms (software firewall)
+  - Увеличение латентности при большом количестве правил: до 2ms
+  - Увеличение латентности при stateful inspection: +0.3ms
+  - Увеличение латентности при высокой нагрузке: до 1ms (на основе активных соединений)
+  - Латентность зависит от позиции правила (раньше найдено = быстрее)
+  - Established connections обрабатываются быстрее (0.5x латентность)
+- ✅ Улучшен расчет PPS (packets per second):
+  - Используются реальные временные метки пакетов
+  - Fallback на симулированную скорость только если нет реальных пакетов
+- ✅ Улучшена интеграция с DataFlowEngine:
+  - Поддержка TCP flags в извлечении информации о пакетах
+  - Поддержка ICMP type и code
+  - Поддержка bytes для расчета метрик
+
+**Преимущества**:
+- Реалистичная латентность соответствует реальным файрволам
+- Учет всех факторов влияющих на производительность
+- Точный расчет метрик на основе реальных данных
+
+**Изменённые файлы**:
+- `src/core/FirewallRoutingEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/FirewallEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 5. Интеграция с системой ✅
+
+**Улучшение**: Улучшена интеграция Firewall с EmulationEngine и DataFlowEngine.
+
+**Реализовано**:
+- ✅ Обновление nodes и connections в Firewall engines при изменении диаграммы
+- ✅ Использование ServiceDiscovery для получения хостов и портов компонентов
+- ✅ Автоматическое обновление конфигурации при изменении подключений
+- ✅ В `src/core/DataFlowEngine.ts` улучшен `createFirewallHandler()`:
+  - Извлечение TCP flags (syn, ack, fin, rst, psh, urg) из payload и metadata для улучшенного stateful inspection
+  - Извлечение ICMP type и code из payload и metadata для ICMP tracking
+  - Извлечение bytes из сообщений для расчета метрик
+  - Извлечение timestamp из сообщений
+  - Все данные передаются в `FirewallRoutingEngine` для полной поддержки stateful inspection
+
+**Преимущества**:
+- Полная поддержка TCP flags для реалистичного stateful inspection
+- Поддержка ICMP type/code для ICMP tracking
+- Точный расчет метрик на основе размера пакетов
+- Использование реальных временных меток
+
+**Изменённые файлы**:
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
 ## Версия 0.1.8y - WAF/API Shield: Устранение хардкода, Расширение OWASP правил, API Shield функции, Connection Rules, No Hardcode
 
 ### WAF/API Shield: Реалистичная симуляция WAF с полной поддержкой API Shield функций

@@ -11,7 +11,6 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useState, useEffect } from 'react';
 import { 
@@ -90,9 +89,9 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
   const rules = config.rules || [];
   const logs = config.logs || [];
 
-  // State for dialogs and editing
+  // State for editing
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
-  const [showCreateRule, setShowCreateRule] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
   const [ruleForm, setRuleForm] = useState<Partial<Rule>>({
     name: '',
     action: 'allow',
@@ -289,13 +288,27 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
     });
     setFormErrors({});
     setEditingRuleId(null);
-    setShowCreateRule(false);
+    setShowCreateForm(false);
   };
 
   const handleEditRule = (rule: Rule) => {
     setRuleForm({ ...rule });
     setEditingRuleId(rule.id);
     setFormErrors({});
+    setShowCreateForm(true);
+  };
+
+  const handleCancelForm = () => {
+    setRuleForm({
+      name: '',
+      action: 'allow',
+      protocol: 'tcp',
+      enabled: true,
+      priority: 5,
+    });
+    setFormErrors({});
+    setEditingRuleId(null);
+    setShowCreateForm(false);
   };
 
   const handleDeleteRule = (id: string) => {
@@ -478,252 +491,245 @@ export function FirewallConfigAdvanced({ componentId }: FirewallConfigProps) {
                         className="pl-8 w-64"
                       />
                     </div>
-                    <Dialog open={showCreateRule} onOpenChange={setShowCreateRule}>
-                      <DialogTrigger asChild>
-                        <Button onClick={() => {
-                          setRuleForm({
-                            name: '',
-                            action: 'allow',
-                            protocol: 'tcp',
-                            enabled: true,
-                            priority: 5,
-                          });
-                          setFormErrors({});
-                          setEditingRuleId(null);
-                        }}>
-                          <Plus className="h-4 w-4 mr-2" />
-                          Create Rule
-                        </Button>
-                      </DialogTrigger>
-                      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                        <DialogHeader>
-                          <DialogTitle>{editingRuleId ? 'Edit Rule' : 'Create New Rule'}</DialogTitle>
-                          <DialogDescription>
-                            Configure firewall rule for network traffic filtering
-                          </DialogDescription>
-                        </DialogHeader>
-                        <div className="space-y-4 py-4">
-                          {Object.keys(formErrors).length > 0 && (
-                            <Alert variant="destructive">
-                              <AlertTriangle className="h-4 w-4" />
-                              <AlertDescription>
-                                {Object.values(formErrors).filter(Boolean).join(', ')}
-                              </AlertDescription>
-                            </Alert>
-                          )}
-
-                          <div className="space-y-2">
-                            <Label htmlFor="rule-name">Rule Name *</Label>
-                            <Input
-                              id="rule-name"
-                              value={ruleForm.name || ''}
-                              onChange={(e) => {
-                                setRuleForm({ ...ruleForm, name: e.target.value });
-                                if (formErrors.name) {
-                                  setFormErrors({ ...formErrors, name: '' });
-                                }
-                              }}
-                              placeholder="Allow HTTP Traffic"
-                              className={formErrors.name ? 'border-destructive' : ''}
-                            />
-                            {formErrors.name && (
-                              <p className="text-xs text-destructive">{formErrors.name}</p>
-                            )}
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="rule-action">Action *</Label>
-                              <Select
-                                value={ruleForm.action}
-                                onValueChange={(value: 'allow' | 'deny' | 'reject') => {
-                                  setRuleForm({ ...ruleForm, action: value });
-                                }}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="allow">Allow</SelectItem>
-                                  <SelectItem value="deny">Deny</SelectItem>
-                                  <SelectItem value="reject">Reject</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-
-                            <div className="space-y-2">
-                              <Label htmlFor="rule-protocol">Protocol *</Label>
-                              <Select
-                                value={ruleForm.protocol}
-                                onValueChange={(value: 'tcp' | 'udp' | 'icmp' | 'all') => {
-                                  setRuleForm({ ...ruleForm, protocol: value });
-                                }}
-                              >
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="tcp">TCP</SelectItem>
-                                  <SelectItem value="udp">UDP</SelectItem>
-                                  <SelectItem value="icmp">ICMP</SelectItem>
-                                  <SelectItem value="all">All</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="rule-source">Source IP/CIDR</Label>
-                              <Input
-                                id="rule-source"
-                                value={ruleForm.source || ''}
-                                onChange={(e) => {
-                                  setRuleForm({ ...ruleForm, source: e.target.value });
-                                  if (formErrors.source) {
-                                    setFormErrors({ ...formErrors, source: '' });
-                                  }
-                                }}
-                                placeholder="192.168.1.0/24"
-                                className={formErrors.source ? 'border-destructive' : ''}
-                              />
-                              {formErrors.source && (
-                                <p className="text-xs text-destructive">{formErrors.source}</p>
-                              )}
-                            </div>
-
-                            <div className="space-y-2">
-                              <Label htmlFor="rule-destination">Destination IP/CIDR</Label>
-                              <Input
-                                id="rule-destination"
-                                value={ruleForm.destination || ''}
-                                onChange={(e) => {
-                                  setRuleForm({ ...ruleForm, destination: e.target.value });
-                                  if (formErrors.destination) {
-                                    setFormErrors({ ...formErrors, destination: '' });
-                                  }
-                                }}
-                                placeholder="10.0.0.0/8"
-                                className={formErrors.destination ? 'border-destructive' : ''}
-                              />
-                              {formErrors.destination && (
-                                <p className="text-xs text-destructive">{formErrors.destination}</p>
-                              )}
-                            </div>
-                          </div>
-
-                          {(ruleForm.protocol === 'tcp' || ruleForm.protocol === 'udp') && (
-                            <div className="grid grid-cols-2 gap-4">
-                              <div className="space-y-2">
-                                <Label htmlFor="rule-port">Destination Port</Label>
-                                <Input
-                                  id="rule-port"
-                                  type="number"
-                                  min="1"
-                                  max="65535"
-                                  value={ruleForm.port || ''}
-                                  onChange={(e) => {
-                                    const port = e.target.value ? parseInt(e.target.value) : undefined;
-                                    setRuleForm({ ...ruleForm, port });
-                                    if (formErrors.port) {
-                                      setFormErrors({ ...formErrors, port: '' });
-                                    }
-                                  }}
-                                  placeholder="80"
-                                  className={formErrors.port ? 'border-destructive' : ''}
-                                />
-                                {formErrors.port && (
-                                  <p className="text-xs text-destructive">{formErrors.port}</p>
-                                )}
-                              </div>
-
-                              <div className="space-y-2">
-                                <Label htmlFor="rule-source-port">Source Port</Label>
-                                <Input
-                                  id="rule-source-port"
-                                  type="number"
-                                  min="1"
-                                  max="65535"
-                                  value={ruleForm.sourcePort || ''}
-                                  onChange={(e) => {
-                                    const sourcePort = e.target.value ? parseInt(e.target.value) : undefined;
-                                    setRuleForm({ ...ruleForm, sourcePort });
-                                    if (formErrors.sourcePort) {
-                                      setFormErrors({ ...formErrors, sourcePort: '' });
-                                    }
-                                  }}
-                                  placeholder="1024"
-                                  className={formErrors.sourcePort ? 'border-destructive' : ''}
-                                />
-                                {formErrors.sourcePort && (
-                                  <p className="text-xs text-destructive">{formErrors.sourcePort}</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <Label htmlFor="rule-priority">Priority (1-1000) *</Label>
-                              <Input
-                                id="rule-priority"
-                                type="number"
-                                min="1"
-                                max="1000"
-                                value={ruleForm.priority || 5}
-                                onChange={(e) => {
-                                  const priority = parseInt(e.target.value) || 5;
-                                  setRuleForm({ ...ruleForm, priority });
-                                  if (formErrors.priority) {
-                                    setFormErrors({ ...formErrors, priority: '' });
-                                  }
-                                }}
-                                className={formErrors.priority ? 'border-destructive' : ''}
-                              />
-                              {formErrors.priority && (
-                                <p className="text-xs text-destructive">{formErrors.priority}</p>
-                              )}
-                              <p className="text-xs text-muted-foreground">Higher priority = evaluated first</p>
-                            </div>
-
-                            <div className="flex items-center space-x-2 pt-8">
-                              <Switch
-                                id="rule-enabled"
-                                checked={ruleForm.enabled ?? true}
-                                onCheckedChange={(checked) => {
-                                  setRuleForm({ ...ruleForm, enabled: checked });
-                                }}
-                              />
-                              <Label htmlFor="rule-enabled">Enabled</Label>
-                            </div>
-                          </div>
-                        </div>
-                        <DialogFooter>
-                          <Button variant="outline" onClick={() => {
-                            setShowCreateRule(false);
-                            setRuleForm({
-                              name: '',
-                              action: 'allow',
-                              protocol: 'tcp',
-                              enabled: true,
-                              priority: 5,
-                            });
-                            setFormErrors({});
-                            setEditingRuleId(null);
-                          }}>
-                            Cancel
-                          </Button>
-                          <Button onClick={handleSaveRule}>
-                            {editingRuleId ? 'Update Rule' : 'Create Rule'}
-                          </Button>
-                        </DialogFooter>
-                      </DialogContent>
-                    </Dialog>
+                    {!showCreateForm && (
+                      <Button onClick={() => {
+                        setRuleForm({
+                          name: '',
+                          action: 'allow',
+                          protocol: 'tcp',
+                          enabled: true,
+                          priority: 5,
+                        });
+                        setFormErrors({});
+                        setEditingRuleId(null);
+                        setShowCreateForm(true);
+                      }}>
+                        <Plus className="h-4 w-4 mr-2" />
+                        Create Rule
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
+                  {showCreateForm && (
+                    <Card className="border-l-4 border-l-blue-500 bg-card">
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between">
+                          <CardTitle>{editingRuleId ? 'Edit Rule' : 'Create New Rule'}</CardTitle>
+                          <Button variant="ghost" size="icon" onClick={handleCancelForm}>
+                            <XCircle className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        {Object.keys(formErrors).length > 0 && (
+                          <Alert variant="destructive">
+                            <AlertTriangle className="h-4 w-4" />
+                            <AlertDescription>
+                              {Object.values(formErrors).filter(Boolean).join(', ')}
+                            </AlertDescription>
+                          </Alert>
+                        )}
+
+                        <div className="space-y-2">
+                          <Label htmlFor="rule-name">Rule Name *</Label>
+                          <Input
+                            id="rule-name"
+                            value={ruleForm.name || ''}
+                            onChange={(e) => {
+                              setRuleForm({ ...ruleForm, name: e.target.value });
+                              if (formErrors.name) {
+                                setFormErrors({ ...formErrors, name: '' });
+                              }
+                            }}
+                            placeholder="Allow HTTP Traffic"
+                            className={formErrors.name ? 'border-destructive' : ''}
+                          />
+                          {formErrors.name && (
+                            <p className="text-xs text-destructive">{formErrors.name}</p>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="rule-action">Action *</Label>
+                            <Select
+                              value={ruleForm.action}
+                              onValueChange={(value: 'allow' | 'deny' | 'reject') => {
+                                setRuleForm({ ...ruleForm, action: value });
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="allow">Allow</SelectItem>
+                                <SelectItem value="deny">Deny</SelectItem>
+                                <SelectItem value="reject">Reject</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="rule-protocol">Protocol *</Label>
+                            <Select
+                              value={ruleForm.protocol}
+                              onValueChange={(value: 'tcp' | 'udp' | 'icmp' | 'all') => {
+                                setRuleForm({ ...ruleForm, protocol: value });
+                              }}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="tcp">TCP</SelectItem>
+                                <SelectItem value="udp">UDP</SelectItem>
+                                <SelectItem value="icmp">ICMP</SelectItem>
+                                <SelectItem value="all">All</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="rule-source">Source IP/CIDR</Label>
+                            <Input
+                              id="rule-source"
+                              value={ruleForm.source || ''}
+                              onChange={(e) => {
+                                setRuleForm({ ...ruleForm, source: e.target.value });
+                                if (formErrors.source) {
+                                  setFormErrors({ ...formErrors, source: '' });
+                                }
+                              }}
+                              placeholder="192.168.1.0/24"
+                              className={formErrors.source ? 'border-destructive' : ''}
+                            />
+                            {formErrors.source && (
+                              <p className="text-xs text-destructive">{formErrors.source}</p>
+                            )}
+                          </div>
+
+                          <div className="space-y-2">
+                            <Label htmlFor="rule-destination">Destination IP/CIDR</Label>
+                            <Input
+                              id="rule-destination"
+                              value={ruleForm.destination || ''}
+                              onChange={(e) => {
+                                setRuleForm({ ...ruleForm, destination: e.target.value });
+                                if (formErrors.destination) {
+                                  setFormErrors({ ...formErrors, destination: '' });
+                                }
+                              }}
+                              placeholder="10.0.0.0/8"
+                              className={formErrors.destination ? 'border-destructive' : ''}
+                            />
+                            {formErrors.destination && (
+                              <p className="text-xs text-destructive">{formErrors.destination}</p>
+                            )}
+                          </div>
+                        </div>
+
+                        {(ruleForm.protocol === 'tcp' || ruleForm.protocol === 'udp') && (
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label htmlFor="rule-port">Destination Port</Label>
+                              <Input
+                                id="rule-port"
+                                type="number"
+                                min="1"
+                                max="65535"
+                                value={ruleForm.port || ''}
+                                onChange={(e) => {
+                                  const port = e.target.value ? parseInt(e.target.value) : undefined;
+                                  setRuleForm({ ...ruleForm, port });
+                                  if (formErrors.port) {
+                                    setFormErrors({ ...formErrors, port: '' });
+                                  }
+                                }}
+                                placeholder="80"
+                                className={formErrors.port ? 'border-destructive' : ''}
+                              />
+                              {formErrors.port && (
+                                <p className="text-xs text-destructive">{formErrors.port}</p>
+                              )}
+                            </div>
+
+                            <div className="space-y-2">
+                              <Label htmlFor="rule-source-port">Source Port</Label>
+                              <Input
+                                id="rule-source-port"
+                                type="number"
+                                min="1"
+                                max="65535"
+                                value={ruleForm.sourcePort || ''}
+                                onChange={(e) => {
+                                  const sourcePort = e.target.value ? parseInt(e.target.value) : undefined;
+                                  setRuleForm({ ...ruleForm, sourcePort });
+                                  if (formErrors.sourcePort) {
+                                    setFormErrors({ ...formErrors, sourcePort: '' });
+                                  }
+                                }}
+                                placeholder="1024"
+                                className={formErrors.sourcePort ? 'border-destructive' : ''}
+                              />
+                              {formErrors.sourcePort && (
+                                <p className="text-xs text-destructive">{formErrors.sourcePort}</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label htmlFor="rule-priority">Priority (1-1000) *</Label>
+                            <Input
+                              id="rule-priority"
+                              type="number"
+                              min="1"
+                              max="1000"
+                              value={ruleForm.priority || 5}
+                              onChange={(e) => {
+                                const priority = parseInt(e.target.value) || 5;
+                                setRuleForm({ ...ruleForm, priority });
+                                if (formErrors.priority) {
+                                  setFormErrors({ ...formErrors, priority: '' });
+                                }
+                              }}
+                              className={formErrors.priority ? 'border-destructive' : ''}
+                            />
+                            {formErrors.priority && (
+                              <p className="text-xs text-destructive">{formErrors.priority}</p>
+                            )}
+                            <p className="text-xs text-muted-foreground">Higher priority = evaluated first</p>
+                          </div>
+
+                          <div className="flex items-center space-x-2 pt-8">
+                            <Switch
+                              id="rule-enabled"
+                              checked={ruleForm.enabled ?? true}
+                              onCheckedChange={(checked) => {
+                                setRuleForm({ ...ruleForm, enabled: checked });
+                              }}
+                            />
+                            <Label htmlFor="rule-enabled">Enabled</Label>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-4">
+                          <Button variant="outline" onClick={handleCancelForm}>
+                            Cancel
+                          </Button>
+                          <Button onClick={handleSaveRule}>
+                            {editingRuleId ? 'Update Rule' : 'Create Rule'}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
                   {filteredRules.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       {searchQuery ? 'No rules match your search' : 'No rules configured. Create your first rule to get started.'}

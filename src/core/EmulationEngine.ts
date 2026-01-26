@@ -929,6 +929,11 @@ export class EmulationEngine {
       }
     }
     
+    // Обновляем nodes и connections в Firewall engines
+    for (const firewallEngine of this.firewallEngines.values()) {
+      firewallEngine.updateNodesAndConnections(nodes, connections);
+    }
+    
     // Update metrics for new nodes
     for (const node of nodes) {
       if (!this.metrics.has(node.id)) {
@@ -1148,7 +1153,7 @@ export class EmulationEngine {
             this.initializeFirewallEngine(node);
           } else {
             const engine = this.firewallEngines.get(node.id)!;
-            engine.initializeConfig(node); // FirewallEmulationEngine uses initializeConfig for updates
+            engine.initializeConfig(node, this.nodes, this.connections); // FirewallEmulationEngine uses initializeConfig for updates
           }
         } catch (error) {
           errorCollector.addError(error as Error, {
@@ -10160,7 +10165,7 @@ export class EmulationEngine {
    */
   private initializeFirewallEngine(node: CanvasNode): void {
     const engine = new FirewallEmulationEngine();
-    engine.initializeConfig(node);
+    engine.initializeConfig(node, this.nodes, this.connections);
     this.firewallEngines.set(node.id, engine);
   }
 
