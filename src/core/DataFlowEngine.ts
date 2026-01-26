@@ -5154,6 +5154,7 @@ export class DataFlowEngine {
   /**
    * Create handler for Keycloak (IAM)
    * Обрабатывает auth-запросы и делегирует расчёт нагрузки KeycloakEmulationEngine.
+   * Поддерживает OAuth2/OIDC endpoints: /auth, /token, /userinfo, /introspect, /logout
    */
   private createKeycloakHandler(): ComponentDataHandler {
     return {
@@ -5168,14 +5169,51 @@ export class DataFlowEngine {
         }
 
         const payload = (message.payload || {}) as any;
+        const metadata = message.metadata || {};
+
+        // Определяем endpoint по path в metadata или payload
+        const path: string | undefined = metadata.path || payload.path || (metadata as any)?.endpoint;
+        let endpoint: 'auth' | 'token' | 'userinfo' | 'introspect' | 'logout' | 'unknown' = 'unknown';
+
+        if (path) {
+          const pathLower = path.toLowerCase();
+          if (pathLower.includes('/auth') || pathLower.includes('authorize')) {
+            endpoint = 'auth';
+          } else if (pathLower.includes('/token')) {
+            endpoint = 'token';
+          } else if (pathLower.includes('/userinfo')) {
+            endpoint = 'userinfo';
+          } else if (pathLower.includes('/introspect')) {
+            endpoint = 'introspect';
+          } else if (pathLower.includes('/logout')) {
+            endpoint = 'logout';
+          }
+        }
+
+        // Определяем grant_type из payload (поддерживаем form-data и JSON)
+        const grantType = payload.grant_type || payload.grantType || 
+                         (metadata as any)?.grant_type || (metadata as any)?.grantType;
 
         // Определяем тип auth-запроса
         const operation: string | undefined =
-          message.metadata?.operation || payload.operation || payload.action || payload.grant_type;
+          message.metadata?.operation || payload.operation || payload.action || grantType;
 
         let type: 'login' | 'refresh' | 'introspect' | 'userinfo' = 'login';
 
-        if (typeof operation === 'string') {
+        // Определяем тип по endpoint или grant_type
+        if (endpoint === 'userinfo') {
+          type = 'userinfo';
+        } else if (endpoint === 'introspect') {
+          type = 'introspect';
+        } else if (endpoint === 'token' && grantType) {
+          // Для /token endpoint определяем по grant_type
+          const grantTypeLower = String(grantType).toLowerCase();
+          if (grantTypeLower === 'refresh_token' || grantTypeLower === 'refresh') {
+            type = 'refresh';
+          } else {
+            type = 'login';
+          }
+        } else if (typeof operation === 'string') {
           const opLower = operation.toLowerCase();
           if (opLower.includes('refresh') || opLower === 'refresh_token') {
             type = 'refresh';
@@ -5188,20 +5226,50 @@ export class DataFlowEngine {
           }
         }
 
+        // Извлекаем параметры запроса (поддерживаем разные форматы)
         const clientId: string | undefined =
-          payload.clientId || payload.client_id || (message.metadata as any)?.clientId;
+          payload.clientId || payload.client_id || (metadata as any)?.clientId || (metadata as any)?.client_id;
+
+        const clientSecret: string | undefined =
+          payload.clientSecret || payload.client_secret || (metadata as any)?.clientSecret || (metadata as any)?.client_secret;
 
         const username: string | undefined =
-          payload.username || payload.user || (message.metadata as any)?.username;
+          payload.username || payload.user || (metadata as any)?.username;
+
+        const password: string | undefined =
+          payload.password || (metadata as any)?.password;
+
+        const redirectUri: string | undefined =
+          payload.redirectUri || payload.redirect_uri || (metadata as any)?.redirectUri || (metadata as any)?.redirect_uri;
+
+        const code: string | undefined =
+          payload.code || (metadata as any)?.code;
+
+        const refreshToken: string | undefined =
+          payload.refreshToken || payload.refresh_token || (metadata as any)?.refreshToken || (metadata as any)?.refresh_token;
+
+        const scope: string | string[] | undefined =
+          payload.scope || (metadata as any)?.scope;
 
         const subject: string | undefined =
-          payload.sub || payload.subject || (message.metadata as any)?.subject || username;
+          payload.sub || payload.subject || (metadata as any)?.subject || username;
 
+        // Обрабатываем запрос
         const result = engine.processAuthRequest(type, {
           clientId,
           username,
           subject,
-          grantType: typeof operation === 'string' ? operation : undefined,
+          grantType: grantType as any,
+          grant_type: grantType as any,
+          redirectUri,
+          redirect_uri: redirectUri,
+          code,
+          password,
+          refreshToken,
+          refresh_token: refreshToken,
+          scope: Array.isArray(scope) ? scope : typeof scope === 'string' ? scope.split(' ').filter(s => s.length > 0) : undefined,
+          clientSecret,
+          client_secret: clientSecret,
         });
 
         message.latency = result.latency;
@@ -5221,7 +5289,18 @@ export class DataFlowEngine {
               subject: result.subject,
               tokenType: result.tokenType,
               expiresIn: result.expiresIn,
+              accessToken: result.accessToken,
+              refreshToken: result.refreshToken,
+              idToken: result.idToken,
             },
+            // OAuth2 response format
+            ...(result.accessToken ? {
+              access_token: result.accessToken,
+              token_type: 'Bearer',
+              expires_in: result.expiresIn,
+              ...(result.refreshToken ? { refresh_token: result.refreshToken } : {}),
+              ...(result.idToken ? { id_token: result.idToken } : {}),
+            } : {}),
           };
 
           // Обновляем metadata для дальнейших хопов (трассировка auth-контекста)
@@ -5231,13 +5310,14 @@ export class DataFlowEngine {
             authClientId: result.clientId,
             authSubject: result.subject,
             authResult: 'success',
+            endpoint,
           };
         }
 
         return message;
       },
 
-      getSupportedFormats: () => ['json', 'text'],
+      getSupportedFormats: () => ['json', 'text', 'form-data'],
     };
   }
 

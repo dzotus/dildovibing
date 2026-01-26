@@ -15,6 +15,7 @@ import { createOTelCollectorReceiverRule, createOTelCollectorExporterRule } from
 import { createMuleSoftTargetRule, createMuleSoftSourceRule } from './mulesoftRules';
 import { createGraphQLGatewayRule } from './graphqlGatewayRules';
 import { createBFFRule } from './bffRules';
+import { createKeycloakRule } from './keycloakRules';
 
 /**
  * Инициализировать все правила подключения
@@ -50,5 +51,8 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     // Integration - MuleSoft
     createMuleSoftTargetRule(discovery),
     createMuleSoftSourceRule(discovery),
+    
+    // Security - Keycloak
+    createKeycloakRule(discovery),
   ];
 }

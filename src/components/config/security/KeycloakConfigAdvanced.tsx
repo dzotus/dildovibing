@@ -317,16 +317,45 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
   const [newPassword, setNewPassword] = useState<Record<string, string>>({});
   const [temporaryPassword, setTemporaryPassword] = useState<Record<string, boolean>>({});
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
+  
+  // Real-time metrics from emulation engine
+  const [realMetrics, setRealMetrics] = useState<{
+    loginRequestsTotal: number;
+    loginErrorsTotal: number;
+    tokenRefreshTotal: number;
+    introspectionRequestsTotal: number;
+    userInfoRequestsTotal: number;
+    sessionsCreatedTotal: number;
+    sessionsExpiredTotal: number;
+    activeSessions: number;
+    emailsSentTotal: number;
+    emailErrorsTotal: number;
+    eventsTotal: number;
+    adminEventsTotal: number;
+    requestsPerSecond: number;
+    averageLatency: number;
+    errorRate: number;
+    authSuccessRate: number;
+  } | null>(null);
+  
+  // Validation errors
+  const [validationErrors, setValidationErrors] = useState<Record<string, string>>({});
 
-  // Get active sessions from emulation engine
+  // Get metrics from emulation engine in real-time
   useEffect(() => {
-    const updateSessions = () => {
+    const updateMetrics = () => {
       try {
         const keycloakEngine = emulationEngine.getKeycloakEmulationEngine(node.id);
         if (keycloakEngine) {
           const metrics = keycloakEngine.getMetrics();
-          if (metrics && typeof metrics.activeSessions === 'number') {
-            setActiveSessions(metrics.activeSessions);
+          const load = keycloakEngine.calculateLoad();
+          
+          if (metrics) {
+            setRealMetrics({
+              ...metrics,
+              ...load,
+            });
+            setActiveSessions(metrics.activeSessions || 0);
             return;
           }
         }
@@ -334,13 +363,68 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
         // Fallback to heuristic
       }
       // Heuristic: enabled users * 2 sessions per user
-      setActiveSessions(users.filter(u => u.enabled).length * 2);
+      const heuristicSessions = users.filter(u => u.enabled).length * 2;
+      setActiveSessions(heuristicSessions);
     };
 
-    updateSessions();
-    const interval = setInterval(updateSessions, 2000);
+    updateMetrics();
+    const interval = setInterval(updateMetrics, 1000); // Update every second
     return () => clearInterval(interval);
   }, [node.id, users]);
+
+  // Validation functions
+  const validateRedirectUri = (uri: string): string | null => {
+    if (!uri || !uri.trim()) return null;
+    
+    // Allow wildcards
+    const uriPattern = /^(https?:\/\/)?([\w\-\.]+|\*)(:\d+)?(\/.*)?(\*)?$/;
+    if (!uriPattern.test(uri.trim())) {
+      return 'Invalid redirect URI format. Use http:// or https:// with optional wildcards';
+    }
+    
+    return null;
+  };
+
+  const validateEmail = (email: string): string | null => {
+    if (!email || !email.trim()) return null;
+    
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailPattern.test(email.trim())) {
+      return 'Invalid email format';
+    }
+    
+    return null;
+  };
+
+  const validateClientScope = (scopeId: string, clientScopes: ClientScope[]): string | null => {
+    if (!scopeId || !scopeId.trim()) return null;
+    
+    const scopeExists = clientScopes.some(s => s.id === scopeId || s.name === scopeId);
+    if (!scopeExists) {
+      return `Client scope "${scopeId}" does not exist`;
+    }
+    
+    return null;
+  };
+
+  const validateSmtpHost = (host: string): string | null => {
+    if (!host || !host.trim()) return null;
+    
+    const hostPattern = /^([\w\-\.]+|\[[\w:\.]+\])$/;
+    if (!hostPattern.test(host.trim())) {
+      return 'Invalid SMTP host format';
+    }
+    
+    return null;
+  };
+
+  const validateSmtpPort = (port: number): string | null => {
+    if (port < 1 || port > 65535) {
+      return 'SMTP port must be between 1 and 65535';
+    }
+    
+    return null;
+  };
 
   const updateConfig = (updates: Partial<KeycloakConfig>) => {
     const newConfig = { ...config, ...updates };
@@ -690,6 +774,87 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
           </Card>
         </div>
 
+        {/* Real-time Metrics */}
+        {realMetrics && (
+          <Card className="border-l-4 border-l-blue-500">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Activity className="h-5 w-5" />
+                Real-time Metrics
+              </CardTitle>
+              <CardDescription>Live performance metrics from Keycloak simulation</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Requests Per Second</Label>
+                  <div className="text-3xl font-bold">{realMetrics.requestsPerSecond.toFixed(2)}</div>
+                  <p className="text-sm text-muted-foreground">Current throughput</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Average Latency</Label>
+                  <div className="text-3xl font-bold">{Math.round(realMetrics.averageLatency)}ms</div>
+                  <p className="text-sm text-muted-foreground">Response time</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Error Rate</Label>
+                  <div className="text-3xl font-bold">{(realMetrics.errorRate * 100).toFixed(2)}%</div>
+                  <p className="text-sm text-muted-foreground">Failed requests</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Auth Success Rate</Label>
+                  <div className="text-3xl font-bold">{(realMetrics.authSuccessRate * 100).toFixed(2)}%</div>
+                  <p className="text-sm text-muted-foreground">Successful authentications</p>
+                </div>
+              </div>
+              <Separator />
+              <div className="grid grid-cols-4 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-sm">Login Requests</Label>
+                  <div className="text-xl font-bold">{realMetrics.loginRequestsTotal}</div>
+                  <p className="text-xs text-muted-foreground">{realMetrics.loginErrorsTotal} errors</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Token Refresh</Label>
+                  <div className="text-xl font-bold">{realMetrics.tokenRefreshTotal}</div>
+                  <p className="text-xs text-muted-foreground">Refresh operations</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Sessions</Label>
+                  <div className="text-xl font-bold">{realMetrics.activeSessions}</div>
+                  <p className="text-xs text-muted-foreground">{realMetrics.sessionsCreatedTotal} created, {realMetrics.sessionsExpiredTotal} expired</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm">Events</Label>
+                  <div className="text-xl font-bold">{realMetrics.eventsTotal}</div>
+                  <p className="text-xs text-muted-foreground">{realMetrics.adminEventsTotal} admin events</p>
+                </div>
+              </div>
+              {config.email && (
+                <>
+                  <Separator />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-sm">Emails Sent</Label>
+                      <div className="text-xl font-bold">{realMetrics.emailsSentTotal}</div>
+                      <p className="text-xs text-muted-foreground">{realMetrics.emailErrorsTotal} errors</p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label className="text-sm">Email Error Rate</Label>
+                      <div className="text-xl font-bold">
+                        {realMetrics.emailsSentTotal > 0 
+                          ? ((realMetrics.emailErrorsTotal / realMetrics.emailsSentTotal) * 100).toFixed(2)
+                          : '0.00'}%
+                      </div>
+                      <p className="text-xs text-muted-foreground">SMTP errors</p>
+                    </div>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="realm" className="w-full">
           <TabsList className="grid w-full grid-cols-9">
@@ -800,11 +965,29 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
                     <Input
                       id="smtp-host"
                       value={config.email?.host || ''}
-                      onChange={(e) => updateConfig({ 
-                        email: { ...config.email, host: e.target.value } 
-                      })}
+                      onChange={(e) => {
+                        const host = e.target.value;
+                        const error = validateSmtpHost(host);
+                        if (error) {
+                          setValidationErrors({
+                            ...validationErrors,
+                            'smtp-host': error,
+                          });
+                        } else {
+                          const newErrors = { ...validationErrors };
+                          delete newErrors['smtp-host'];
+                          setValidationErrors(newErrors);
+                        }
+                        updateConfig({ 
+                          email: { ...config.email, host } 
+                        });
+                      }}
                       placeholder="smtp.example.com"
+                      className={validationErrors['smtp-host'] ? 'border-red-500' : ''}
                     />
+                    {validationErrors['smtp-host'] && (
+                      <p className="text-xs text-red-500">{validationErrors['smtp-host']}</p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="smtp-port">SMTP Port</Label>
@@ -812,21 +995,57 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
                       id="smtp-port"
                       type="number"
                       value={config.email?.port || 587}
-                      onChange={(e) => updateConfig({ 
-                        email: { ...config.email, port: parseInt(e.target.value) || 587 } 
-                      })}
+                      onChange={(e) => {
+                        const port = parseInt(e.target.value) || 587;
+                        const error = validateSmtpPort(port);
+                        if (error) {
+                          setValidationErrors({
+                            ...validationErrors,
+                            'smtp-port': error,
+                          });
+                        } else {
+                          const newErrors = { ...validationErrors };
+                          delete newErrors['smtp-port'];
+                          setValidationErrors(newErrors);
+                        }
+                        updateConfig({ 
+                          email: { ...config.email, port } 
+                        });
+                      }}
+                      className={validationErrors['smtp-port'] ? 'border-red-500' : ''}
                     />
+                    {validationErrors['smtp-port'] && (
+                      <p className="text-xs text-red-500">{validationErrors['smtp-port']}</p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="smtp-from">From</Label>
                     <Input
                       id="smtp-from"
                       value={config.email?.from || ''}
-                      onChange={(e) => updateConfig({ 
-                        email: { ...config.email, from: e.target.value } 
-                      })}
+                      onChange={(e) => {
+                        const from = e.target.value;
+                        const error = validateEmail(from);
+                        if (error && from.trim()) {
+                          setValidationErrors({
+                            ...validationErrors,
+                            'smtp-from': error,
+                          });
+                        } else {
+                          const newErrors = { ...validationErrors };
+                          delete newErrors['smtp-from'];
+                          setValidationErrors(newErrors);
+                        }
+                        updateConfig({ 
+                          email: { ...config.email, from } 
+                        });
+                      }}
                       placeholder="noreply@example.com"
+                      className={validationErrors['smtp-from'] ? 'border-red-500' : ''}
                     />
+                    {validationErrors['smtp-from'] && (
+                      <p className="text-xs text-red-500">{validationErrors['smtp-from']}</p>
+                    )}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="smtp-from-display">From Display Name</Label>
@@ -1113,12 +1332,39 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
                                         <Textarea
                                           id="redirect-uris"
                                           value={client.redirectUris?.join('\n') || ''}
-                                          onChange={(e) => updateClient(index, { 
-                                            redirectUris: e.target.value.split('\n').filter(u => u.trim()) 
-                                          })}
+                                          onChange={(e) => {
+                                            const uris = e.target.value.split('\n').filter(u => u.trim());
+                                            const errors: string[] = [];
+                                            
+                                            uris.forEach((uri, idx) => {
+                                              const error = validateRedirectUri(uri);
+                                              if (error) {
+                                                errors.push(`URI ${idx + 1}: ${error}`);
+                                              }
+                                            });
+                                            
+                                            if (errors.length > 0) {
+                                              setValidationErrors({
+                                                ...validationErrors,
+                                                [`client-${index}-redirect-uris`]: errors.join('; '),
+                                              });
+                                            } else {
+                                              const newErrors = { ...validationErrors };
+                                              delete newErrors[`client-${index}-redirect-uris`];
+                                              setValidationErrors(newErrors);
+                                            }
+                                            
+                                            updateClient(index, { redirectUris: uris });
+                                          }}
                                           placeholder="http://localhost:3000/*&#10;https://example.com/callback"
                                           rows={4}
+                                          className={validationErrors[`client-${index}-redirect-uris`] ? 'border-red-500' : ''}
                                         />
+                                        {validationErrors[`client-${index}-redirect-uris`] && (
+                                          <p className="text-xs text-red-500">
+                                            {validationErrors[`client-${index}-redirect-uris`]}
+                                          </p>
+                                        )}
                                         <p className="text-xs text-muted-foreground">
                                           One URI per line. Use * for wildcards
                                         </p>
@@ -1406,8 +1652,26 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
                                             id="email"
                                             type="email"
                                             value={user.email}
-                                            onChange={(e) => updateUser(index, { email: e.target.value })}
+                                            onChange={(e) => {
+                                              const email = e.target.value;
+                                              const error = validateEmail(email);
+                                              if (error && email.trim()) {
+                                                setValidationErrors({
+                                                  ...validationErrors,
+                                                  [`user-${index}-email`]: error,
+                                                });
+                                              } else {
+                                                const newErrors = { ...validationErrors };
+                                                delete newErrors[`user-${index}-email`];
+                                                setValidationErrors(newErrors);
+                                              }
+                                              updateUser(index, { email });
+                                            }}
+                                            className={validationErrors[`user-${index}-email`] ? 'border-red-500' : ''}
                                           />
+                                          {validationErrors[`user-${index}-email`] && (
+                                            <p className="text-xs text-red-500">{validationErrors[`user-${index}-email`]}</p>
+                                          )}
                                         </div>
                                         <div className="space-y-2">
                                           <Label htmlFor="first-name">First Name</Label>
@@ -1721,9 +1985,72 @@ export function KeycloakConfigAdvanced({ componentId }: KeycloakConfigProps) {
                                 </div>
                               </div>
                               {execution.configurable && (
-                                <Button size="sm" variant="ghost">
-                                  <Settings className="h-4 w-4" />
-                                </Button>
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button size="sm" variant="ghost">
+                                      <Settings className="h-4 w-4" />
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent>
+                                    <DialogHeader>
+                                      <DialogTitle>Configure Execution: {execution.displayName}</DialogTitle>
+                                      <DialogDescription>
+                                        Configure the execution step settings for {flow.alias} flow
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <div className="space-y-4 mt-4">
+                                      <div className="space-y-2">
+                                        <Label>Requirement Level</Label>
+                                        <Select
+                                          value={execution.requirement}
+                                          onValueChange={(value) => {
+                                            const updatedFlows = [...authenticationFlows];
+                                            const updatedExecutions = [...(updatedFlows[index].executions || [])];
+                                            updatedExecutions[execIndex] = {
+                                              ...execution,
+                                              requirement: value as 'REQUIRED' | 'ALTERNATIVE' | 'DISABLED' | 'CONDITIONAL'
+                                            };
+                                            updatedFlows[index] = {
+                                              ...updatedFlows[index],
+                                              executions: updatedExecutions
+                                            };
+                                            updateConfig({ authenticationFlows: updatedFlows });
+                                          }}
+                                        >
+                                          <SelectTrigger>
+                                            <SelectValue />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                            <SelectItem value="REQUIRED">Required</SelectItem>
+                                            <SelectItem value="ALTERNATIVE">Alternative</SelectItem>
+                                            <SelectItem value="DISABLED">Disabled</SelectItem>
+                                            <SelectItem value="CONDITIONAL">Conditional</SelectItem>
+                                          </SelectContent>
+                                        </Select>
+                                        <p className="text-xs text-muted-foreground">
+                                          {execution.requirement === 'REQUIRED' && 'This step must be executed successfully'}
+                                          {execution.requirement === 'ALTERNATIVE' && 'This step is an alternative option'}
+                                          {execution.requirement === 'DISABLED' && 'This step is disabled'}
+                                          {execution.requirement === 'CONDITIONAL' && 'This step is executed conditionally'}
+                                        </p>
+                                      </div>
+                                      <div className="space-y-2">
+                                        <Label>Display Name</Label>
+                                        <Input value={execution.displayName} readOnly />
+                                        <p className="text-xs text-muted-foreground">
+                                          Display name cannot be changed
+                                        </p>
+                                      </div>
+                                      <div className="space-y-2">
+                                        <Label>Provider ID</Label>
+                                        <Input value={execution.providerId} readOnly />
+                                        <p className="text-xs text-muted-foreground">
+                                          Provider ID cannot be changed
+                                        </p>
+                                      </div>
+                                    </div>
+                                  </DialogContent>
+                                </Dialog>
                               )}
                             </div>
                           ))}

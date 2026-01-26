@@ -204,6 +204,22 @@
   - Request Batching, Response Compression, Fallback Support
   - Audience-Specific Optimization (mobile, web, partner), полный набор метрик
 
+### Компоненты безопасности (Security)
+
+- **[Keycloak](./security/keycloak.md)** - Open-source решение для управления идентификацией и доступом (IAM)
+  - OAuth2/OIDC Flows (authorization_code, implicit, client_credentials, password, refresh_token)
+  - Realm Management с настройками SSL, session management, password policies
+  - Client Management (public, confidential, bearer-only) с grant types и redirect URIs
+  - User Management с roles, groups, attributes
+  - Client Scopes для управления claims в токенах
+  - Protocol Mappers для добавления custom claims в токены
+  - Identity Providers (LDAP, SAML, Social providers: Google, GitHub, Facebook)
+  - Authentication Flows для настройки процесса аутентификации
+  - Session Management с SSO сессиями (idle и max timeout)
+  - Token Management с генерацией access, refresh и ID токенов
+  - Connection Rules для автоматической настройки конфигов при подключении
+  - Полный набор метрик производительности и использования
+
 ### Протоколы и API (Protocols & APIs)
 
 В системе симуляции протоколы (REST, GraphQL, SOAP, gRPC, WebSocket, Webhook) реализованы как **атрибуты соединений**, а не как отдельные узлы на канвасе. Это соответствует реальной архитектуре, где протоколы определяют способ общения между сервисами, а не являются отдельными сервисами.
@@ -360,6 +376,7 @@
 - **MuleSoft Integration:** [Документация MuleSoft Integration](./integration/mulesoft.md)
 - **GraphQL Gateway:** [Документация GraphQL Gateway](./integration/graphql-gateway.md)
 - **BFF Service:** [Документация BFF Service](./integration/bff-service.md)
+- **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 
 ### По базам данных
 
@@ -377,6 +394,7 @@
 - **Jaeger:** [Документация Jaeger](./observability/jaeger.md)
 - **OpenTelemetry Collector:** [Документация OpenTelemetry Collector](./observability/opentelemetry-collector.md)
 - **PagerDuty:** [Документация PagerDuty](./observability/pagerduty.md)
+- **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 
 ## Обновления
 
@@ -434,3 +452,9 @@
 - [PagerDuty Escalation Policies](https://support.pagerduty.com/docs/escalation-policies)
 - [PagerDuty Schedules](https://support.pagerduty.com/docs/schedules)
 - [PagerDuty Webhooks](https://developer.pagerduty.com/docs/webhooks-v2-overview/)
+- [Официальная документация Keycloak](https://www.keycloak.org/docs/)
+- [Keycloak Server Administration](https://www.keycloak.org/docs/latest/server_admin/)
+- [Keycloak Securing Applications](https://www.keycloak.org/docs/latest/securing_apps/)
+- [OAuth 2.0 Specification](https://oauth.net/2/)
+- [OpenID Connect Specification](https://openid.net/connect/)
+- [SAML 2.0 Specification](http://saml.xml.org/saml-specifications)

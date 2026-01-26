@@ -742,7 +742,12 @@ export class EmulationEngine {
         }
         if (node.type === 'keycloak') {
           try {
-            this.initializeKeycloakEngine(node);
+            if (!this.keycloakEngines.has(node.id)) {
+              this.initializeKeycloakEngine(node);
+            } else {
+              const engine = this.keycloakEngines.get(node.id)!;
+              engine.updateConfig(node);
+            }
           } catch (error) {
             errorCollector.addError(error as Error, {
               severity: 'critical',
@@ -1111,6 +1116,27 @@ export class EmulationEngine {
             componentLabel: node.data.label,
             componentType: node.type,
             context: { operation: 'initializeWAFEngine' },
+          });
+        }
+      }
+      
+      // Initialize Keycloak emulation engine for Keycloak nodes
+      if (node.type === 'keycloak') {
+        try {
+          if (!this.keycloakEngines.has(node.id)) {
+            this.initializeKeycloakEngine(node);
+          } else {
+            const engine = this.keycloakEngines.get(node.id)!;
+            engine.updateConfig(node);
+          }
+        } catch (error) {
+          errorCollector.addError(error as Error, {
+            severity: 'critical',
+            source: 'initialization',
+            componentId: node.id,
+            componentLabel: node.data.label,
+            componentType: node.type,
+            context: { operation: 'initializeKeycloakEngine' },
           });
         }
       }

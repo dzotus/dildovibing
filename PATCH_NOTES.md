@@ -1,5 +1,305 @@
 # Patch Notes
 
+## Версия 0.1.8x - Keycloak: OAuth2/OIDC Flows, Connection Rules, Client Scopes, Protocol Mappers, Groups/Roles, No Hardcode
+
+### Keycloak: Реалистичная симуляция IAM системы с полной поддержкой OAuth2/OIDC
+
+**Критическое улучшение**: Реализованы Connection Rules для автоматического обновления конфигов при подключении к Keycloak, полная поддержка OAuth2/OIDC flows (authorization_code, implicit, client_credentials, password, refresh_token), Client Scopes и Protocol Mappers для генерации токенов с claims, поддержка Groups и Roles в токенах, улучшен DataFlowEngine handler для обработки разных форматов запросов (JSON, form-data), добавлен метод updateConfig для переинициализации движка при изменении конфигурации. Все реализовано без хардкода - значения по умолчанию берутся из конфигурации, симуляция соответствует реальному поведению Keycloak.
+
+#### 1. Connection Rules для Keycloak ✅
+
+**Улучшение**: Созданы Connection Rules для автоматического обновления конфигов при подключении к Keycloak.
+
+**Реализовано**:
+- ✅ В `src/services/connection/rules/keycloakRules.ts`:
+  - Функция `createKeycloakRule(discovery: ServiceDiscovery): ConnectionRule`
+  - `updateSourceConfig` для обновления конфига источника:
+    - Определение типа источника (REST API, GraphQL, gRPC, WebSocket, Webhook, API Gateway, Kong)
+    - Обновление keycloakUrl, realm, clientId в конфиге источника
+    - Для API Gateway: настройка OAuth2/OIDC авторизации
+    - Для Kong Gateway: настройка OIDC plugin
+  - `validateConnection` для валидации соединений
+  - `extractMetadata` для извлечения метаданных подключения
+- ✅ Зарегистрировано правило в `src/services/connection/rules/index.ts`
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Автоматическое определение clientId из конфигурации Keycloak
+
+#### 2. Расширение KeycloakEmulationEngine - OAuth2/OIDC Flows ✅
+
+**Улучшение**: Реализована полная поддержка OAuth2/OIDC flows с валидацией и генерацией токенов.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Расширены интерфейсы:
+    - `KeycloakOAuth2Request` и `KeycloakOAuth2Response`
+    - `KeycloakClient` с полями: clientId, clientSecret, redirectUris, grantTypes, standardFlowEnabled, implicitFlowEnabled, directAccessGrantsEnabled, serviceAccountsEnabled, defaultClientScopes, optionalClientScopes
+    - `KeycloakUser` с полями: groups, realmRoles, clientRoles
+    - `ProtocolMapper` и `KeycloakClientScope`
+  - Реализованы методы для каждого OAuth2 flow:
+    - `processAuthorizationCodeFlow()` - Authorization Code Flow
+    - `processImplicitFlow()` - Implicit Flow
+    - `processClientCredentialsFlow()` - Client Credentials Flow
+    - `processPasswordFlow()` - Resource Owner Password Credentials Flow
+    - `processRefreshTokenFlow()` - Refresh Token Flow
+    - `processOAuth2Request()` - главный метод для обработки OAuth2 запросов
+  - Валидация:
+    - `validateClientGrantType()` - проверка grant types клиента
+    - `validateRedirectUri()` - проверка redirect URIs
+    - Проверка client secret для confidential clients
+  - Генерация токенов:
+    - `generateToken()` - генерация access/refresh/id токенов с claims
+    - `applyProtocolMapper()` - применение protocol mappers к claims
+    - Учет accessTokenLifespan, refreshTokenLifespan
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Валидация основана на конфигурации клиента
+
+#### 3. Client Scopes и Protocol Mappers ✅
+
+**Улучшение**: Реализована поддержка Client Scopes и Protocol Mappers для генерации токенов с claims.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Расширен `KeycloakEmulationConfig` с полем `clientScopes`
+  - Поддержка protocol mappers:
+    - `oidc-usermodel-property-mapper` - маппинг свойств пользователя
+    - `oidc-usermodel-realm-role-mapper` - маппинг realm roles
+    - `oidc-usermodel-client-role-mapper` - маппинг client roles
+    - `oidc-group-membership-mapper` - маппинг groups
+  - Применение scopes и mappers в `generateToken()`:
+    - Применение default и optional client scopes
+    - Применение protocol mappers для добавления claims в токен
+    - Учет scope в latency
+- ✅ Отсутствие хардкода:
+  - Все scopes и mappers берутся из конфигурации компонента
+
+#### 4. Groups и Roles в токенах ✅
+
+**Улучшение**: Реализована поддержка Groups и Roles в токенах через protocol mappers.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Расширен `KeycloakUser` с полями:
+    - `groups?: string[]` - группы пользователя
+    - `realmRoles?: string[]` - realm roles
+    - `clientRoles?: Record<string, string[]>` - client roles (clientId -> roles)
+  - В `generateToken()` включение в токены:
+    - Realm roles в `realm_access.roles`
+    - Client roles в `resource_access[clientId].roles`
+    - Groups в `groups` claim
+  - Поддержка protocol mappers для roles и groups
+- ✅ Отсутствие хардкода:
+  - Все roles и groups берутся из конфигурации пользователя
+
+#### 5. Улучшение DataFlowEngine Handler ✅
+
+**Улучшение**: Улучшен handler для Keycloak в DataFlowEngine для поддержки разных форматов запросов.
+
+**Реализовано**:
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Определение endpoint по path в `message.metadata.path`:
+    - `/auth` - Authorization endpoint
+    - `/token` - Token endpoint
+    - `/userinfo` - UserInfo endpoint
+    - `/introspect` - Token introspection endpoint
+    - `/logout` - Logout endpoint
+  - Определение grant_type из payload (поддерживает form-data и JSON)
+  - Обработка разных форматов запросов:
+    - JSON для API запросов
+    - Form-data для OAuth2 token endpoint
+    - Query params для authorization endpoint
+  - Поддержка всех параметров OAuth2 (clientId, clientSecret, redirectUri, code, username, password, refreshToken, scope)
+  - Правильные error responses для OAuth2
+- ✅ Отсутствие хардкода:
+  - Все параметры извлекаются из payload и metadata
+
+#### 6. Метод updateConfig для Keycloak ✅
+
+**Улучшение**: Добавлен метод `updateConfig` для переинициализации движка при изменении конфигурации.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Метод `updateConfig(node: CanvasNode): void` для обновления конфигурации
+  - Сохранение активных сессий при обновлении конфига
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Обновлен метод `initialize()` для проверки существования движка и вызова `updateConfig()`
+  - Обновлен метод `updateNodesAndConnections()` для обновления конфига существующих движков
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+
+#### 7. Identity Providers (LDAP, SAML, Social Providers) ✅
+
+**Улучшение**: Реализована полная поддержка Identity Providers (LDAP, SAML, Google, GitHub, Facebook) с учетом в latency и синхронизацией с UI.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Добавлен интерфейс `KeycloakIdentityProvider` с поддержкой всех типов провайдеров:
+    - `google`, `github`, `facebook` - Social providers
+    - `saml` - SAML Identity Provider
+    - `oidc` - OpenID Connect Identity Provider
+    - `ldap` - LDAP federation
+  - Расширен `KeycloakEmulationConfig` с полем `identityProviders`
+  - Чтение identity providers из UI конфигурации в `initializeConfig()`
+  - Учет identity providers в `calculateOAuth2Latency()`:
+    - LDAP: учет enableLDAP и identity providers с providerId === 'ldap' (baseLatency *= 1.3 + 20ms overhead)
+    - SAML: учет enableSAML и identity providers с providerId === 'saml' (baseLatency *= 1.2 + 30ms overhead)
+    - Social Providers (Google, GitHub, Facebook): учет внешних вызовов (50ms на каждый provider + 30ms overhead для redirect flow)
+  - LDAP connection pool overhead учитывается в latency
+  - SAML processing overhead учитывается для login операций
+  - Social providers симулируют redirect flows через учет внешних вызовов в latency
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Identity providers читаются из UI и применяются в симуляции
+  - Поддержка всех типов identity providers через конфигурацию
+
+#### 8. Email Configuration ✅
+
+**Улучшение**: Реализована симуляция email операций (password reset, email verification) с учетом SMTP latency и конфигурации email сервера.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Добавлен интерфейс `KeycloakEmailConfig` с полями: host, port, from, fromDisplayName, replyTo, enableSsl, enableStartTls, enableAuthentication, user, password
+  - Добавлен интерфейс `KeycloakEventsConfig` с полями: enabled, eventsEnabled, adminEventsEnabled, eventsExpiration, adminEventsDetailsEnabled
+  - Расширен `KeycloakEmulationConfig` с полями `email` и `events`
+  - Реализован метод `simulateEmailOperation()` для симуляции отправки email:
+    - Базовая SMTP latency (50-200ms в зависимости от конфигурации)
+    - Учет SSL/TLS overhead (+30ms)
+    - Учет аутентификации overhead (+20ms)
+    - Дополнительная latency для разных операций (password reset: +40ms, email verification: +30ms)
+    - Симуляция ошибок (1-2% в зависимости от конфигурации)
+  - Реализованы методы `processPasswordReset()` и `processEmailVerification()` для обработки email операций
+  - Метрики: `emailsSentTotal`, `emailErrorsTotal`
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Email конфигурация читается из UI и применяется в симуляции
+
+#### 9. Events и Admin Events Tracking ✅
+
+**Улучшение**: Реализовано детальное отслеживание событий с учетом events config и влиянием на производительность.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Реализован метод `trackEvent()` для отслеживания событий:
+    - Поддержка типов событий: LOGIN, LOGIN_ERROR, LOGOUT, TOKEN_REFRESH, PASSWORD_RESET, EMAIL_VERIFICATION, ADMIN
+    - Учет конфигурации events (enabled, eventsEnabled, adminEventsEnabled)
+    - Events storage overhead учитывается в latency (+2ms для events, +5ms для admin events)
+  - Отслеживание событий во всех OAuth2 flows:
+    - Authorization Code Flow - LOGIN события
+    - Implicit Flow - LOGIN события
+    - Client Credentials Flow - LOGIN события
+    - Password Flow - LOGIN/LOGIN_ERROR события
+    - Refresh Token Flow - TOKEN_REFRESH события
+  - Отслеживание событий в операциях аутентификации:
+    - Login операции - LOGIN/LOGIN_ERROR события
+    - Token refresh - TOKEN_REFRESH события
+    - Password reset - PASSWORD_RESET события
+    - Email verification - EMAIL_VERIFICATION события
+  - Метрики: `eventsTotal`, `adminEventsTotal`
+  - Events config влияет на производительность через `calculateOAuth2Latency()` (+2ms overhead)
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Events конфигурация читается из UI и применяется в симуляции
+
+#### 10. Authentication Flows ✅
+
+**Улучшение**: Реализована поддержка кастомных Authentication Flows с executions и учетом в latency.
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Добавлены интерфейсы `KeycloakAuthenticationFlow` и `KeycloakAuthenticationExecution`
+  - Расширен `KeycloakEmulationConfig` с полем `authenticationFlows`
+  - Чтение authentication flows из UI конфигурации в `initializeConfig()`
+  - Поддержка кастомных authentication flows с executions:
+    - Топ-уровневые flows (topLevel: true)
+    - Built-in flows (builtIn: true)
+    - Executions с требованиями: REQUIRED, ALTERNATIVE, DISABLED, CONDITIONAL
+  - Учет authentication flows в `calculateOAuth2Latency()`:
+    - Каждый REQUIRED/CONDITIONAL execution добавляет 10ms latency
+    - Учет всех активных flows (не built-in или top-level)
+  - Поддержка кастомных flows через конфигурацию
+- ✅ Отсутствие хардкода:
+  - Все значения берутся из конфигурации компонента
+  - Authentication flows читаются из UI и применяются в симуляции
+  - Executions учитываются в latency для увеличения сложности flow
+
+#### 11. Метрики и симуляция ✅
+
+**Улучшение**: Улучшена симуляция с учетом всех факторов (OAuth2 flows, LDAP, SAML, password policy, scopes, mappers, email, events, identity providers, authentication flows).
+
+**Реализовано**:
+- ✅ В `src/core/KeycloakEmulationEngine.ts`:
+  - Расчет latency для каждого OAuth2 flow:
+    - authorization_code: 100ms (самый сложный)
+    - implicit: 80ms
+    - password: 90ms + password policy cost
+    - client_credentials: 50ms (самый простой)
+    - refresh_token: 40ms
+  - Учет password policy в latency
+  - Учет LDAP и SAML в latency (через enableLDAP/enableSAML и identity providers)
+  - Учет Social Providers в latency (внешние вызовы для Google, GitHub, Facebook)
+  - Учет Authentication Flows executions в latency (10ms на каждый REQUIRED/CONDITIONAL execution)
+  - Учет scope и mappers в latency
+  - Учет events overhead в latency (+2ms для events, +5ms для admin events)
+- ✅ Метрики:
+  - `keycloak_login_requests_total` - общее количество login запросов
+  - `keycloak_login_errors_total` - количество ошибок login
+  - `keycloak_token_refresh_total` - количество refresh token запросов
+  - `keycloak_introspection_requests_total` - количество introspection запросов
+  - `keycloak_userinfo_requests_total` - количество userinfo запросов
+  - `keycloak_sessions_active` - активные сессии
+  - `keycloak_sessions_created_total` - созданные сессии
+  - `keycloak_sessions_expired_total` - истекшие сессии
+  - `keycloak_auth_success_rate` - процент успешных аутентификаций
+  - `keycloak_emails_sent_total` - количество отправленных email
+  - `keycloak_email_errors_total` - количество ошибок отправки email
+  - `keycloak_events_total` - общее количество событий
+  - `keycloak_admin_events_total` - количество admin событий
+- ✅ Отсутствие хардкода:
+  - Все метрики рассчитываются на основе реальных операций
+
+#### 12. UI валидация и метрики в реальном времени ✅
+
+**Улучшение**: Добавлена валидация полей в UI и отображение метрик в реальном времени из KeycloakEmulationEngine.
+
+**Реализовано**:
+- ✅ В `src/components/config/security/KeycloakConfigAdvanced.tsx`:
+  - Добавлено состояние `realMetrics` для хранения метрик из движка
+  - Добавлено состояние `validationErrors` для хранения ошибок валидации
+  - Реализован `useEffect` для обновления метрик в реальном времени (каждую секунду):
+    - Получение метрик через `keycloakEngine.getMetrics()`
+    - Получение нагрузки через `keycloakEngine.calculateLoad()`
+    - Обновление состояния метрик
+  - Реализованы функции валидации:
+    - `validateRedirectUri()` - валидация формата redirect URI (поддержка wildcards)
+    - `validateEmail()` - валидация формата email адреса
+    - `validateClientScope()` - проверка существования client scope
+    - `validateSmtpHost()` - валидация формата SMTP хоста
+    - `validateSmtpPort()` - валидация диапазона SMTP порта (1-65535)
+  - Добавлена валидация в поля ввода:
+    - Redirect URIs для клиентов (валидация каждого URI)
+    - Email адреса для пользователей и SMTP конфигурации
+    - SMTP host и port
+    - Отображение ошибок валидации под полями ввода (красная рамка и текст ошибки)
+  - Добавлен Card "Real-time Metrics" с отображением:
+    - Requests Per Second (throughput)
+    - Average Latency
+    - Error Rate
+    - Auth Success Rate
+    - Login Requests (с количеством ошибок)
+    - Token Refresh operations
+    - Sessions (active, created, expired)
+    - Events (total, admin events)
+    - Emails Sent (с количеством ошибок и error rate, если email config enabled)
+  - Метрики обновляются в реальном времени каждую секунду
+  - Визуальное оформление метрик с использованием Card, Label, и форматированных значений
+- ✅ Отсутствие хардкода:
+  - Все метрики берутся из KeycloakEmulationEngine
+  - Валидация основана на реальных правилах (форматы, диапазоны)
+  - Ошибки валидации отображаются динамически при вводе
+
+---
+
 ## Версия 0.1.8w - PagerDuty: UpdateConfig, Events API v2, Webhook Simulation, Validation, Schedules, No Hardcode
 
 ### PagerDuty: Улучшение симулятивности и соответствие реальной архитектуре
