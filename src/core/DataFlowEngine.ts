@@ -6438,15 +6438,46 @@ export class DataFlowEngine {
 
         const payload = (message.payload || {}) as any;
 
-        // Извлекаем информацию о пакете из сообщения
-        const source = payload?.source || message.metadata?.sourceIP || payload?.sourceIP || '0.0.0.0';
-        const destination = payload?.destination || message.metadata?.destinationIP || payload?.destinationIP || '10.0.0.1';
-        const protocol = payload?.protocol || message.metadata?.protocol || 'tcp';
-        const port = payload?.port || message.metadata?.port || payload?.destinationPort;
-        const sourcePort = payload?.sourcePort || message.metadata?.sourcePort;
-        const packetPayload = payload?.payload || payload?.body || (typeof payload === 'string' ? payload : JSON.stringify(payload));
+        // Извлекаем информацию о пакете из сообщения (улучшенное извлечение)
+        const source = payload?.source || message.metadata?.sourceIP || payload?.sourceIP || 
+          message.metadata?.sourceHost || payload?.sourceHost || '0.0.0.0';
+        const destination = payload?.destination || message.metadata?.destinationIP || payload?.destinationIP || 
+          message.metadata?.targetHost || payload?.targetHost || message.metadata?.destinationHost || payload?.destinationHost || '10.0.0.1';
+        const protocol = payload?.protocol || message.metadata?.protocol || 
+          (message.metadata?.endpoint?.startsWith('https') ? 'tcp' : 
+           message.metadata?.endpoint?.startsWith('http') ? 'tcp' : 'tcp');
+        const port = payload?.port || message.metadata?.port || payload?.destinationPort || 
+          message.metadata?.targetPort || payload?.targetPort;
+        const sourcePort = payload?.sourcePort || message.metadata?.sourcePort || 
+          message.metadata?.sourcePort || payload?.sourcePort;
+        
+        // Извлекаем TCP flags для протокольного анализа
+        const tcpFlags = payload?.tcpFlags || message.metadata?.tcpFlags;
+        const extractedTcpFlags = tcpFlags ? {
+          syn: tcpFlags.syn || false,
+          ack: tcpFlags.ack || false,
+          fin: tcpFlags.fin || false,
+          rst: tcpFlags.rst || false,
+          psh: tcpFlags.psh || false,
+          urg: tcpFlags.urg || false,
+        } : undefined;
+        
+        // Извлекаем TCP sequence numbers для протокольного анализа
+        const tcpSeq = payload?.tcpSeq || message.metadata?.tcpSeq;
+        const tcpAck = payload?.tcpAck || message.metadata?.tcpAck;
+        
+        // Извлекаем информацию о фрагментации
+        const fragmentOffset = payload?.fragmentOffset || message.metadata?.fragmentOffset;
+        const fragmentId = payload?.fragmentId || message.metadata?.fragmentId;
+        const isFragment = payload?.isFragment || message.metadata?.isFragment || false;
+        
+        // Извлекаем payload (приоритет: payload, body, text, JSON)
+        const packetPayload = payload?.payload || payload?.body || 
+          (typeof payload === 'string' ? payload : 
+           typeof message.payload === 'string' ? message.payload : 
+           JSON.stringify(payload));
 
-        // Обрабатываем пакет через IDS/IPS
+        // Обрабатываем пакет через IDS/IPS (с расширенной информацией)
         const result = engine.processPacket({
           source,
           destination,
@@ -6454,6 +6485,13 @@ export class DataFlowEngine {
           port,
           sourcePort,
           payload: packetPayload,
+          // Передаем дополнительную информацию для протокольного анализа
+          tcpFlags: extractedTcpFlags,
+          tcpSeq,
+          tcpAck,
+          fragmentOffset,
+          fragmentId,
+          isFragment,
         });
 
         message.latency = (message.latency || 0) + result.latency;

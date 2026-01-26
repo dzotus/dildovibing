@@ -8364,6 +8364,9 @@ export class EmulationEngine {
       return;
     }
 
+    // Обновляем nodes и connections в engine
+    engine.updateNodesAndConnections(this.nodes, this.connections);
+
     const load = engine.calculateLoad();
     const idsIpsMetrics = engine.getMetrics();
     const stats = engine.getStats();
@@ -10192,7 +10195,7 @@ export class EmulationEngine {
    */
   private initializeIDSIPSEngine(node: CanvasNode): void {
     const engine = new IDSIPSEmulationEngine();
-    engine.initializeConfig(node);
+    engine.initializeConfig(node, this.nodes, this.connections);
     this.idsIpsEngines.set(node.id, engine);
   }
 

@@ -19,6 +19,7 @@ import { createKeycloakRule } from './keycloakRules';
 import { createWAFRule } from './wafRules';
 import { createFirewallRule } from './firewallRules';
 import { createVaultRule } from './vaultRules';
+import { createIDSIPSRule } from './idsipsRules';
 
 /**
  * Инициализировать все правила подключения
@@ -63,5 +64,7 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     createFirewallRule(discovery),
     // Security - Vault
     createVaultRule(discovery),
+    // Security - IDS/IPS
+    createIDSIPSRule(discovery),
   ];
 }

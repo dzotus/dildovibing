@@ -1,5 +1,6 @@
-import { CanvasNode } from '@/types';
+import { CanvasNode, CanvasConnection } from '@/types';
 import { IDSIPSRoutingEngine, IDSIPSConfig, IDSIPSStats, IDSIPSAlert, IDSIPSPacket } from './IDSIPSRoutingEngine';
+import { ServiceDiscovery } from '@/services/connection/ServiceDiscovery';
 
 /**
  * IDS/IPS Emulation Config (синхронизирован с IDSIPSConfigAdvanced / SECURITY_PROFILES)
@@ -71,6 +72,9 @@ export interface IDSIPSLoad {
 export class IDSIPSEmulationEngine {
   private config: IDSIPSEmulationConfig | null = null;
   private routingEngine: IDSIPSRoutingEngine;
+  private discovery: ServiceDiscovery;
+  private nodes: CanvasNode[] = [];
+  private connections: CanvasConnection[] = [];
 
   private metrics: IDSIPSEngineMetrics = {
     packetsTotal: 0,
@@ -95,14 +99,19 @@ export class IDSIPSEmulationEngine {
   private simulatedPacketRate: number = 0;
   private lastSimulationTime: number = Date.now();
 
+  // История реальных пакетов для симуляции (используем реальные IP из логов)
+  private recentPackets: Array<{ source: string; destination: string; protocol: 'tcp' | 'udp' | 'icmp' | 'all'; port?: number; sourcePort?: number; payload?: string }> = [];
+  private readonly MAX_RECENT_PACKETS = 100;
+
   constructor() {
     this.routingEngine = new IDSIPSRoutingEngine();
+    this.discovery = new ServiceDiscovery();
   }
 
   /**
    * Инициализация конфигурации из узла IDS/IPS
    */
-  public initializeConfig(node: CanvasNode): void {
+  public initializeConfig(node: CanvasNode, nodes?: CanvasNode[], connections?: CanvasConnection[]): void {
     const raw = (node.data.config || {}) as any;
 
     this.config = {
@@ -119,11 +128,27 @@ export class IDSIPSEmulationEngine {
       blockedIPs: Array.isArray(raw.blockedIPs) ? raw.blockedIPs : [],
     };
 
+    // Обновляем nodes и connections для использования в симуляции
+    if (nodes) {
+      this.nodes = nodes;
+    }
+    if (connections) {
+      this.connections = connections;
+    }
+
     // Инициализируем routing engine
     this.routingEngine.initializeConfig(node);
 
     // Обновляем метрики
     this.updateMetricsFromStats();
+  }
+
+  /**
+   * Обновление nodes и connections
+   */
+  public updateNodesAndConnections(nodes: CanvasNode[], connections: CanvasConnection[]): void {
+    this.nodes = nodes;
+    this.connections = connections;
   }
 
   /**
@@ -136,6 +161,13 @@ export class IDSIPSEmulationEngine {
     port?: number;
     sourcePort?: number;
     payload?: string;
+    // Дополнительная информация для протокольного анализа
+    tcpFlags?: { syn?: boolean; ack?: boolean; fin?: boolean; rst?: boolean; psh?: boolean; urg?: boolean };
+    tcpSeq?: number;
+    tcpAck?: number;
+    fragmentOffset?: number;
+    fragmentId?: number;
+    isFragment?: boolean;
   }): {
     success: boolean;
     blocked: boolean;
@@ -145,7 +177,7 @@ export class IDSIPSEmulationEngine {
   } {
     const startTime = performance.now();
 
-    // Создаем IDS/IPS packet
+    // Создаем IDS/IPS packet (с расширенной информацией для протокольного анализа)
     const idsPacket: IDSIPSPacket = {
       source: packet.source,
       destination: packet.destination,
@@ -154,6 +186,13 @@ export class IDSIPSEmulationEngine {
       sourcePort: packet.sourcePort,
       payload: packet.payload,
       timestamp: Date.now(),
+      // Дополнительная информация для протокольного анализа
+      tcpFlags: packet.tcpFlags,
+      tcpSeq: packet.tcpSeq,
+      tcpAck: packet.tcpAck,
+      fragmentOffset: packet.fragmentOffset,
+      fragmentId: packet.fragmentId,
+      isFragment: packet.isFragment,
     };
 
     // Обрабатываем через routing engine
@@ -163,6 +202,19 @@ export class IDSIPSEmulationEngine {
 
     // Обновляем историю латентности
     this.recordLatency(latency);
+
+    // Сохраняем реальный пакет для использования в симуляции
+    this.recentPackets.push({
+      source: packet.source,
+      destination: packet.destination,
+      protocol: packet.protocol,
+      port: packet.port,
+      sourcePort: packet.sourcePort,
+      payload: packet.payload,
+    });
+    if (this.recentPackets.length > this.MAX_RECENT_PACKETS) {
+      this.recentPackets.shift();
+    }
 
     // Обновляем метрики
     this.metrics.packetsTotal++;
@@ -222,7 +274,8 @@ export class IDSIPSEmulationEngine {
   }
 
   /**
-   * Генерация случайного пакета для симуляции
+   * Генерация пакета для симуляции на основе реальных данных
+   * Использует реальные IP адреса из подключенных компонентов и истории пакетов
    */
   private generateRandomPacket(): {
     source: string;
@@ -232,52 +285,135 @@ export class IDSIPSEmulationEngine {
     sourcePort?: number;
     payload?: string;
   } {
-    const protocols: ('tcp' | 'udp' | 'icmp')[] = ['tcp', 'udp', 'icmp'];
-    const protocol = protocols[Math.floor(Math.random() * protocols.length)];
-
-    // Генерируем случайные IP адреса
-    const source = `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
-    const destination = `10.0.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
-
-    // Генерируем порты для TCP/UDP
-    const port = protocol === 'icmp' ? undefined : Math.floor(Math.random() * 65535);
-    const sourcePort = protocol === 'icmp' ? undefined : Math.floor(Math.random() * 65535);
-
-    // Иногда генерируем подозрительные пакеты (для симуляции вторжений)
-    const isSuspicious = Math.random() < 0.05; // 5% подозрительных пакетов
-    let payload: string | undefined;
-
-    if (isSuspicious) {
-      // Генерируем подозрительный payload
-      const suspiciousPayloads = [
-        'SELECT * FROM users WHERE id = 1 OR 1=1',
-        '<script>alert("XSS")</script>',
-        'DROP TABLE users',
-        'UNION SELECT password FROM users',
-        '../../../etc/passwd',
-        'eval(base64_decode(',
-      ];
-      payload = suspiciousPayloads[Math.floor(Math.random() * suspiciousPayloads.length)];
-    } else if (Math.random() < 0.3) {
-      // Нормальный payload
-      payload = `GET /api/data HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Mozilla/5.0`;
+    // Приоритет 1: Используем реальные пакеты из истории
+    if (this.recentPackets.length > 0) {
+      const randomIndex = Math.floor(Math.random() * this.recentPackets.length);
+      return { ...this.recentPackets[randomIndex] };
     }
 
+    // Приоритет 2: Используем реальные IP из сигнатур IDS/IPS
+    const signatures = this.routingEngine.getSignatures();
+    const signaturesWithIPs = signatures.filter(s => s.sourceIP || s.destinationIP);
+    
+    if (signaturesWithIPs.length > 0) {
+      const sig = signaturesWithIPs[Math.floor(Math.random() * signaturesWithIPs.length)];
+      const protocols: ('tcp' | 'udp' | 'icmp')[] = sig.protocol === 'all' 
+        ? ['tcp', 'udp', 'icmp'] 
+        : [sig.protocol as 'tcp' | 'udp' | 'icmp'];
+      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
+
+      // Используем IP из сигнатур
+      let source = sig.sourceIP || '0.0.0.0';
+      let destination = sig.destinationIP || '0.0.0.0';
+
+      // Если это CIDR, берем первый IP из диапазона
+      if (source.includes('/')) {
+        const [network] = source.split('/');
+        source = network;
+      }
+      if (destination.includes('/')) {
+        const [network] = destination.split('/');
+        destination = network;
+      }
+
+      return {
+        source,
+        destination,
+        protocol,
+        port: sig.port,
+        sourcePort: sig.sourcePort,
+        payload: sig.pattern ? undefined : undefined, // Не используем pattern как payload
+      };
+    }
+
+    // Приоритет 3: Используем реальные хосты из подключенных компонентов
+    const connectedNodes: CanvasNode[] = [];
+    
+    // Находим компоненты, подключенные к IDS/IPS
+    for (const conn of this.connections) {
+      // Находим узел IDS/IPS
+      const idsIpsNode = this.nodes.find(n => n.type === 'ids-ips');
+      if (!idsIpsNode) continue;
+
+      // Если соединение связано с IDS/IPS
+      if (conn.source === idsIpsNode.id) {
+        const targetNode = this.nodes.find(n => n.id === conn.target);
+        if (targetNode) connectedNodes.push(targetNode);
+      } else if (conn.target === idsIpsNode.id) {
+        const sourceNode = this.nodes.find(n => n.id === conn.source);
+        if (sourceNode) connectedNodes.push(sourceNode);
+      }
+    }
+
+    if (connectedNodes.length > 0) {
+      const sourceNode = connectedNodes[Math.floor(Math.random() * connectedNodes.length)];
+      const targetNode = connectedNodes[Math.floor(Math.random() * connectedNodes.length)];
+      
+      const sourceHost = this.discovery.getHost(sourceNode);
+      const targetHost = this.discovery.getHost(targetNode);
+      const sourcePort = this.discovery.getPort(sourceNode, 'main');
+      const targetPort = this.discovery.getPort(targetNode, 'main');
+
+      // Преобразуем hostname в IP (стабильное преобразование на основе хеша)
+      const source = this.hostnameToIP(sourceHost || sourceNode.id);
+      const destination = this.hostnameToIP(targetHost || targetNode.id);
+
+      const protocols: ('tcp' | 'udp' | 'icmp')[] = ['tcp', 'udp', 'icmp'];
+      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
+
+      return {
+        source,
+        destination,
+        protocol,
+        port: targetPort,
+        sourcePort: sourcePort,
+      };
+    }
+
+    // Приоритет 4: Используем реальные IP из заблокированных IP (для симуляции атак)
+    const blockedIPs = this.routingEngine.getBlockedIPs();
+    if (blockedIPs.length > 0) {
+      const blocked = blockedIPs[Math.floor(Math.random() * blockedIPs.length)];
+      const protocols: ('tcp' | 'udp' | 'icmp')[] = ['tcp', 'udp', 'icmp'];
+      const protocol = protocols[Math.floor(Math.random() * protocols.length)];
+
+      return {
+        source: blocked.ip,
+        destination: '10.0.0.1', // Дефолтный destination
+        protocol,
+        port: Math.floor(Math.random() * 65535),
+        sourcePort: Math.floor(Math.random() * 65535),
+      };
+    }
+
+    // Fallback: Используем дефолтные значения (не случайные)
     return {
-      source,
-      destination,
-      protocol,
-      port,
-      sourcePort,
-      payload,
+      source: '192.168.1.1',
+      destination: '10.0.0.1',
+      protocol: 'tcp',
+      port: 80,
+      sourcePort: 50000,
     };
   }
 
   /**
-   * Генерация случайного IP адреса
+   * Преобразование hostname в IP адрес (стабильное преобразование на основе хеша)
    */
-  private generateRandomIP(): string {
-    return `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`;
+  private hostnameToIP(hostname: string): string {
+    // Простой хеш для стабильного преобразования
+    let hash = 0;
+    for (let i = 0; i < hostname.length; i++) {
+      const char = hostname.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    
+    // Преобразуем хеш в IP адрес (10.x.y.z)
+    const x = Math.abs(hash % 255);
+    const y = Math.abs((hash >> 8) % 255);
+    const z = Math.abs((hash >> 16) % 255);
+    
+    return `10.${x}.${y}.${z}`;
   }
 
   /**
