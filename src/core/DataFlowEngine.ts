@@ -5430,7 +5430,7 @@ export class DataFlowEngine {
 
   /**
    * Create handler for GitLab CI (CI/CD)
-   * Обрабатывает webhook триггеры и API запросы, делегирует расчёт нагрузки GitLabCIEmulationEngine.
+   * Обрабатывает webhook триггеры, API запросы и операции от jobs, делегирует расчёт нагрузки GitLabCIEmulationEngine.
    */
   private createGitLabCIHandler(): ComponentDataHandler {
     return {
@@ -5453,9 +5453,19 @@ export class DataFlowEngine {
           // Webhook trigger - реально запускаем pipeline через engine
           const ref = payload.ref || payload.branch?.replace('refs/heads/', '') || 'main';
           const variables = payload.variables || {};
+          
+          // Поддержка merge request событий
+          const eventType = payload.object_kind === 'merge_request' ? 'merge_request' : 'push';
+          const mergeRequestData = eventType === 'merge_request' && payload.object_attributes ? {
+            id: payload.object_attributes.id || payload.object_attributes.iid || 0,
+            iid: payload.object_attributes.iid || payload.object_attributes.id || 0,
+            title: payload.object_attributes.title || '',
+            sourceBranch: payload.object_attributes.source_branch || ref,
+            targetBranch: payload.object_attributes.target_branch || 'main',
+          } : undefined;
 
           // Триггерим pipeline через engine
-          const result = engine.triggerWebhook(ref, variables);
+          const result = engine.triggerWebhook(ref, variables, eventType, mergeRequestData);
           if (result.success) {
             message.status = 'delivered';
             message.latency = 50; // Webhook processing latency
@@ -5467,6 +5477,8 @@ export class DataFlowEngine {
                 ref,
                 variables,
                 triggered: true,
+                eventType,
+                mergeRequest: mergeRequestData,
               },
             };
           } else {
@@ -5524,6 +5536,167 @@ export class DataFlowEngine {
             gitlab: {
               pipelineId,
               canceled: result.success,
+            },
+          };
+        } else if (operation === 'deploy' || operation === 'deployToKubernetes' || payload.deploy) {
+          // Операция деплоя от job - передаем в целевой компонент
+          const targetComponentId = payload.targetComponentId || payload.target;
+          const deployManifests = payload.manifests || payload.resources || [];
+          const deployType = payload.deployType || 'deployment';
+
+          if (!targetComponentId) {
+            message.status = 'failed';
+            message.error = 'Target component ID not specified';
+            message.latency = 10;
+            return message;
+          }
+
+          // Находим целевой компонент
+          const targetNode = this.nodes.find(n => n.id === targetComponentId);
+          if (!targetNode) {
+            message.status = 'failed';
+            message.error = `Target component not found: ${targetComponentId}`;
+            message.latency = 10;
+            return message;
+          }
+
+          // Создаем сообщение для целевого компонента
+          const deployMessage = this.addMessage({
+            source: node.id,
+            target: targetComponentId,
+            format: 'json',
+            payload: {
+              operation: 'deploy',
+              deployType,
+              manifests: deployManifests,
+              source: 'gitlab-ci',
+              jobId: payload.jobId,
+              pipelineId: payload.pipelineId,
+            },
+            size: JSON.stringify(deployManifests).length,
+            metadata: {
+              operation: 'deploy',
+              contentType: 'application/json',
+            },
+          });
+
+          message.status = deployMessage.status === 'failed' ? 'failed' : 'delivered';
+          message.error = deployMessage.error;
+          message.latency = 50;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              operation: 'deploy',
+              targetComponentId,
+              deployMessageId: deployMessage.id,
+            },
+          };
+        } else if (operation === 'uploadArtifacts' || operation === 'uploadToS3' || payload.upload) {
+          // Операция отправки артефактов от job - передаем в целевой компонент
+          const targetComponentId = payload.targetComponentId || payload.target;
+          const artifacts = payload.artifacts || [];
+          const bucket = payload.bucket || 'artifacts';
+          const path = payload.path || '';
+
+          if (!targetComponentId) {
+            message.status = 'failed';
+            message.error = 'Target component ID not specified';
+            message.latency = 10;
+            return message;
+          }
+
+          // Находим целевой компонент
+          const targetNode = this.nodes.find(n => n.id === targetComponentId);
+          if (!targetNode) {
+            message.status = 'failed';
+            message.error = `Target component not found: ${targetComponentId}`;
+            message.latency = 10;
+            return message;
+          }
+
+          // Создаем сообщение для целевого компонента
+          const uploadMessage = this.addMessage({
+            source: node.id,
+            target: targetComponentId,
+            format: 'json',
+            payload: {
+              operation: 'upload',
+              bucket,
+              path,
+              artifacts,
+              source: 'gitlab-ci',
+              jobId: payload.jobId,
+              pipelineId: payload.pipelineId,
+            },
+            size: JSON.stringify(artifacts).length,
+            metadata: {
+              operation: 'upload',
+              contentType: 'application/json',
+            },
+          });
+
+          message.status = uploadMessage.status === 'failed' ? 'failed' : 'delivered';
+          message.error = uploadMessage.error;
+          message.latency = 50;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              operation: 'upload',
+              targetComponentId,
+              uploadMessageId: uploadMessage.id,
+            },
+          };
+        } else if (operation === 'notify' || operation === 'sendNotification' || payload.notify) {
+          // Операция отправки уведомлений от job - передаем в целевой компонент
+          const targetComponentId = payload.targetComponentId || payload.target;
+          const notification = payload.notification || payload.message || {};
+          const notificationType = payload.notificationType || 'pipeline_complete';
+
+          if (!targetComponentId) {
+            message.status = 'failed';
+            message.error = 'Target component ID not specified';
+            message.latency = 10;
+            return message;
+          }
+
+          // Находим целевой компонент
+          const targetNode = this.nodes.find(n => n.id === targetComponentId);
+          if (!targetNode) {
+            message.status = 'failed';
+            message.error = `Target component not found: ${targetComponentId}`;
+            message.latency = 10;
+            return message;
+          }
+
+          // Создаем сообщение для целевого компонента
+          const notifyMessage = this.addMessage({
+            source: node.id,
+            target: targetComponentId,
+            format: 'json',
+            payload: {
+              operation: 'notify',
+              notificationType,
+              notification,
+              source: 'gitlab-ci',
+              jobId: payload.jobId,
+              pipelineId: payload.pipelineId,
+            },
+            size: JSON.stringify(notification).length,
+            metadata: {
+              operation: 'notify',
+              contentType: 'application/json',
+            },
+          });
+
+          message.status = notifyMessage.status === 'failed' ? 'failed' : 'delivered';
+          message.error = notifyMessage.error;
+          message.latency = 50;
+          message.payload = {
+            ...(payload || {}),
+            gitlab: {
+              operation: 'notify',
+              targetComponentId,
+              notifyMessageId: notifyMessage.id,
             },
           };
         } else {

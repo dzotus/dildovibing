@@ -1369,7 +1369,7 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm" className="flex-shrink-0">
-                          <Download className="h-4 w-4 sm:mr-2" />
+                          <Upload className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Export</span>
                         </Button>
                       </DropdownMenuTrigger>
@@ -1387,7 +1387,7 @@ export function IDSIPSConfigAdvanced({ componentId }: IDSIPSConfigProps) {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="outline" size="sm" className="flex-shrink-0">
-                          <Upload className="h-4 w-4 sm:mr-2" />
+                          <Download className="h-4 w-4 sm:mr-2" />
                           <span className="hidden sm:inline">Import</span>
                         </Button>
                       </DropdownMenuTrigger>

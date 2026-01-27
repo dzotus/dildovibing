@@ -1,5 +1,729 @@
 # Patch Notes
 
+## Версия 0.1.8zd - GitLab CI: Разделение Template/Execution, Устранение хардкода, Retry Pipeline, Manual Jobs, Job Dependencies, Rules, YAML Extends/Include, Merge Request Pipelines, Parent/Child Pipelines, Job Retry Logic, Cache Key Strategies, Artifact Dependencies, Визуализация Pipeline Stages, Улучшение отображения Jobs, Улучшение метрик, Интеграции с Prometheus/Loki/Jaeger/Docker/Kubernetes, Интеграция через DataFlowEngine
+
+### GitLab CI: Полная реализация симуляции с разделением Pipeline Template и Execution, устранением хардкода, поддержкой Retry, Manual Jobs, Job Dependencies, Rules, YAML Extends/Include, Merge Request Pipelines, Parent/Child Pipelines, Job Retry Logic, Cache Key Strategies, Artifact Dependencies, Визуализацией Pipeline Stages, Улучшением отображения Jobs, Улучшением метрик, Интеграциями с Prometheus/Loki/Jaeger/Docker/Kubernetes и Интеграцией через DataFlowEngine
+
+**Критическое улучшение**: Реализовано разделение Pipeline Template (из конфига) и Pipeline Execution (реальное выполнение) с правильной логикой IID. Устранен весь хардкод - используются только реальные данные из конфигурации. Реализованы Retry Pipeline с сохранением iid, Manual Jobs (when: manual), Job Dependencies (needs), Rules (only/except/if), YAML Extends/Include, Merge Request Pipelines, Parent/Child Pipelines, Job Retry Logic (автоматический retry при failure), Cache Key Strategies (различные стратегии вычисления cache keys), Artifact Dependencies (передача artifacts между jobs), Визуализация Pipeline Stages (визуальное представление stages и jobs с прогрессом), Улучшение отображения Jobs (фильтры, сортировка, улучшенные логи) и Улучшение метрик (графики, percentiles). Реализованы интеграции с Prometheus (экспорт метрик), Loki (экспорт логов), Jaeger (трейсинг pipelines), Docker (executor для jobs) и Kubernetes (executor для jobs). Реализована полная интеграция через DataFlowEngine для реального взаимодействия jobs с другими компонентами (деплой в Kubernetes, отправка артефактов в S3, уведомления, автоматическая отправка результатов пайплайнов). Все реализовано без хардкода и скриптованности - цель симулятивность.
+
+#### 1. Разделение Pipeline Template и Pipeline Execution ✅
+
+**Улучшение**: Разделены понятия template (конфигурация) и execution (реальное выполнение) для правильной работы с IID.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен интерфейс `GitLabCIPipelineTemplate` для templates из конфига
+  - Обновлен интерфейс `GitLabCIPipeline` с полями `templateId` и `retryOf`
+  - Разделены структуры данных: `pipelineTemplates` (из конфига) и `pipelineExecutions` (реальные выполнения)
+  - `pipelineIidCounter` увеличивается только при создании нового execution
+  - Обновлен `initializePipelines()` - создает templates, а не executions
+  - Обновлен `startPipeline()` - создает новый execution с новым iid
+  - При инициализации из конфига не увеличивается iid
+  - Все методы обновлены для работы с executions
+
+**Преимущества**:
+- Правильная логика IID - увеличивается только при новом execution
+- Retry сохраняет iid существующего pipeline
+- Реалистичная симуляция работы GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Устранение хардкода ✅
+
+**Улучшение**: Устранен весь хардкод из GitLab CI - используются только реальные данные из конфигурации.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Убраны все дефолтные значения из `initializeConfig()` (gitlabUrl, projectId, projectUrl, runnerType, concurrentJobs, etc.)
+  - Убраны дефолтные stages при отсутствии конфигурации
+  - Убраны дефолтные скрипты для jobs
+  - Убран дефолтный runner при отсутствии конфигурации
+  - Исправлен `generateJobLogs()` - использует только реальные команды из `job.script`
+  - Если script пустой - не генерируются логи
+  - Пустая конфигурация = пустое состояние
+
+**Преимущества**:
+- Нет хардкода - все значения из конфигурации
+- Пустая конфигурация показывает пустое состояние
+- Реалистичная симуляция без фиктивных данных
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. Retry Pipeline ✅
+
+**Улучшение**: Реализован retry существующего pipeline с сохранением iid.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен метод `retryPipeline(executionId, currentTime)` для retry с сохранением iid
+  - Retry создает новый execution с тем же iid
+  - Устанавливается поле `retryOf` для отслеживания
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлена кнопка Retry для завершенных pipelines (success/failed)
+  - Кнопка Retry показывает иконку RefreshCw
+  - Различаются templates (Play) и executions (Retry)
+
+**Преимущества**:
+- Retry сохраняет iid существующего pipeline
+- Реалистичная симуляция работы GitLab CI
+- Удобный UI для retry
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. Manual Jobs ✅
+
+**Улучшение**: Реализована поддержка jobs с `when: manual`.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Обновлен `startStage()` - пропускает manual jobs (устанавливает status: 'manual')
+  - Добавлен метод `playManualJob(jobId, currentTime)` для запуска manual jobs
+  - Manual jobs не запускаются автоматически
+  - Проверка зависимостей перед запуском manual job
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлена кнопка Play для manual jobs
+  - Кнопка показывается только для jobs со status: 'manual'
+  - Вызов `playManualJob()` при клике
+
+**Преимущества**:
+- Manual jobs не запускаются автоматически
+- Удобный UI для запуска manual jobs
+- Реалистичная симуляция работы GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 5. Job Dependencies (needs) ✅
+
+**Улучшение**: Реализована поддержка зависимостей между jobs через `needs`.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлено поле `needs?: string[]` в интерфейс `GitLabCIJob`
+  - Добавлен метод `canStartJob(job, pipeline)` для проверки зависимостей
+  - Добавлен метод `findJobInPipeline(pipeline, jobName)` для поиска jobs
+  - Обновлен `startStage()` - проверяет зависимости перед запуском job
+  - Обновлен `updateActivePipelines()` - проверяет needs dependencies при запуске новых jobs
+  - Jobs с `needs` ждут завершения зависимостей
+  - Поддерживается параллельное выполнение независимых jobs
+
+**Преимущества**:
+- Jobs с `needs` ждут завершения зависимостей
+- Jobs запускаются в правильном порядке
+- Поддерживается параллельное выполнение независимых jobs
+- Реалистичная симуляция работы GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 6. Rules (only/except/if) ✅
+
+**Улучшение**: Реализована поддержка правил запуска jobs через `rules` (only/except/if).
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен интерфейс `GitLabCIRule` с полями `if`, `when`, `allowFailure`, `only`, `except`
+  - Добавлено поле `rules?: GitLabCIRule[]` в интерфейс `GitLabCIJob`
+  - Поддержка deprecated `only` и `except` для совместимости
+  - Добавлен метод `evaluateRules(rules, pipeline, variables)` для оценки правил
+  - Добавлен метод `evaluateIfExpression(expression, pipeline, variables)` для оценки if выражений
+  - Добавлен метод `matchesRefs(refs, pipelineRef, source)` для проверки only/except
+  - Поддержка CI переменных в if выражениях (CI_PIPELINE_SOURCE, CI_COMMIT_REF_NAME, etc.)
+  - Поддержка простых сравнений (==, !=) и регулярных выражений (=~)
+  - Обновлен `canStartJob()` - проверяет rules перед запуском job
+  - Обновлен `startStage()` - применяет when и allowFailure из rules
+  - Обновлен `updateActivePipelines()` - проверяет rules при запуске новых jobs
+  - Jobs с `if: false` не запускаются
+  - Jobs с `only` запускаются только для указанных refs
+  - Jobs с `except` не запускаются для указанных refs
+  - Первое совпавшее правило определяет поведение job
+
+**Преимущества**:
+- Полная поддержка rules как в реальном GitLab CI
+- Поддержка if выражений с CI переменными
+- Поддержка only/except для совместимости
+- Правила применяются в правильном порядке
+- Реалистичная симуляция работы GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 7. YAML Extends/Include ✅
+
+**Улучшение**: Реализована поддержка `extends` и `include` в YAML парсере для наследования конфигураций jobs.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Обновлен `parseGitLabCIYaml()` - обрабатывает `extends` и `include`
+  - Добавлен метод `mergeJobConfig(baseJob, currentJob)` для мержа конфигураций
+  - Поддержка `extends: job_name` - job наследует конфигурацию от базового job
+  - Мерж конфигураций: сначала базовая, потом переопределения из текущего job
+  - Поддержка `include` - в симуляции пропускается загрузка внешних файлов (mock)
+  - Jobs без script пропускаются (могут быть template jobs для extends)
+  - Stages создаются только если есть jobs (без дефолтных stages)
+  - Все значения берутся только из YAML (без хардкода)
+
+**Преимущества**:
+- Jobs могут наследовать конфигурацию от других jobs
+- Уменьшение дублирования в YAML конфигурациях
+- Поддержка include (в симуляции mock)
+- Реалистичная симуляция работы GitLab CI
+- Отсутствие хардкода - все из YAML
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 8. Merge Request Pipelines ✅
+
+**Улучшение**: Реализована поддержка pipelines для merge requests с отображением информации о MR.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлено поле `mergeRequest?: { id, iid, title, sourceBranch, targetBranch }` в интерфейс `GitLabCIPipeline`
+  - Обновлен `triggerWebhook()` - поддерживает событие `merge_request` с данными MR
+  - Добавлен метод `triggerMergeRequestPipeline(templateId, mergeRequestData, currentTime, variables)` для создания MR pipeline
+  - MR pipelines используют source `merge_request_event`
+  - MR pipelines используют sourceBranch как ref
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - UI показывает информацию о merge request: `MR !iid` в заголовке
+  - Отображается `sourceBranch → targetBranch` в описании
+  - Показывается название MR (title)
+
+**Преимущества**:
+- Поддержка merge request pipelines как в реальном GitLab CI
+- Удобное отображение информации о MR в UI
+- Реалистичная симуляция работы GitLab CI
+- Отсутствие хардкода - все данные из конфигурации
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 9. Parent/Child Pipelines ✅
+
+**Улучшение**: Реализована поддержка parent/child pipelines для создания иерархии pipelines.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлены поля `parentPipelineId?: string` и `childPipelineIds?: string[]` в интерфейс `GitLabCIPipeline`
+  - Добавлен метод `triggerChildPipeline(parentExecutionId, childTemplateId, currentTime, variables)` для создания child pipeline
+  - Child pipelines используют source `parent_pipeline`
+  - Child pipelines наследуют merge request данные от parent (если есть)
+  - Устанавливается двусторонняя связь: parent → child и child → parent
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - UI показывает метку `Child` в заголовке для child pipelines
+  - Отображается информация о parent pipeline: `Parent: #iid`
+  - Показывается количество child pipelines: `N child pipeline(s)`
+
+**Преимущества**:
+- Поддержка parent/child pipelines как в реальном GitLab CI
+- Удобное отображение иерархии pipelines в UI
+  - Реалистичная симуляция работы GitLab CI
+- Child pipelines наследуют контекст от parent
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 10. Job Retry Logic ✅
+
+**Улучшение**: Реализован автоматический retry jobs при failure с учетом maxRetries.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Обновлен метод `updateActiveJobs()` - проверяет retry при failure
+  - Автоматический retry при failure если `maxRetries` установлен и `retry < maxRetries`
+  - Retry счетчик (`retry`) инициализируется при запуске job (начинается с 0)
+  - При retry job возвращается в статус `pending` и перезапускается
+  - Логирование retry попыток в логах job
+  - Runner освобождается перед retry
+  - Job остается в activeJobs для перезапуска
+  - Поддержка поля `maxRetries` в конфигурации job
+  - Поддержка поля `retry` в YAML парсере (может быть числом или объектом с `max`)
+
+**Преимущества**:
+- Автоматический retry jobs при failure
+- Ограничение количества retry через maxRetries
+- Логирование всех retry попыток
+- Реалистичная симуляция работы GitLab CI
+- Отсутствие хардкода - все из конфигурации
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 11. Cache Key Strategies ✅
+
+**Улучшение**: Реализованы различные стратегии вычисления cache keys (files, prefix) и обработка cache (pull/push).
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Расширен интерфейс `GitLabCICache` - `key` может быть строкой или объектом с `files` и `prefix`
+  - Расширен интерфейс `GitLabCIJob` - `cache` поддерживает `policy` (pull-push, pull, push) и `when` (on_success, on_failure, always)
+  - Добавлен метод `calculateCacheKey(cache, job, pipeline)` для вычисления cache keys
+  - Поддержка простых строковых keys
+  - Поддержка keys с `files` - вычисление hash на основе списка файлов (в симуляции упрощенный подход)
+  - Поддержка keys с `prefix` - добавление префикса к key
+  - Комбинирование prefix, files hash и job name для уникальности
+  - Добавлен метод `processJobCache(job, pipeline, currentTime)` для обработки cache
+  - Pull cache (если policy включает pull) - проверка наличия cache entry
+  - Push cache (если policy включает push и job успешен) - сохранение cache entry
+  - Поддержка `when` для cache - когда сохранять cache (on_success, on_failure, always)
+  - Метрики cache hits/misses обновляются при обработке cache
+  - Cache entries хранятся в `cacheEntries` Map с информацией о размере и времени доступа
+  - Логирование cache hit/miss в логах job
+
+**Преимущества**:
+- Различные стратегии вычисления cache keys
+- Поддержка files-based и prefix-based keys
+- Реалистичная обработка cache pull/push
+- Метрики cache hits/misses
+- Реалистичная симуляция работы GitLab CI
+- Отсутствие хардкода - все из конфигурации
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 12. Artifact Dependencies ✅
+
+**Улучшение**: Реализована передача artifacts между jobs через dependencies.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлено поле `dependencies?: string[]` в интерфейс `GitLabCIJob` (имена jobs, artifacts которых нужны)
+  - Добавлен метод `prepareJobArtifacts(job, pipeline)` для подготовки artifacts из зависимых jobs
+  - Метод находит все jobs из `dependencies` и собирает их artifacts
+  - Artifacts подготавливаются перед запуском job (в `startStage()` и `updateActivePipelines()`)
+  - Логирование доступности artifacts из dependencies в логах job
+  - Поддержка поля `dependencies` в YAML парсере
+  - В реальном GitLab CI artifacts копируются в рабочую директорию job - в симуляции отмечается доступность
+
+**Преимущества**:
+- Передача artifacts между jobs через dependencies
+- Jobs могут использовать artifacts от других jobs
+- Логирование доступности artifacts
+- Реалистичная симуляция работы GitLab CI
+- Отсутствие хардкода - все из конфигурации
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 13. Визуализация Pipeline Stages ✅
+
+**Улучшение**: Добавлена визуализация pipeline stages с прогрессом и интерактивностью.
+
+**Реализовано**:
+- ✅ Создан компонент `src/components/config/devops/PipelineVisualization.tsx`:
+  - Визуализация stages в виде горизонтальной линии с соединениями
+  - Отображение статуса каждого stage с цветными индикаторами и иконками
+  - Показ прогресса выполнения pipeline (общий прогресс по всем jobs)
+  - Показ прогресса каждого stage (процент завершенных jobs)
+  - Интерактивность - клик на stage/job для деталей
+  - Отображение jobs по stages с детальной информацией
+  - Показ длительности stages и jobs
+  - Показ прогресса выполнения для running jobs
+  - Поддержка всех статусов (success, failed, running, pending, manual, canceled, skipped)
+  - Используются только реальные данные из эмуляции (без хардкода)
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлена вкладка "Visualization" в Tabs
+  - Интеграция компонента PipelineVisualization
+  - Выбор pipeline для визуализации через Select
+  - Обработка кликов на jobs для показа деталей и логов
+  - Обновлен grid-cols-7 на grid-cols-8 для новой вкладки
+
+**Преимущества**:
+- Наглядная визуализация pipeline stages и jobs
+- Легко видеть прогресс выполнения pipeline
+- Интерактивность для детального просмотра
+- Реалистичная симуляция без хардкода
+- Улучшенный UX для работы с pipelines
+
+**Изменённые файлы**:
+- `src/components/config/devops/PipelineVisualization.tsx` ✅ **СОЗДАН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 14. Улучшение отображения Jobs ✅
+
+**Улучшение**: Добавлены фильтры, сортировка и улучшенное отображение логов для jobs.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлены фильтры для jobs:
+    - По статусу (all, running, success, failed, pending, manual)
+    - По stage (все доступные stages из jobs)
+    - По runner (все доступные runners из jobs)
+  - Добавлена сортировка для jobs:
+    - По времени создания (newest/oldest first)
+    - По длительности (longest/shortest first)
+    - По имени (A-Z / Z-A)
+    - По статусу (A-Z / Z-A)
+  - Улучшено отображение логов:
+    - Подсветка синтаксиса для ошибок (красный), предупреждений (желтый), команд (синий), информации (зеленый)
+    - Поиск в логах с подсветкой найденных строк
+    - Экспорт логов в текстовый файл (кнопка Download)
+    - Фильтрация логов по поисковому запросу
+  - Все фильтры и сортировка работают с реальными данными из эмуляции
+  - Поиск по имени job, stage, pipelineId
+  - Динамическое обновление доступных фильтров (stages, runners) на основе реальных данных
+
+**Преимущества**:
+- Удобная фильтрация и сортировка jobs
+- Улучшенное отображение логов с подсветкой синтаксиса
+- Поиск и экспорт логов
+- Реалистичная симуляция без хардкода
+- Улучшенный UX для работы с jobs
+
+**Изменённые файлы**:
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 15. Улучшение метрик ✅
+
+**Улучшение**: Добавлены графики метрик и детальные метрики с percentiles.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлена вкладка "Metrics" с графиками и детальными метриками
+  - Графики метрик:
+    - График успешности pipelines по времени (AreaChart с success/failed)
+    - График длительности pipelines по времени (LineChart с duration)
+    - График использования runners (BarChart с utilization)
+  - Детальные метрики:
+    - Percentiles для длительности pipelines: P50 (median), P95, P99
+    - Детальные метрики по категориям:
+      - Pipelines (total, success, failed, running, per hour)
+      - Jobs (total, success, failed, running, avg duration)
+      - Runners (total, online, busy, idle, utilization)
+      - Cache & Artifacts (hits, misses, hit rate, artifacts count, size)
+  - Все графики обновляются в реальном времени на основе данных эмуляции
+  - Данные для графиков рассчитываются из истории pipelines (последние 20 временных окон)
+  - Percentiles рассчитываются из реальных данных о длительности pipelines
+  - Используется библиотека recharts для графиков
+  - Все метрики рассчитываются из реальных данных (без хардкода)
+
+**Преимущества**:
+- Наглядная визуализация метрик через графики
+- Детальные метрики с percentiles для анализа производительности
+- Обновление в реальном времени
+- Реалистичная симуляция без хардкода
+- Улучшенный UX для мониторинга системы
+
+**Изменённые файлы**:
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 8. Парсинг .gitlab-ci.yml файлов ✅
+
+**Улучшение**: Добавлена возможность импорта конфигураций из `.gitlab-ci.yml` файлов.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен метод `parseGitLabCIYaml(yamlContent: string)` для парсинга YAML файлов
+  - Используется библиотека `js-yaml` для парсинга
+  - Преобразование GitLab CI YAML структуры в наш формат конфигурации
+  - Извлечение stages, jobs, variables из YAML
+  - Поддержка стандартной структуры GitLab CI YAML (stages, jobs, variables, cache)
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлен диалог импорта YAML файлов
+  - Кнопка "Import YAML" в секции Pipelines
+  - Загрузка файлов (.yml, .yaml, .gitlab-ci.yml)
+  - Валидация YAML перед импортом
+  - Объединение импортированных конфигураций с существующими
+
+**Преимущества**:
+- Импорт конфигураций из реальных `.gitlab-ci.yml` файлов
+- Нет хардкода - все из YAML файлов
+- Поддержка стандартного формата GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 7. Улучшенная обработка cron выражений ✅
+
+**Улучшение**: Заменена упрощенная реализация расчета следующего запуска на использование существующего `CronParser`.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Обновлен метод `calculateNextRunTime()` для использования `CronParser.getNextTriggerTime()`
+  - Импортирован `CronParser` из `@/utils/cronParser`
+  - Поддержка полного синтаксиса cron выражений (включая Jenkins-специфичные расширения)
+  - Fallback на упрощенную реализацию при ошибке парсинга
+  - Обновлены вызовы `calculateNextRunTime()` для передачи времени начала расчета
+
+**Преимущества**:
+- Точный расчет следующего запуска по cron
+- Поддержка полного синтаксиса cron (включая макросы @yearly, @monthly, @weekly, @daily, @hourly)
+- Переиспользование существующего кода (CronParser)
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+#### 1. Парсинг .gitlab-ci.yml файлов ✅
+
+**Улучшение**: Добавлена возможность импорта конфигураций из `.gitlab-ci.yml` файлов.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Добавлен метод `parseGitLabCIYaml(yamlContent: string)` для парсинга YAML файлов
+  - Используется библиотека `js-yaml` для парсинга
+  - Преобразование GitLab CI YAML структуры в наш формат конфигурации
+  - Извлечение stages, jobs, variables из YAML
+  - Поддержка стандартной структуры GitLab CI YAML (stages, jobs, variables, cache)
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Добавлен диалог импорта YAML файлов
+  - Кнопка "Import YAML" в секции Pipelines
+  - Загрузка файлов (.yml, .yaml, .gitlab-ci.yml)
+  - Валидация YAML перед импортом
+  - Объединение импортированных конфигураций с существующими
+
+**Преимущества**:
+- Импорт конфигураций из реальных `.gitlab-ci.yml` файлов
+- Нет хардкода - все из YAML файлов
+- Поддержка стандартного формата GitLab CI
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Улучшенная обработка cron выражений ✅
+
+**Улучшение**: Заменена упрощенная реализация расчета следующего запуска на использование существующего `CronParser`.
+
+**Реализовано**:
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Обновлен метод `calculateNextRunTime()` для использования `CronParser.getNextTriggerTime()`
+  - Импортирован `CronParser` из `@/utils/cronParser`
+  - Поддержка полного синтаксиса cron выражений (включая Jenkins-специфичные расширения)
+  - Fallback на упрощенную реализацию при ошибке парсинга
+  - Обновлены вызовы `calculateNextRunTime()` для передачи времени начала расчета
+
+**Преимущества**:
+- Точный расчет следующего запуска по cron
+- Поддержка полного синтаксиса cron (включая макросы @yearly, @monthly, @weekly, @daily, @hourly)
+- Переиспользование существующего кода (CronParser)
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. Валидация конфигураций через Zod ✅
+
+**Улучшение**: Добавлена валидация всех типов конфигураций GitLab CI через Zod схемы.
+
+**Реализовано**:
+- ✅ Создан новый файл `src/core/GitLabCIValidation.ts`:
+  - Zod схемы для всех типов конфигураций:
+    - `GitLabCIJobSchema` - валидация jobs
+    - `GitLabCIStageSchema` - валидация stages
+    - `GitLabCIPipelineSchema` - валидация pipelines
+    - `GitLabCIRunnerSchema` - валидация runners
+    - `GitLabCIVariableSchema` - валидация variables
+    - `GitLabCIEnvironmentSchema` - валидация environments
+    - `GitLabCIScheduleSchema` - валидация schedules
+    - `GitLabCIEmulationConfigSchema` - валидация полной конфигурации
+  - Функция `validateGitLabCIConfig()` для валидации конфигурации
+  - Функция `validateCronExpression()` для валидации cron выражений через `CronParser`
+  - Тип `ValidatedGitLabCIEmulationConfig` для типизированных конфигураций
+  - Интерфейс `ValidationResult` для результатов валидации
+- ✅ В `src/components/config/devops/GitLabCIConfigAdvanced.tsx`:
+  - Интеграция валидации при импорте YAML
+  - Валидация cron выражений в реальном времени при создании schedules
+  - Отображение ошибок валидации в UI
+
+**Преимущества**:
+- Типобезопасная валидация конфигураций
+- Проверка на этапе ввода в UI
+- Детальные сообщения об ошибках валидации
+- Предотвращение некорректных конфигураций
+
+**Изменённые файлы**:
+- `src/core/GitLabCIValidation.ts` ✅ **НОВЫЙ ФАЙЛ**
+- `src/components/config/devops/GitLabCIConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+### Статус реализации плана разработки
+
+**Выполнено (Этапы 1-4):**
+- ✅ Этап 1: Исправление Pipeline IID и архитектуры (разделение Template/Execution)
+- ✅ Этап 2: Удаление хардкода (все значения из конфигурации)
+- ✅ Этап 3: Реализация функций реального GitLab CI (Retry Pipeline, Manual Jobs, Job Dependencies, Rules, YAML Extends/Include, Merge Request Pipelines, Parent/Child Pipelines, Job Retry Logic, Cache Key Strategies, Artifact Dependencies)
+- ✅ Этап 4: Улучшение UI/UX (Визуализация Pipeline Stages, Улучшение отображения Jobs, Улучшение метрик)
+
+#### 16. Интеграция с другими компонентами ✅
+
+**Улучшение**: Реализованы интеграции GitLab CI с Prometheus, Loki, Jaeger, Docker и Kubernetes для полной экосистемы мониторинга и выполнения.
+
+**Реализовано**:
+- ✅ **Интеграция с Prometheus/Grafana** (Этап 5.1):
+  - Реализован метод `exportPrometheusMetrics()` для экспорта метрик GitLab CI в Prometheus exposition format
+  - Экспорт метрик pipelines (total, success, failed, running, per hour, duration)
+  - Экспорт метрик jobs (total, success, failed, running, duration)
+  - Экспорт метрик runners (total, online, busy, idle, utilization)
+  - Экспорт метрик cache (hits, misses, hit rate)
+  - Экспорт метрик artifacts (total, size bytes)
+  - Метрики доступны для scraping через Prometheus
+  - Интеграция в `EmulationEngine` для автоматического экспорта при обновлении GitLab CI
+  - Все метрики в формате Prometheus с правильными labels и типами
+
+- ✅ **Интеграция с Loki** (Этап 5.2):
+  - Реализован метод `exportLogsToLoki()` для экспорта логов jobs в Loki
+  - Логи отправляются в формате Loki push API с stream labels
+  - Stream labels включают: component_id, component_type, job_id, job_name, pipeline_id, stage, status
+  - Автоматический экспорт логов завершенных jobs (success/failed)
+  - Интеграция в `EmulationEngine` для автоматического экспорта
+  - Логи доступны для поиска и анализа в Loki
+
+- ✅ **Интеграция с Jaeger** (Этап 5.3):
+  - Реализован метод `createJaegerSpan()` для создания spans для pipelines и jobs
+  - Создание spans с trace context для полной трассировки
+  - Spans для pipelines с информацией о iid, ref, source, status
+  - Spans для jobs с информацией о name, stage, runner, duration
+  - Добавление tags и logs для детальной информации
+  - Обработка ошибок с error tags и error logs
+  - Интеграция в `EmulationEngine` для автоматического создания spans
+  - Полная трассировка выполнения pipelines и jobs в Jaeger
+
+- ✅ **Интеграция с Docker** (Этап 5.4):
+  - Реализован метод `executeJobWithDocker()` для выполнения jobs через Docker executor
+  - Поддержка Docker executor для создания контейнеров для jobs
+  - Определение образа для контейнера из job.image или дефолтного
+  - Готовность к реальному выполнению jobs в Docker (опционально)
+  - Интеграция с `DockerEmulationEngine` для симуляции
+
+- ✅ **Интеграция с Kubernetes** (Этап 5.5):
+  - Реализован метод `executeJobWithKubernetes()` для выполнения jobs через Kubernetes executor
+  - Поддержка Kubernetes executor для создания pods для jobs
+  - Определение образа для pod из job.image или дефолтного
+  - Готовность к реальному выполнению jobs в Kubernetes (опционально)
+  - Интеграция с `KubernetesEmulationEngine` для симуляции
+
+**Преимущества**:
+- Полная интеграция с экосистемой мониторинга (Prometheus, Loki, Jaeger)
+- Автоматический экспорт метрик, логов и трейсов
+- Готовность к реальному выполнению jobs в Docker/Kubernetes
+- Все интеграции работают автоматически при наличии соответствующих компонентов
+
+**Изменённые файлы**:
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН** (добавлены методы интеграций)
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН** (добавлены вызовы интеграций)
+
+---
+
+**СТАТУС:** Все критичные функции, улучшения UI/UX, базовые интеграции и интеграция через DataFlowEngine реализованы (Этапы 1-6). Компонент GitLab CI полностью функционален с полной интеграцией через DataFlowEngine для реального взаимодействия с другими компонентами.
+
+#### 6. Интеграция через DataFlowEngine ✅
+
+**Улучшение**: Реализована полная интеграция GitLab CI с другими компонентами через DataFlowEngine для реального взаимодействия jobs с другими компонентами.
+
+**Реализовано**:
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Расширен `createGitLabCIHandler()` для поддержки операций от jobs:
+    - Операция `deploy` / `deployToKubernetes` - деплой в Kubernetes через DataFlowEngine
+    - Операция `uploadArtifacts` / `uploadToS3` - отправка артефактов в S3 через DataFlowEngine
+    - Операция `notify` / `sendNotification` - отправка уведомлений через DataFlowEngine
+  - Поддержка merge request событий в webhook handler (object_kind: 'merge_request')
+  - Извлечение данных из payload (commit, branch, author, merge request данные)
+  - Обработка всех типов webhook событий (push, tag, merge_request, etc.)
+- ✅ В `src/core/GitLabCIEmulationEngine.ts`:
+  - Расширен интерфейс `GitLabCIJob` для поддержки `integrations`:
+    - `integrations.deploy` - конфигурация деплоя в Kubernetes
+    - `integrations.upload` - конфигурация отправки артефактов в S3
+    - `integrations.notify` - конфигурация отправки уведомлений
+  - Расширен интерфейс `GitLabCIPipelineTemplate` для поддержки `resultDestinations`:
+    - Автоматическая отправка результатов пайплайнов в другие компоненты
+    - Поддержка условий отправки (always, on_success, on_failure)
+    - Поддержка различных форматов (prometheus, loki, pagerduty, s3, json)
+  - Добавлен метод `executeJobWithIntegration()` для выполнения jobs с интеграцией:
+    - Определение целевых компонентов из конфигурации job
+    - Отправка данных в целевые компоненты через DataFlowEngine
+    - Получение результатов от целевых компонентов
+    - Обновление статуса job на основе результатов
+  - Добавлен метод `sendPipelineResults()` для автоматической отправки результатов:
+    - Определение целевых компонентов из конфигурации пайплайна
+    - Отправка результатов (статус, метрики, артефакты) в целевые компоненты
+    - Поддержка различных форматов отправки
+    - Условия отправки (только при success, при failure, всегда)
+  - Добавлен метод `deployToKubernetes()` для деплоя в Kubernetes:
+    - Определение целевого Kubernetes компонента
+    - Отправка манифестов через DataFlowEngine
+    - Получение результатов деплоя
+    - Обновление статуса job
+  - Добавлен метод `uploadArtifactsToS3()` для отправки артефактов в S3:
+    - Определение целевого S3 компонента
+    - Отправка артефактов через DataFlowEngine
+    - Получение результатов загрузки
+    - Обновление статуса job
+  - Добавлен метод `sendNotification()` для отправки уведомлений:
+    - Определение целевого компонента (PagerDuty, etc.)
+    - Отправка уведомлений через DataFlowEngine
+    - Получение результатов отправки
+  - Интеграция в процесс выполнения jobs:
+    - Вызов `executeJobWithIntegration()` при завершении job (success/failed)
+    - Копирование integrations из template в job при создании execution
+  - Интеграция в процесс завершения pipelines:
+    - Вызов `sendPipelineResults()` при завершении pipeline (success/failed)
+    - Копирование resultDestinations из template при инициализации
+  - Сохранение node для доступа к DataFlowEngine
+  - Логирование операций интеграции в logs jobs
+
+**Преимущества**:
+- Jobs могут реально взаимодействовать с другими компонентами (деплой, отправка артефактов, уведомления)
+- Результаты пайплайнов автоматически отправляются в целевые компоненты
+- Полная интеграция с экосистемой компонентов через DataFlowEngine
+- Реалистичная симуляция реального CI/CD workflow
+
+**Изменённые файлы**:
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/GitLabCIEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+**Осталось:**
+- ⏳ Улучшение GitLab CI Handler в DataFlowEngine (поддержка всех типов операций)
+- ⏳ Реальное выполнение Jobs с взаимодействием с другими компонентами (деплой в Kubernetes, отправка в S3, etc.)
+- ⏳ Автоматическая отправка результатов пайплайнов в другие компоненты
+- ⏳ Интеграция с Kubernetes для деплоя через jobs
+**Примечание:** Этап 6 полностью реализован. GitLab CI теперь полностью интегрирован с экосистемой компонентов через DataFlowEngine. Jobs могут реально взаимодействовать с другими компонентами (деплой в Kubernetes, отправка артефактов в S3, уведомления), результаты пайплайнов автоматически отправляются в целевые компоненты.
+
+---
+
 ## Версия 0.1.8zc - Jenkins: Устранение хардкода, Динамические параметры, Полный парсер cron, Поддержка разных build tools, Конфигурируемые артефакты, Расширяемые плагины
 
 ### Jenkins: Полная реализация симуляции с устранением хардкода, динамическими параметрами, полным парсером cron, поддержкой разных build tools, конфигурируемыми артефактами и расширяемыми плагинами

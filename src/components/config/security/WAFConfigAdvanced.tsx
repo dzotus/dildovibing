@@ -37,7 +37,8 @@ import {
   TrendingUp,
   Code,
   Network,
-  Download
+  Download,
+  Upload
 } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
@@ -788,7 +789,7 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
                           onClick={exportThreatsToJSON}
                           className="gap-2"
                         >
-                          <Download className="h-4 w-4" />
+                          <Upload className="h-4 w-4" />
                           Export JSON
                         </Button>
                         <Button
@@ -797,7 +798,7 @@ export function WAFConfigAdvanced({ componentId }: WAFConfigProps) {
                           onClick={exportThreatsToCSV}
                           className="gap-2"
                         >
-                          <Download className="h-4 w-4" />
+                          <Upload className="h-4 w-4" />
                           Export CSV
                         </Button>
                       </div>

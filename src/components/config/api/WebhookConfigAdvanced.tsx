@@ -906,7 +906,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
                     size="sm" 
                     onClick={exportConfig}
                   >
-                    <Download className="h-4 w-4 mr-2" />
+                    <Upload className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">Export</span>
                   </Button>
                 </TooltipTrigger>
@@ -921,7 +921,7 @@ export function WebhookConfigAdvanced({ componentId }: WebhookConfigProps) {
                     size="sm" 
                     onClick={importConfig}
                   >
-                    <Upload className="h-4 w-4 mr-2" />
+                    <Download className="h-4 w-4 mr-2" />
                     <span className="hidden sm:inline">Import</span>
                   </Button>
                 </TooltipTrigger>

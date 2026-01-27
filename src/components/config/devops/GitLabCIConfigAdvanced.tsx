@@ -34,8 +34,18 @@ import {
   Search,
   X,
   Server,
-  Code
+  Code,
+  Upload,
+  FileCode,
+  Download,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
+import { validateGitLabCIConfig, validateCronExpression } from '@/core/GitLabCIValidation';
+import { PipelineVisualization } from './PipelineVisualization';
+import { GitLabCIStage, GitLabCIJob } from '@/core/GitLabCIEmulationEngine';
+import { LineChart, Line, AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend } from 'recharts';
 
 interface GitLabCIConfigProps {
   componentId: string;
@@ -112,7 +122,7 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
   const gitlabCIEngine = emulationEngine.getGitLabCIEmulationEngine(componentId);
   const componentMetrics = getComponentMetrics(componentId);
   
-  const config = (node.data.config as any) || {} as GitLabCIConfig;
+  const config = (node?.data?.config as GitLabCIConfig) || {};
   
   // Real-time data from emulation
   const [realPipelines, setRealPipelines] = useState<any[]>([]);
@@ -126,7 +136,7 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
   
   // UI state
   const [searchQuery, setSearchQuery] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'running' | 'success' | 'failed' | 'pending'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'running' | 'success' | 'failed' | 'pending' | 'canceled'>('all');
   const [selectedJob, setSelectedJob] = useState<string | null>(null);
   const [showJobDetails, setShowJobDetails] = useState(false);
   const [jobLogs, setJobLogs] = useState<string[]>([]);
@@ -134,6 +144,16 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
   const [showAddVariable, setShowAddVariable] = useState(false);
   const [showAddEnvironment, setShowAddEnvironment] = useState(false);
   const [showAddSchedule, setShowAddSchedule] = useState(false);
+  const [selectedPipelineForViz, setSelectedPipelineForViz] = useState<string | null>(null);
+  
+  // Jobs filters and sorting
+  const [jobFilterStatus, setJobFilterStatus] = useState<'all' | 'running' | 'success' | 'failed' | 'pending' | 'manual' | 'canceled'>('all');
+  const [jobFilterStage, setJobFilterStage] = useState<string>('all');
+  const [jobFilterRunner, setJobFilterRunner] = useState<string>('all');
+  const [jobSortBy, setJobSortBy] = useState<'created' | 'duration' | 'status' | 'name'>('created');
+  const [jobSortOrder, setJobSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [jobSearchQuery, setJobSearchQuery] = useState('');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
   
   // Form states
   const [newRunnerName, setNewRunnerName] = useState('');
@@ -155,6 +175,11 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
   const [newScheduleRef, setNewScheduleRef] = useState('main');
   const [newScheduleCron, setNewScheduleCron] = useState('0 * * * *');
   const [newScheduleActive, setNewScheduleActive] = useState(true);
+  
+  // YAML import state
+  const [showYamlImport, setShowYamlImport] = useState(false);
+  const [yamlContent, setYamlContent] = useState('');
+  const [yamlValidationError, setYamlValidationError] = useState<string | null>(null);
 
   // Update real-time data from emulation
   useEffect(() => {
@@ -195,6 +220,159 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
     return () => clearInterval(interval);
   }, [gitlabCIEngine, isRunning, selectedJob]);
 
+  const configPipelines = useMemo(() => {
+    const pipelines = Array.isArray(config.pipelines) ? config.pipelines : [];
+    return pipelines.map((pipeline, index) => ({
+      id: pipeline.id,
+      iid: index + 1,
+      status: 'created',
+      ref: pipeline.ref || 'main',
+      source: pipeline.source || 'push',
+      stages: (Array.isArray(pipeline.stages) ? pipeline.stages : []).map((stage) => ({
+        name: stage.name,
+        status: 'pending',
+        jobs: (Array.isArray(stage.jobs) ? stage.jobs : []).map((job) => ({
+          id: `${pipeline.id}-${stage.name}-${job.name}`,
+          name: job.name,
+          stage: stage.name,
+          status: 'created',
+          pipelineId: pipeline.id,
+          when: job.when,
+          allowFailure: job.allowFailure,
+          tags: Array.isArray(job.tags) ? job.tags : [],
+          image: job.image,
+          script: Array.isArray(job.script) ? job.script : undefined,
+        })),
+      })),
+    }));
+  }, [config.pipelines]);
+
+  const configRunners = useMemo(() => {
+    const runners = Array.isArray(config.runners) ? config.runners : [];
+    return runners.map((runner) => ({
+      id: runner.id,
+      name: runner.name,
+      status: 'offline',
+      executor: runner.executor || config.runnerType || 'docker',
+      currentJobs: 0,
+      maxJobs: runner.maxJobs || config.concurrentJobs || 4,
+      tagList: Array.isArray(runner.tags) ? runner.tags : [],
+      isShared: runner.isShared ?? false,
+    }));
+  }, [config.runners, config.runnerType, config.concurrentJobs]);
+
+  const configVariables = useMemo(() => {
+    const variables = Array.isArray(config.variables) ? config.variables : [];
+    return variables.map((variable) => ({
+      key: variable.key,
+      value: variable.value,
+      protected: variable.protected ?? false,
+      masked: variable.masked ?? false,
+      environmentScope: variable.environmentScope || '*',
+    }));
+  }, [config.variables]);
+
+  const configEnvironments = useMemo(() => {
+    const environments = Array.isArray(config.environments) ? config.environments : [];
+    return environments.map((environment) => ({
+      id: environment.id,
+      name: environment.name,
+      externalUrl: environment.externalUrl,
+      state: 'available',
+      deployments: [],
+    }));
+  }, [config.environments]);
+
+  const configSchedules = useMemo(() => {
+    const schedules = Array.isArray(config.schedules) ? config.schedules : [];
+    return schedules.map((schedule) => ({
+      id: schedule.id,
+      description: schedule.description,
+      ref: schedule.ref,
+      cron: schedule.cron,
+      active: schedule.active ?? true,
+    }));
+  }, [config.schedules]);
+
+  const displayPipelines = gitlabCIEngine ? realPipelines : configPipelines;
+  const displayJobs = gitlabCIEngine ? realJobs : [];
+  const displayRunners = gitlabCIEngine ? realRunners : configRunners;
+  const displayVariables = gitlabCIEngine ? realVariables : configVariables;
+  const displayEnvironments = gitlabCIEngine ? realEnvironments : configEnvironments;
+  const displaySchedules = gitlabCIEngine ? realSchedules : configSchedules;
+
+  // Filtered and sorted jobs
+  const filteredAndSortedJobs = useMemo(() => {
+    let filtered = [...displayJobs];
+
+    // Filter by status
+    if (jobFilterStatus !== 'all') {
+      filtered = filtered.filter(job => job.status === jobFilterStatus);
+    }
+
+    // Filter by stage
+    if (jobFilterStage !== 'all') {
+      filtered = filtered.filter(job => job.stage === jobFilterStage);
+    }
+
+    // Filter by runner
+    if (jobFilterRunner !== 'all') {
+      filtered = filtered.filter(job => job.runnerId === jobFilterRunner);
+    }
+
+    // Search filter
+    if (jobSearchQuery) {
+      const query = jobSearchQuery.toLowerCase();
+      filtered = filtered.filter(job =>
+        job.name.toLowerCase().includes(query) ||
+        job.stage.toLowerCase().includes(query) ||
+        job.pipelineId.toLowerCase().includes(query)
+      );
+    }
+
+    // Sort
+    filtered.sort((a, b) => {
+      let comparison = 0;
+      switch (jobSortBy) {
+        case 'created':
+          comparison = (a.startTime || 0) - (b.startTime || 0);
+          break;
+        case 'duration':
+          comparison = (a.duration || 0) - (b.duration || 0);
+          break;
+        case 'status':
+          comparison = a.status.localeCompare(b.status);
+          break;
+        case 'name':
+          comparison = a.name.localeCompare(b.name);
+          break;
+      }
+      return jobSortOrder === 'asc' ? comparison : -comparison;
+    });
+
+    return filtered;
+  }, [displayJobs, jobFilterStatus, jobFilterStage, jobFilterRunner, jobSearchQuery, jobSortBy, jobSortOrder]);
+
+  // Get unique stages and runners for filters
+  const availableStages = useMemo(() => {
+    const stages = new Set<string>();
+    displayJobs.forEach(job => {
+      if (job.stage) stages.add(job.stage);
+    });
+    return Array.from(stages).sort();
+  }, [displayJobs]);
+
+  const availableRunners = useMemo(() => {
+    const runners = new Map<string, string>();
+    displayJobs.forEach(job => {
+      if (job.runnerId && displayRunners.find(r => r.id === job.runnerId)) {
+        const runner = displayRunners.find(r => r.id === job.runnerId);
+        if (runner) runners.set(job.runnerId, runner.name);
+      }
+    });
+    return Array.from(runners.entries()).map(([id, name]) => ({ id, name }));
+  }, [displayJobs, displayRunners]);
+
   // Sync config with emulation engine when it changes
   useEffect(() => {
     if (gitlabCIEngine && node) {
@@ -206,17 +384,17 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
     const newConfig = { ...config, ...updates };
     updateNode(componentId, {
       data: {
-        ...node.data,
+        ...(node?.data || {}),
         config: newConfig,
       },
     });
     
     // Sync with emulation engine immediately
-    if (gitlabCIEngine) {
+    if (gitlabCIEngine && node) {
       gitlabCIEngine.updateConfig({
         ...node,
         data: {
-          ...node.data,
+          ...(node?.data || {}),
           config: newConfig,
         },
       });
@@ -293,7 +471,7 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
     });
   };
 
-  const startPipeline = (pipelineId: string) => {
+  const startPipeline = (pipelineId: string, isTemplate: boolean = false) => {
     if (!gitlabCIEngine) {
       toast({
         title: "Error",
@@ -303,7 +481,16 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
       return;
     }
     
-    const result = gitlabCIEngine.startPipeline(pipelineId, Date.now(), 'web');
+    // Если это execution, нужно получить templateId
+    let templateId = pipelineId;
+    if (!isTemplate) {
+      const execution = gitlabCIEngine.getPipeline(pipelineId);
+      if (execution) {
+        templateId = execution.templateId;
+      }
+    }
+    
+    const result = gitlabCIEngine.startPipeline(templateId, Date.now(), 'web');
     if (result.success) {
       toast({
         title: "Pipeline started",
@@ -313,6 +500,56 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
       toast({
         title: "Error",
         description: result.reason || "Failed to start pipeline",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  const retryPipeline = (executionId: string) => {
+    if (!gitlabCIEngine) {
+      toast({
+        title: "Error",
+        description: "GitLab CI engine not available",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const result = gitlabCIEngine.retryPipeline(executionId, Date.now());
+    if (result.success) {
+      toast({
+        title: "Pipeline retried",
+        description: "Pipeline has been retried with the same IID",
+      });
+    } else {
+      toast({
+        title: "Error",
+        description: result.reason || "Failed to retry pipeline",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  const playManualJob = (jobId: string) => {
+    if (!gitlabCIEngine) {
+      toast({
+        title: "Error",
+        description: "GitLab CI engine not available",
+        variant: "destructive",
+      });
+      return;
+    }
+    
+    const result = gitlabCIEngine.playManualJob(jobId, Date.now());
+    if (result.success) {
+      toast({
+        title: "Manual job started",
+        description: "Manual job has been triggered",
+      });
+    } else {
+      toast({
+        title: "Error",
+        description: result.reason || "Failed to start manual job",
         variant: "destructive",
       });
     }
@@ -530,7 +767,7 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
 
   // Filtered data
   const filteredPipelines = useMemo(() => {
-    let filtered = realPipelines;
+    let filtered = displayPipelines;
     
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
@@ -545,18 +782,91 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
     }
     
     return filtered;
-  }, [realPipelines, searchQuery, filterStatus]);
+  }, [displayPipelines, searchQuery, filterStatus]);
 
   // Metrics from emulation
-  const activeJobsCount = realMetrics?.jobsRunning || 0;
+  const activeJobsCount = gitlabCIEngine ? (realMetrics?.jobsRunning || 0) : displayJobs.length;
   const successRate = realMetrics && (realMetrics.pipelinesSuccess + realMetrics.pipelinesFailed) > 0
     ? ((realMetrics.pipelinesSuccess / (realMetrics.pipelinesSuccess + realMetrics.pipelinesFailed)) * 100).toFixed(1)
     : '0';
   const avgDuration = realMetrics?.averagePipelineDuration 
     ? Math.round(realMetrics.averagePipelineDuration / 1000)
     : 0;
-  const runnersOnline = realRunners.filter(r => r.status === 'online').length;
-  const runnersTotal = realRunners.length;
+  const runnersOnline = displayRunners.filter((runner) => runner.status === 'online').length;
+  const runnersTotal = displayRunners.length;
+
+  // Prepare chart data for metrics
+  const metricsChartData = useMemo(() => {
+    if (!gitlabCIEngine || !realPipelines.length) return [];
+    
+    // Group pipelines by time windows (last 20 time points)
+    const now = Date.now();
+    const timeWindows = 20;
+    const windowSize = 60000; // 1 minute per window
+    const data: Array<{
+      time: string;
+      success: number;
+      failed: number;
+      duration: number;
+      running: number;
+    }> = [];
+    
+    for (let i = timeWindows - 1; i >= 0; i--) {
+      const windowStart = now - (i + 1) * windowSize;
+      const windowEnd = now - i * windowSize;
+      const windowPipelines = realPipelines.filter(p => {
+        const created = p.createdAt || 0;
+        return created >= windowStart && created < windowEnd;
+      });
+      
+      const success = windowPipelines.filter(p => p.status === 'success').length;
+      const failed = windowPipelines.filter(p => p.status === 'failed').length;
+      const avgDuration = windowPipelines.length > 0
+        ? windowPipelines.reduce((sum, p) => sum + (p.duration || 0), 0) / windowPipelines.length / 1000
+        : 0;
+      const running = windowPipelines.filter(p => p.status === 'running').length;
+      
+      data.push({
+        time: new Date(windowEnd).toLocaleTimeString(),
+        success,
+        failed,
+        duration: Math.round(avgDuration),
+        running,
+      });
+    }
+    
+    return data;
+  }, [gitlabCIEngine, realPipelines]);
+
+  // Calculate percentiles for pipeline duration
+  const durationPercentiles = useMemo(() => {
+    if (!realPipelines.length) return { p50: 0, p95: 0, p99: 0 };
+    
+    const durations = realPipelines
+      .filter(p => p.duration !== undefined && p.duration > 0)
+      .map(p => p.duration!)
+      .sort((a, b) => a - b);
+    
+    if (durations.length === 0) return { p50: 0, p95: 0, p99: 0 };
+    
+    const p50 = durations[Math.floor(durations.length * 0.5)] / 1000;
+    const p95 = durations[Math.floor(durations.length * 0.95)] / 1000;
+    const p99 = durations[Math.floor(durations.length * 0.99)] / 1000;
+    
+    return { p50: Math.round(p50), p95: Math.round(p95), p99: Math.round(p99) };
+  }, [realPipelines]);
+
+  // Runner utilization data
+  const runnerUtilizationData = useMemo(() => {
+    return displayRunners.map(runner => ({
+      name: runner.name,
+      utilization: runner.status === 'online' 
+        ? (runner.currentJobs / runner.maxJobs) * 100 
+        : 0,
+      currentJobs: runner.currentJobs,
+      maxJobs: runner.maxJobs,
+    }));
+  }, [displayRunners]);
 
   return (
     <div className="h-full overflow-y-auto bg-background">
@@ -626,33 +936,45 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
 
         {/* Main Configuration Tabs */}
         <Tabs defaultValue="pipelines" className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="pipelines" className="gap-2">
-              <Play className="h-4 w-4" />
+          <TabsList className="flex flex-wrap w-full gap-1 p-1 h-auto">
+            <TabsTrigger value="pipelines" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Play className="h-4 w-4 flex-shrink-0" />
               Pipelines
             </TabsTrigger>
-            <TabsTrigger value="jobs" className="gap-2">
-              <Code className="h-4 w-4" />
+            <TabsTrigger value="visualization" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Activity className="h-4 w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">Visualization</span>
+              <span className="sm:hidden">Viz</span>
+            </TabsTrigger>
+            <TabsTrigger value="jobs" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Code className="h-4 w-4 flex-shrink-0" />
               Jobs
             </TabsTrigger>
-            <TabsTrigger value="runners" className="gap-2">
-              <Server className="h-4 w-4" />
+            <TabsTrigger value="metrics" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Activity className="h-4 w-4 flex-shrink-0" />
+              Metrics
+            </TabsTrigger>
+            <TabsTrigger value="runners" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Server className="h-4 w-4 flex-shrink-0" />
               Runners
             </TabsTrigger>
-            <TabsTrigger value="variables" className="gap-2">
-              <Database className="h-4 w-4" />
-              Variables
+            <TabsTrigger value="variables" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Database className="h-4 w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">Variables</span>
+              <span className="sm:hidden">Vars</span>
             </TabsTrigger>
-            <TabsTrigger value="environments" className="gap-2">
-              <Globe className="h-4 w-4" />
-              Environments
+            <TabsTrigger value="environments" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Globe className="h-4 w-4 flex-shrink-0" />
+              <span className="hidden md:inline">Environments</span>
+              <span className="md:hidden">Envs</span>
             </TabsTrigger>
-            <TabsTrigger value="schedules" className="gap-2">
-              <Calendar className="h-4 w-4" />
-              Schedules
+            <TabsTrigger value="schedules" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Calendar className="h-4 w-4 flex-shrink-0" />
+              <span className="hidden sm:inline">Schedules</span>
+              <span className="sm:hidden">Sched</span>
             </TabsTrigger>
-            <TabsTrigger value="settings" className="gap-2">
-              <Settings className="h-4 w-4" />
+            <TabsTrigger value="settings" className="gap-2 flex-shrink-0 whitespace-nowrap">
+              <Settings className="h-4 w-4 flex-shrink-0" />
               Settings
             </TabsTrigger>
           </TabsList>
@@ -661,23 +983,23 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
           <TabsContent value="pipelines" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>Pipelines</CardTitle>
                     <CardDescription>CI/CD pipeline status and history</CardDescription>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <div className="relative">
                       <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
                       <Input
                         placeholder="Search pipelines..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-8 w-64"
+                        className="pl-8 w-full sm:w-48 md:w-64"
                       />
                     </div>
                     <Select value={filterStatus} onValueChange={(v: any) => setFilterStatus(v)}>
-                      <SelectTrigger className="w-32">
+                      <SelectTrigger className="w-full sm:w-32">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -686,11 +1008,16 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
                         <SelectItem value="success">Success</SelectItem>
                         <SelectItem value="failed">Failed</SelectItem>
                         <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="canceled">Canceled</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Button size="sm" onClick={addPipeline} variant="outline">
-                      <Plus className="h-4 w-4 mr-2" />
-                      New Pipeline
+                    <Button size="sm" onClick={() => setShowYamlImport(true)} variant="outline" className="flex-shrink-0">
+                      <Download className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">Import YAML</span>
+                    </Button>
+                    <Button size="sm" onClick={addPipeline} variant="outline" className="flex-shrink-0">
+                      <Plus className="h-4 w-4 sm:mr-2" />
+                      <span className="hidden sm:inline">New Pipeline</span>
                     </Button>
                   </div>
                 </div>
@@ -705,18 +1032,33 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
                     filteredPipelines.map((pipeline) => (
                       <Card key={pipeline.id} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
                               {getStatusIcon(pipeline.status)}
-                              <div>
-                                <CardTitle className="text-lg">Pipeline #{pipeline.iid}</CardTitle>
-                                <CardDescription className="text-xs mt-1">
-                                  Ref: {pipeline.ref} • {pipeline.stages?.length || 0} stages
+                              <div className="min-w-0 flex-1">
+                                <CardTitle className="text-lg truncate">
+                                  Pipeline #{pipeline.iid}
+                                  {pipeline.mergeRequest && ` • MR !${pipeline.mergeRequest.iid}`}
+                                  {pipeline.parentPipelineId && ` • Child`}
+                                </CardTitle>
+                                <CardDescription className="text-xs mt-1 break-words">
+                                  {pipeline.mergeRequest ? (
+                                    <>
+                                      MR: {pipeline.mergeRequest.title} • {pipeline.mergeRequest.sourceBranch} → {pipeline.mergeRequest.targetBranch}
+                                      {pipeline.stages?.length > 0 && ` • ${pipeline.stages.length} stages`}
+                                    </>
+                                  ) : (
+                                    <>
+                                      Ref: {pipeline.ref} • {pipeline.stages?.length || 0} stages
+                                    </>
+                                  )}
                                   {pipeline.duration && ` • ${Math.round(pipeline.duration / 1000)}s`}
+                                  {pipeline.parentPipelineId && ` • Parent: #${gitlabCIEngine?.getPipeline(pipeline.parentPipelineId)?.iid || 'N/A'}`}
+                                  {pipeline.childPipelineIds && pipeline.childPipelineIds.length > 0 && ` • ${pipeline.childPipelineIds.length} child pipeline(s)`}
                                 </CardDescription>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               {getStatusBadge(pipeline.status)}
                               {pipeline.status === 'running' || pipeline.status === 'pending' ? (
                                 <Button
@@ -726,16 +1068,28 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
                                 >
                                   <X className="h-4 w-4" />
                                 </Button>
-                              ) : (
+                              ) : gitlabCIEngine && (pipeline.status === 'success' || pipeline.status === 'failed') ? (
+                                // Для executions показываем Retry
                                 <Button
                                   size="sm"
                                   variant="ghost"
-                                  onClick={() => startPipeline(pipeline.id)}
+                                  onClick={() => retryPipeline(pipeline.id)}
+                                  title="Retry pipeline"
+                                >
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              ) : (
+                                // Для templates показываем Play
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => startPipeline(pipeline.id, !gitlabCIEngine)}
+                                  title="Start pipeline"
                                 >
                                   <Play className="h-4 w-4" />
                                 </Button>
                               )}
-                              {(config.pipelines || []).length > 1 && (
+                              {!gitlabCIEngine && (config.pipelines || []).length > 1 && (
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -777,38 +1131,186 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
             </Card>
           </TabsContent>
 
+          {/* Visualization Tab */}
+          <TabsContent value="visualization" className="space-y-4 mt-4">
+            <Card>
+              <CardHeader>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <CardTitle>Pipeline Visualization</CardTitle>
+                    <CardDescription>Visual representation of pipeline stages and jobs</CardDescription>
+                  </div>
+                  <Select
+                    value={selectedPipelineForViz || ''}
+                    onValueChange={(value) => setSelectedPipelineForViz(value || null)}
+                  >
+                    <SelectTrigger className="w-full sm:w-64">
+                      <SelectValue placeholder="Select a pipeline to visualize" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {realPipelines.length === 0 ? (
+                        <div className="px-2 py-1.5 text-sm text-muted-foreground">No pipelines available</div>
+                      ) : (
+                        realPipelines.map((pipeline) => (
+                          <SelectItem key={pipeline.id} value={pipeline.id}>
+                            Pipeline #{pipeline.iid} • {pipeline.ref} • {pipeline.status}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {selectedPipelineForViz ? (
+                  (() => {
+                    const pipeline = realPipelines.find((p) => p.id === selectedPipelineForViz);
+                    if (!pipeline) {
+                      return (
+                        <div className="text-center text-muted-foreground py-8">
+                          Pipeline not found
+                        </div>
+                      );
+                    }
+                    return (
+                      <PipelineVisualization
+                        pipeline={pipeline}
+                        onStageClick={(stage: GitLabCIStage) => {
+                          // Можно добавить логику для показа деталей stage
+                          console.log('Stage clicked:', stage);
+                        }}
+                        onJobClick={(job: GitLabCIJob) => {
+                          setSelectedJob(job.id);
+                          setShowJobDetails(true);
+                          if (gitlabCIEngine) {
+                            const logs = gitlabCIEngine.getJobLogs(job.id);
+                            if (logs) setJobLogs(logs);
+                          }
+                        }}
+                      />
+                    );
+                  })()
+                ) : (
+                  <div className="text-center text-muted-foreground py-8">
+                    Select a pipeline from the dropdown above to visualize
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Jobs Tab */}
           <TabsContent value="jobs" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>Active Jobs</CardTitle>
-                <CardDescription>Currently running and pending jobs</CardDescription>
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                  <div>
+                    <CardTitle>Active Jobs</CardTitle>
+                    <CardDescription>Currently running and pending jobs</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="relative w-full sm:w-auto">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search jobs..."
+                        value={jobSearchQuery}
+                        onChange={(e) => setJobSearchQuery(e.target.value)}
+                        className="pl-8 w-full sm:w-48 md:w-64"
+                      />
+                    </div>
+                    <Select value={jobFilterStatus} onValueChange={(v: any) => setJobFilterStatus(v)}>
+                      <SelectTrigger className="w-full sm:w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Status</SelectItem>
+                        <SelectItem value="running">Running</SelectItem>
+                        <SelectItem value="success">Success</SelectItem>
+                        <SelectItem value="failed">Failed</SelectItem>
+                        <SelectItem value="pending">Pending</SelectItem>
+                        <SelectItem value="manual">Manual</SelectItem>
+                        <SelectItem value="canceled">Canceled</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Select value={jobFilterStage} onValueChange={(v: any) => setJobFilterStage(v)}>
+                      <SelectTrigger className="w-full sm:w-40">
+                        <SelectValue placeholder="All Stages" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Stages</SelectItem>
+                        {availableStages.map(stage => (
+                          <SelectItem key={stage} value={stage}>{stage}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={jobFilterRunner} onValueChange={(v: any) => setJobFilterRunner(v)}>
+                      <SelectTrigger className="w-full sm:w-40">
+                        <SelectValue placeholder="All Runners" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Runners</SelectItem>
+                        {availableRunners.map(runner => (
+                          <SelectItem key={runner.id} value={runner.id}>{runner.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Select value={`${jobSortBy}-${jobSortOrder}`} onValueChange={(v: string) => {
+                      const [sortBy, sortOrder] = v.split('-');
+                      setJobSortBy(sortBy as any);
+                      setJobSortOrder(sortOrder as any);
+                    }}>
+                      <SelectTrigger className="w-full sm:w-40">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="created-desc">Newest First</SelectItem>
+                        <SelectItem value="created-asc">Oldest First</SelectItem>
+                        <SelectItem value="duration-desc">Longest First</SelectItem>
+                        <SelectItem value="duration-asc">Shortest First</SelectItem>
+                        <SelectItem value="name-asc">Name A-Z</SelectItem>
+                        <SelectItem value="name-desc">Name Z-A</SelectItem>
+                        <SelectItem value="status-asc">Status A-Z</SelectItem>
+                        <SelectItem value="status-desc">Status Z-A</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {realJobs.length === 0 ? (
+                  {filteredAndSortedJobs.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
-                      No active jobs
+                      {displayJobs.length === 0 ? 'No active jobs' : 'No jobs match the filters'}
                     </div>
                   ) : (
-                    realJobs.map((job) => (
+                    filteredAndSortedJobs.map((job) => (
                       <Card key={job.id} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
                               {getStatusIcon(job.status)}
-                              <div>
-                                <CardTitle className="text-lg">{job.name}</CardTitle>
-                                <CardDescription className="text-xs mt-1">
+                              <div className="min-w-0 flex-1">
+                                <CardTitle className="text-lg truncate">{job.name}</CardTitle>
+                                <CardDescription className="text-xs mt-1 break-words">
                                   Stage: {job.stage} • Pipeline: {job.pipelineId}
                                   {job.duration && ` • ${Math.round(job.duration / 1000)}s`}
                                 </CardDescription>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               {getStatusBadge(job.status)}
                               {job.progress !== undefined && (
-                                <Progress value={job.progress} className="w-24 h-2" />
+                                <Progress value={job.progress} className="w-16 sm:w-24 h-2" />
+                              )}
+                              {job.status === 'manual' && gitlabCIEngine && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => playManualJob(job.id)}
+                                  title="Play manual job"
+                                >
+                                  <Play className="h-4 w-4" />
+                                </Button>
                               )}
                               <Button
                                 size="sm"
@@ -835,16 +1337,240 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
             </Card>
           </TabsContent>
 
+          {/* Metrics Tab */}
+          <TabsContent value="metrics" className="space-y-4 mt-4">
+            {/* Pipeline Success Rate Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Pipeline Success Rate Over Time</CardTitle>
+                <CardDescription>Success and failure trends</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {metricsChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <AreaChart data={metricsChartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="time" />
+                      <YAxis />
+                      <RechartsTooltip />
+                      <Legend />
+                      <Area type="monotone" dataKey="success" stackId="1" stroke="#22c55e" fill="#22c55e" name="Success" />
+                      <Area type="monotone" dataKey="failed" stackId="1" stroke="#ef4444" fill="#ef4444" name="Failed" />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No pipeline data available
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Pipeline Duration Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Pipeline Duration Over Time</CardTitle>
+                <CardDescription>Average pipeline execution time</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {metricsChartData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <LineChart data={metricsChartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="time" />
+                      <YAxis label={{ value: 'Duration (s)', angle: -90, position: 'insideLeft' }} />
+                      <RechartsTooltip formatter={(value: number) => `${value}s`} />
+                      <Legend />
+                      <Line type="monotone" dataKey="duration" stroke="#3b82f6" name="Duration (s)" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No pipeline data available
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Duration Percentiles */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Pipeline Duration Percentiles</CardTitle>
+                <CardDescription>P50, P95, P99 percentiles for pipeline duration</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-blue-500">{durationPercentiles.p50}s</div>
+                    <p className="text-sm text-muted-foreground mt-1">P50 (Median)</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-orange-500">{durationPercentiles.p95}s</div>
+                    <p className="text-sm text-muted-foreground mt-1">P95</p>
+                  </div>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-red-500">{durationPercentiles.p99}s</div>
+                    <p className="text-sm text-muted-foreground mt-1">P99</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Runner Utilization Chart */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Runner Utilization</CardTitle>
+                <CardDescription>Current jobs vs max jobs per runner</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {runnerUtilizationData.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={runnerUtilizationData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis label={{ value: 'Utilization (%)', angle: -90, position: 'insideLeft' }} />
+                      <RechartsTooltip formatter={(value: number) => `${value.toFixed(1)}%`} />
+                      <Legend />
+                      <Bar dataKey="utilization" fill="#3b82f6" name="Utilization (%)" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No runner data available
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Detailed Metrics */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Detailed Metrics</CardTitle>
+                <CardDescription>Current system metrics</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {realMetrics ? (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <Label className="text-muted-foreground">Pipelines</Label>
+                      <div className="mt-1 space-y-1">
+                        <div className="flex justify-between">
+                          <span>Total:</span>
+                          <span className="font-semibold">{realMetrics.pipelinesTotal}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Success:</span>
+                          <span className="font-semibold text-green-500">{realMetrics.pipelinesSuccess}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Failed:</span>
+                          <span className="font-semibold text-red-500">{realMetrics.pipelinesFailed}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Running:</span>
+                          <span className="font-semibold text-blue-500">{realMetrics.pipelinesRunning}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Per Hour:</span>
+                          <span className="font-semibold">{realMetrics.pipelinesPerHour.toFixed(1)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Jobs</Label>
+                      <div className="mt-1 space-y-1">
+                        <div className="flex justify-between">
+                          <span>Total:</span>
+                          <span className="font-semibold">{realMetrics.jobsTotal}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Success:</span>
+                          <span className="font-semibold text-green-500">{realMetrics.jobsSuccess}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Failed:</span>
+                          <span className="font-semibold text-red-500">{realMetrics.jobsFailed}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Running:</span>
+                          <span className="font-semibold text-blue-500">{realMetrics.jobsRunning}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Avg Duration:</span>
+                          <span className="font-semibold">{Math.round(realMetrics.averageJobDuration / 1000)}s</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Runners</Label>
+                      <div className="mt-1 space-y-1">
+                        <div className="flex justify-between">
+                          <span>Total:</span>
+                          <span className="font-semibold">{realMetrics.runnersTotal}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Online:</span>
+                          <span className="font-semibold text-green-500">{realMetrics.runnersOnline}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Busy:</span>
+                          <span className="font-semibold text-orange-500">{realMetrics.runnersBusy}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Idle:</span>
+                          <span className="font-semibold text-gray-500">{realMetrics.runnersIdle}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Utilization:</span>
+                          <span className="font-semibold">{realMetrics.runnerUtilization.toFixed(1)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-muted-foreground">Cache & Artifacts</Label>
+                      <div className="mt-1 space-y-1">
+                        <div className="flex justify-between">
+                          <span>Cache Hits:</span>
+                          <span className="font-semibold text-green-500">{realMetrics.cacheHits}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Cache Misses:</span>
+                          <span className="font-semibold text-red-500">{realMetrics.cacheMisses}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Hit Rate:</span>
+                          <span className="font-semibold">{(realMetrics.cacheHitRate * 100).toFixed(1)}%</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Artifacts:</span>
+                          <span className="font-semibold">{realMetrics.artifactsTotal}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Size:</span>
+                          <span className="font-semibold">{(realMetrics.artifactsSizeBytes / 1024 / 1024).toFixed(2)} MB</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    No metrics available
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           {/* Runners Tab */}
           <TabsContent value="runners" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>CI/CD Runners</CardTitle>
                     <CardDescription>Runner configuration and status</CardDescription>
                   </div>
-                  <Button size="sm" onClick={() => setShowAddRunner(true)} variant="outline">
+                  <Button size="sm" onClick={() => setShowAddRunner(true)} variant="outline" className="flex-shrink-0">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Runner
                   </Button>
@@ -852,26 +1578,26 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {realRunners.length === 0 ? (
+                  {displayRunners.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       No runners configured
                     </div>
                   ) : (
-                    realRunners.map((runner) => (
+                    displayRunners.map((runner) => (
                       <Card key={runner.id} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className={`h-3 w-3 rounded-full ${runner.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`} />
-                              <div>
-                                <CardTitle className="text-lg">{runner.name}</CardTitle>
-                                <CardDescription className="text-xs mt-1">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className={`h-3 w-3 rounded-full flex-shrink-0 ${runner.status === 'online' ? 'bg-green-500' : 'bg-red-500'}`} />
+                              <div className="min-w-0 flex-1">
+                                <CardTitle className="text-lg truncate">{runner.name}</CardTitle>
+                                <CardDescription className="text-xs mt-1 break-words">
                                   {runner.executor} runner • {runner.currentJobs}/{runner.maxJobs} jobs
                                   {runner.tagList && runner.tagList.length > 0 && ` • Tags: ${runner.tagList.join(', ')}`}
                                 </CardDescription>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               <Badge variant={runner.status === 'online' ? 'default' : 'secondary'}>
                                 {runner.status}
                               </Badge>
@@ -899,12 +1625,12 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
           <TabsContent value="variables" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>CI/CD Variables</CardTitle>
                     <CardDescription>Environment variables for pipelines</CardDescription>
                   </div>
-                  <Button size="sm" onClick={() => setShowAddVariable(true)} variant="outline">
+                  <Button size="sm" onClick={() => setShowAddVariable(true)} variant="outline" className="flex-shrink-0">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Variable
                   </Button>
@@ -912,23 +1638,23 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {realVariables.length === 0 ? (
+                  {displayVariables.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       No variables configured
                     </div>
                   ) : (
-                    realVariables.map((variable) => (
+                    displayVariables.map((variable) => (
                       <Card key={variable.key} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <CardTitle className="text-lg">{variable.key}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <CardTitle className="text-lg truncate">{variable.key}</CardTitle>
+                              <CardDescription className="text-xs mt-1 break-words">
                                 {variable.masked ? '••••••••' : variable.value}
                                 {variable.environmentScope && ` • Scope: ${variable.environmentScope}`}
                               </CardDescription>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               {variable.protected && <Badge variant="outline">Protected</Badge>}
                               {variable.masked && <Badge variant="outline">Masked</Badge>}
                               {(config.variables || []).find((v: any) => v.key === variable.key) && (
@@ -955,12 +1681,12 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
           <TabsContent value="environments" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>Environments</CardTitle>
                     <CardDescription>Deployment environments</CardDescription>
                   </div>
-                  <Button size="sm" onClick={() => setShowAddEnvironment(true)} variant="outline">
+                  <Button size="sm" onClick={() => setShowAddEnvironment(true)} variant="outline" className="flex-shrink-0">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Environment
                   </Button>
@@ -968,23 +1694,23 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {realEnvironments.length === 0 ? (
+                  {displayEnvironments.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       No environments configured
                     </div>
                   ) : (
-                    realEnvironments.map((environment) => (
+                    displayEnvironments.map((environment) => (
                       <Card key={environment.id} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <CardTitle className="text-lg">{environment.name}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <CardTitle className="text-lg truncate">{environment.name}</CardTitle>
+                              <CardDescription className="text-xs mt-1 break-words">
                                 {environment.externalUrl || 'No external URL'}
                                 {environment.deployments && ` • ${environment.deployments.length} deployments`}
                               </CardDescription>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               <Badge variant={environment.state === 'available' ? 'default' : 'secondary'}>
                                 {environment.state}
                               </Badge>
@@ -1012,12 +1738,12 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
           <TabsContent value="schedules" className="space-y-4 mt-4">
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                   <div>
                     <CardTitle>Pipeline Schedules</CardTitle>
                     <CardDescription>Scheduled pipeline executions</CardDescription>
                   </div>
-                  <Button size="sm" onClick={() => setShowAddSchedule(true)} variant="outline">
+                  <Button size="sm" onClick={() => setShowAddSchedule(true)} variant="outline" className="flex-shrink-0">
                     <Plus className="h-4 w-4 mr-2" />
                     Add Schedule
                   </Button>
@@ -1025,23 +1751,23 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
-                  {realSchedules.length === 0 ? (
+                  {displaySchedules.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       No schedules configured
                     </div>
                   ) : (
-                    realSchedules.map((schedule) => (
+                    displaySchedules.map((schedule) => (
                       <Card key={schedule.id} className="border-border">
                         <CardHeader className="pb-3">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <CardTitle className="text-lg">{schedule.description}</CardTitle>
-                              <CardDescription className="text-xs mt-1">
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <CardTitle className="text-lg truncate">{schedule.description}</CardTitle>
+                              <CardDescription className="text-xs mt-1 break-words">
                                 Ref: {schedule.ref} • Cron: {schedule.cron}
                                 {schedule.nextRunAt && ` • Next run: ${new Date(schedule.nextRunAt).toLocaleString()}`}
                               </CardDescription>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-shrink-0">
                               <Badge variant={schedule.active ? 'default' : 'secondary'}>
                                 {schedule.active ? 'Active' : 'Inactive'}
                               </Badge>
@@ -1153,12 +1879,78 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
           <div className="space-y-4">
             {jobLogs.length > 0 && (
               <div>
-                <Label>Logs</Label>
-                <div className="mt-2 p-4 bg-muted rounded-md font-mono text-sm max-h-96 overflow-y-auto">
-                  {jobLogs.map((log, idx) => (
-                    <div key={idx}>{log}</div>
-                  ))}
+                <div className="flex items-center justify-between mb-2">
+                  <Label>Logs</Label>
+                  <div className="flex items-center gap-2">
+                    <div className="relative">
+                      <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search in logs..."
+                        value={logSearchQuery}
+                        onChange={(e) => setLogSearchQuery(e.target.value)}
+                        className="pl-8 w-48 h-8"
+                      />
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const logsText = jobLogs.join('\n');
+                        const blob = new Blob([logsText], { type: 'text/plain' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `job-${selectedJob}-logs.txt`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      <Upload className="h-4 w-4 mr-2" />
+                      Export
+                    </Button>
+                  </div>
                 </div>
+                <div className="mt-2 p-4 bg-muted rounded-md font-mono text-sm max-h-96 overflow-y-auto">
+                  {jobLogs
+                    .filter(log => !logSearchQuery || log.toLowerCase().includes(logSearchQuery.toLowerCase()))
+                    .map((log, idx) => {
+                      // Simple syntax highlighting for common patterns
+                      const isError = log.toLowerCase().includes('error') || log.toLowerCase().includes('failed');
+                      const isWarning = log.toLowerCase().includes('warning') || log.toLowerCase().includes('warn');
+                      const isCommand = log.startsWith('$ ') || log.startsWith('> ');
+                      const isInfo = log.toLowerCase().includes('info') || log.toLowerCase().includes('success');
+                      
+                      let className = '';
+                      if (isError) className = 'text-red-500';
+                      else if (isWarning) className = 'text-yellow-500';
+                      else if (isCommand) className = 'text-blue-500';
+                      else if (isInfo) className = 'text-green-500';
+                      
+                      // Highlight search query
+                      let displayLog = log;
+                      if (logSearchQuery) {
+                        const regex = new RegExp(`(${logSearchQuery})`, 'gi');
+                        displayLog = log.replace(regex, '<mark class="bg-yellow-300 dark:bg-yellow-800">$1</mark>');
+                      }
+                      
+                      return (
+                        <div
+                          key={idx}
+                          className={className}
+                          dangerouslySetInnerHTML={logSearchQuery ? { __html: displayLog } : undefined}
+                        >
+                          {!logSearchQuery && log}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+            {jobLogs.length === 0 && (
+              <div className="text-center py-8 text-muted-foreground">
+                No logs available for this job
               </div>
             )}
           </div>
@@ -1313,6 +2105,127 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
         </DialogContent>
       </Dialog>
 
+      {/* YAML Import Dialog */}
+      <Dialog open={showYamlImport} onOpenChange={setShowYamlImport}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Import GitLab CI YAML</DialogTitle>
+            <DialogDescription>Import pipeline configuration from .gitlab-ci.yml file</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>YAML Content</Label>
+              <Textarea
+                value={yamlContent}
+                onChange={(e) => {
+                  setYamlContent(e.target.value);
+                  setYamlValidationError(null);
+                }}
+                placeholder="Paste .gitlab-ci.yml content here..."
+                className="font-mono text-sm min-h-[300px]"
+              />
+              {yamlValidationError && (
+                <div className="p-3 bg-destructive/10 border border-destructive/20 rounded text-sm text-destructive">
+                  <strong>Error:</strong> {yamlValidationError}
+                </div>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.yml,.yaml,.gitlab-ci.yml';
+                  input.onchange = (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onload = (event) => {
+                        const content = event.target?.result as string;
+                        setYamlContent(content);
+                        setYamlValidationError(null);
+                      };
+                      reader.readAsText(file);
+                    }
+                  };
+                  input.click();
+                }}
+              >
+                <FileCode className="h-4 w-4 mr-2" />
+                Load from File
+              </Button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => {
+              setShowYamlImport(false);
+              setYamlContent('');
+              setYamlValidationError(null);
+            }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!yamlContent.trim()) {
+                  setYamlValidationError('YAML content is required');
+                  return;
+                }
+                
+                if (!gitlabCIEngine) {
+                  setYamlValidationError('GitLab CI engine not available');
+                  return;
+                }
+                
+                try {
+                  // Парсим YAML
+                  const parsedConfig = gitlabCIEngine.parseGitLabCIYaml(yamlContent);
+                  
+                  if (!parsedConfig) {
+                    setYamlValidationError('Failed to parse YAML. Please check the syntax.');
+                    return;
+                  }
+                  
+                  // Валидируем конфигурацию
+                  const validation = validateGitLabCIConfig(parsedConfig);
+                  
+                  if (!validation.valid) {
+                    const errors = validation.errors?.map(e => `${e.path}: ${e.message}`).join(', ') || 'Validation failed';
+                    setYamlValidationError(`Validation errors: ${errors}`);
+                    return;
+                  }
+                  
+                  // Обновляем конфигурацию
+                  const currentConfig = config;
+                  const mergedConfig = {
+                    ...currentConfig,
+                    ...parsedConfig,
+                    // Объединяем pipelines, variables и т.д.
+                    pipelines: [...(currentConfig.pipelines || []), ...(parsedConfig.pipelines || [])],
+                    variables: [...(currentConfig.variables || []), ...(parsedConfig.variables || [])],
+                  };
+                  
+                  updateConfig(mergedConfig);
+                  
+                  setShowYamlImport(false);
+                  setYamlContent('');
+                  setYamlValidationError(null);
+                  
+                  toast({
+                    title: "YAML imported",
+                    description: "Pipeline configuration imported successfully",
+                  });
+                } catch (error) {
+                  setYamlValidationError(error instanceof Error ? error.message : 'Failed to import YAML');
+                }
+              }}
+            >
+              Import
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Add Schedule Dialog */}
       <Dialog open={showAddSchedule} onOpenChange={setShowAddSchedule}>
         <DialogContent>
@@ -1341,7 +2254,17 @@ export function GitLabCIConfigAdvanced({ componentId }: GitLabCIConfigProps) {
               <Label>Cron Expression</Label>
               <Input
                 value={newScheduleCron}
-                onChange={(e) => setNewScheduleCron(e.target.value)}
+                onChange={(e) => {
+                  const cron = e.target.value;
+                  setNewScheduleCron(cron);
+                  // Валидация cron в реальном времени
+                  if (cron.trim()) {
+                    const validation = validateCronExpression(cron);
+                    if (!validation.valid) {
+                      // Можно показать ошибку, но не блокируем ввод
+                    }
+                  }
+                }}
                 placeholder="0 * * * *"
               />
               <p className="text-xs text-muted-foreground">Format: minute hour day month weekday</p>

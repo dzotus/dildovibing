@@ -11,7 +11,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useState } from 'react';
-import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit, Download } from 'lucide-react';
+import { Activity, CloudUpload, HardDrive, AlertTriangle, Plus, Trash2, FileText, Search, Settings, Edit, Download, Upload } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { showError, showSuccess } from '@/utils/toast';
 import { PageTitle, Description } from '@/components/ui/typography';
@@ -435,7 +435,7 @@ export function PrometheusConfigAdvanced({ componentId }: PrometheusConfigProps)
               {prometheusStatus.label}
             </Badge>
             <Button variant="outline" size="sm" onClick={exportConfig}>
-              <Download className="h-4 w-4 mr-2" />
+              <Upload className="h-4 w-4 mr-2" />
               Export YAML
             </Button>
           </div>

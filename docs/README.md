@@ -190,6 +190,27 @@
   - Post-Build Actions для email notifications, archive artifacts, publish results, deploy
   - Полный набор метрик производительности и использования
 
+- **[GitLab CI/CD](./devops/gitlab-ci.md)** - Встроенная система непрерывной интеграции и развертывания GitLab
+  - Pipeline Management с автоматическим вычислением статусов и IID (Internal ID)
+  - Job Management для симуляции jobs с прогрессом, stages, длительностью и результатами
+  - Runner Management для управления GitLab Runners (docker, kubernetes, shell executors)
+  - Stage Management для управления stages с последовательным и параллельным выполнением
+  - Artifact Management для управления артефактами с expiry и retention policy
+  - Cache Management для симуляции кэширования с hit/miss метриками
+  - Variable Management для управления CI/CD переменными (env_var, file, protected, masked)
+  - Environment Management для управления окружениями развертывания
+  - Schedule Management для управления scheduled pipelines с cron выражениями
+  - YAML Import для импорта и парсинга .gitlab-ci.yml файлов
+  - Rules Support для условного выполнения jobs
+  - Needs Support для зависимостей между jobs
+  - Retry Support для failed jobs
+  - Manual Jobs для ручного запуска jobs
+  - Pipeline Sources для различных источников pipelines (push, web, trigger, schedule, api)
+  - Parent/Child Pipelines для поддержки parent и child pipelines
+  - Merge Request Pipelines для поддержки pipelines для merge requests
+  - Интеграции с Prometheus, Loki, Jaeger, Kubernetes, S3, PagerDuty
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -449,6 +470,7 @@
 - **GraphQL Gateway:** [Документация GraphQL Gateway](./integration/graphql-gateway.md)
 - **BFF Service:** [Документация BFF Service](./integration/bff-service.md)
 - **Jenkins:** [Документация Jenkins](./devops/jenkins.md)
+- **GitLab CI/CD:** [Документация GitLab CI/CD](./devops/gitlab-ci.md)
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 
 ### По базам данных

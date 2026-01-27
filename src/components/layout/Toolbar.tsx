@@ -293,7 +293,7 @@ export function Toolbar() {
             onClick={handleExport}
             title="Export diagram as JSON file"
           >
-            <Download className="h-4 w-4" />
+            <Upload className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost"
@@ -302,7 +302,7 @@ export function Toolbar() {
             onClick={handleImportClick}
             title="Import diagram from JSON file"
           >
-            <Upload className="h-4 w-4" />
+            <Download className="h-4 w-4" />
           </Button>
 
           <Separator orientation="vertical" className="h-6" />

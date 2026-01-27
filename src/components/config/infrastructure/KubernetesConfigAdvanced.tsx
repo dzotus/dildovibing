@@ -3155,11 +3155,11 @@ function YAMLTab({ yaml, yamlManifests, updateConfig }: YAMLTabProps) {
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={handleImport} size="sm">
-                <Upload className="h-4 w-4 mr-2" />
+                <Download className="h-4 w-4 mr-2" />
                 Import
               </Button>
               <Button variant="outline" onClick={handleExport} size="sm">
-                <Download className="h-4 w-4 mr-2" />
+                <Upload className="h-4 w-4 mr-2" />
                 Export
               </Button>
               <Button variant="outline" onClick={handleFormat} size="sm">

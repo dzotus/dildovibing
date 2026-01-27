@@ -1719,6 +1719,8 @@ export class EmulationEngine {
     for (const [nodeId, gitlabCIEngine] of this.gitlabCIEngines.entries()) {
       try {
         const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
         gitlabCIEngine.performUpdate(now);
         
         // Update component metrics based on GitLab CI metrics
@@ -1732,6 +1734,79 @@ export class EmulationEngine {
           // Error rate: failed pipelines / total pipelines
           const totalPipelines = gitlabMetrics.pipelinesSuccess + gitlabMetrics.pipelinesFailed;
           componentMetrics.errorRate = totalPipelines > 0 ? gitlabMetrics.pipelinesFailed / totalPipelines : 0;
+          
+          // Интеграция с Prometheus: экспорт метрик GitLab CI
+          for (const [prometheusNodeId, prometheusEngine] of this.prometheusEngines.entries()) {
+            try {
+              const prometheusMetrics = gitlabCIEngine.exportPrometheusMetrics(node);
+              if (prometheusMetrics) {
+                // Добавляем GitLab CI как target для scraping (если еще не добавлен)
+                // Prometheus будет scraping метрики через endpoint
+                // В реальности это делается через конфигурацию Prometheus scrape_configs
+              }
+            } catch (error) {
+              errorCollector.addError(error as Error, {
+                severity: 'warning',
+                source: 'gitlab-ci-prometheus-integration',
+                componentId: nodeId,
+                componentType: 'gitlab-ci',
+              });
+            }
+          }
+          
+          // Интеграция с Loki: экспорт логов jobs
+          for (const [lokiNodeId, lokiEngine] of this.lokiEngines.entries()) {
+            try {
+              // Экспортируем логи завершенных jobs
+              const pipelines = gitlabCIEngine.getPipelines();
+              for (const pipeline of pipelines) {
+                for (const stage of pipeline.stages) {
+                  for (const job of stage.jobs) {
+                    // Экспортируем логи только для завершенных jobs
+                    if ((job.status === 'success' || job.status === 'failed') && job.logs && job.logs.length > 0) {
+                      gitlabCIEngine.exportLogsToLoki(node, lokiEngine, job);
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              errorCollector.addError(error as Error, {
+                severity: 'warning',
+                source: 'gitlab-ci-loki-integration',
+                componentId: nodeId,
+                componentType: 'gitlab-ci',
+              });
+            }
+          }
+          
+          // Интеграция с Jaeger: создание spans для pipelines и jobs
+          for (const [jaegerNodeId, jaegerEngine] of this.jaegerEngines.entries()) {
+            try {
+              const pipelines = gitlabCIEngine.getPipelines();
+              for (const pipeline of pipelines) {
+                // Создаем span для pipeline
+                if (pipeline.status === 'running' || pipeline.status === 'success' || pipeline.status === 'failed') {
+                  gitlabCIEngine.createJaegerSpan(node, jaegerEngine, pipeline);
+                  
+                  // Создаем spans для jobs
+                  for (const stage of pipeline.stages) {
+                    for (const job of stage.jobs) {
+                      if (job.status === 'running' || job.status === 'success' || job.status === 'failed') {
+                        gitlabCIEngine.createJaegerSpan(node, jaegerEngine, pipeline, job);
+                      }
+                    }
+                  }
+                }
+              }
+            } catch (error) {
+              errorCollector.addError(error as Error, {
+                severity: 'warning',
+                source: 'gitlab-ci-jaeger-integration',
+                componentId: nodeId,
+                componentType: 'gitlab-ci',
+              });
+            }
+          }
           // Utilization: running pipelines / total pipelines
           componentMetrics.utilization = gitlabMetrics.pipelinesTotal > 0 
             ? gitlabMetrics.pipelinesRunning / gitlabMetrics.pipelinesTotal 
