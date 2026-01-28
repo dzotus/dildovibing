@@ -5743,11 +5743,88 @@ export class DataFlowEngine {
           message.metadata?.operation || payload.operation || payload.action || 'webhook';
 
         // Определяем тип операции
-        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit || payload.repository) {
-          // Webhook trigger - может триггерить синхронизацию приложения
-          const repository = payload.repository || payload.repo || '';
-          const ref = payload.ref || payload.branch || payload.commit || 'main';
-          const applicationName = payload.application || payload.app || '';
+        if (operation === 'webhook' || payload.ref || payload.branch || payload.commit || payload.repository || payload.object_kind) {
+          // Webhook trigger - поддерживаем форматы GitLab, GitHub, Bitbucket
+          let repository = '';
+          let ref = 'main';
+          let applicationName = '';
+          let webhookType: 'gitlab' | 'github' | 'bitbucket' | 'generic' = 'generic';
+          
+          // Определяем тип webhook по структуре payload
+          if (payload.object_kind || payload.project || payload.repository?.git_http_url) {
+            // GitLab webhook format
+            webhookType = 'gitlab';
+            const gitlabRepo = payload.repository || payload.project?.git_http_url || payload.project?.web_url || '';
+            repository = gitlabRepo || payload.project?.path_with_namespace || '';
+            ref = payload.ref?.replace('refs/heads/', '') || payload.branch || payload.object_attributes?.ref || 'main';
+            applicationName = payload.application || payload.app || '';
+            
+            // Автоматическое определение application по repository URL и branch
+            if (!applicationName && repository) {
+              const apps = engine.getApplications();
+              const matchingApp = apps.find(app => {
+                const appRepo = app.repository;
+                const appBranch = app.targetRevision || 'main';
+                return (appRepo === repository || appRepo.includes(repository) || repository.includes(appRepo)) &&
+                       (appBranch === ref || ref === 'main');
+              });
+              if (matchingApp) {
+                applicationName = matchingApp.name;
+              }
+            }
+          } else if (payload.repository?.full_name || payload.repository?.html_url || payload.head_commit) {
+            // GitHub webhook format
+            webhookType = 'github';
+            const githubRepo = payload.repository?.full_name || payload.repository?.html_url || payload.repository?.clone_url || '';
+            repository = githubRepo;
+            ref = payload.ref?.replace('refs/heads/', '') || 
+                  payload.branch || 
+                  payload.head_commit?.branch || 
+                  (payload.pusher ? 'main' : 'main');
+            applicationName = payload.application || payload.app || '';
+            
+            // Автоматическое определение application по repository URL и branch
+            if (!applicationName && repository) {
+              const apps = engine.getApplications();
+              const matchingApp = apps.find(app => {
+                const appRepo = app.repository;
+                const appBranch = app.targetRevision || 'main';
+                return (appRepo === repository || appRepo.includes(repository) || repository.includes(appRepo)) &&
+                       (appBranch === ref || ref === 'main');
+              });
+              if (matchingApp) {
+                applicationName = matchingApp.name;
+              }
+            }
+          } else if (payload.repository?.full_name || payload.push || payload.changes) {
+            // Bitbucket webhook format
+            webhookType = 'bitbucket';
+            const bitbucketRepo = payload.repository?.full_name || payload.repository?.links?.html?.href || '';
+            repository = bitbucketRepo;
+            ref = payload.push?.changes?.[0]?.new?.name || 
+                  payload.push?.changes?.[0]?.old?.name ||
+                  payload.branch || 'main';
+            applicationName = payload.application || payload.app || '';
+            
+            // Автоматическое определение application по repository URL и branch
+            if (!applicationName && repository) {
+              const apps = engine.getApplications();
+              const matchingApp = apps.find(app => {
+                const appRepo = app.repository;
+                const appBranch = app.targetRevision || 'main';
+                return (appRepo === repository || appRepo.includes(repository) || repository.includes(appRepo)) &&
+                       (appBranch === ref || ref === 'main');
+              });
+              if (matchingApp) {
+                applicationName = matchingApp.name;
+              }
+            }
+          } else {
+            // Generic webhook format
+            repository = payload.repository || payload.repo || payload.repo_url || '';
+            ref = payload.ref?.replace('refs/heads/', '') || payload.branch || payload.commit || 'main';
+            applicationName = payload.application || payload.app || '';
+          }
 
           // Если указано приложение, запускаем синхронизацию
           if (applicationName) {
@@ -5759,6 +5836,7 @@ export class DataFlowEngine {
                 ...(payload || {}),
                 argocd: {
                   webhookReceived: true,
+                  webhookType,
                   application: applicationName,
                   repository,
                   ref,
@@ -5778,15 +5856,16 @@ export class DataFlowEngine {
               ...(payload || {}),
               argocd: {
                 webhookReceived: true,
+                webhookType,
                 repository,
                 ref,
                 syncTriggered: false,
-                reason: 'No application specified',
+                reason: 'No application specified or found',
               },
             };
           }
         } else if (operation === 'sync' || operation === 'startSync') {
-          // Явный запрос на синхронизацию
+          // Явный запрос на синхронизацию (manual sync)
           const applicationName = payload.application || payload.app || message.metadata?.application;
           if (!applicationName) {
             message.status = 'failed';
@@ -5794,7 +5873,9 @@ export class DataFlowEngine {
             return message;
           }
 
-          const success = engine.startSync(applicationName);
+          // Manual sync может обойти deny windows если manualSync=true
+          const isManualSync = payload.manualSync !== false; // По умолчанию true для явных запросов
+          const success = engine.startSync(applicationName, Date.now(), isManualSync);
           if (success) {
             message.status = 'delivered';
             message.latency = 50;
@@ -5804,11 +5885,12 @@ export class DataFlowEngine {
                 operation: 'sync',
                 application: applicationName,
                 syncStarted: true,
+                manualSync: isManualSync,
               },
             };
           } else {
             message.status = 'failed';
-            message.error = 'Failed to start sync or application already syncing';
+            message.error = 'Failed to start sync: application already syncing, no connections, or blocked by sync window';
             message.latency = 50;
           }
         } else if (operation === 'getApplicationStatus' || operation === 'getAppStatus' || payload.application) {

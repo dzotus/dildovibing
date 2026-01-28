@@ -211,6 +211,25 @@
   - Интеграции с Prometheus, Loki, Jaeger, Kubernetes, S3, PagerDuty
   - Полный набор метрик производительности и использования
 
+- **[Argo CD](./devops/argo-cd.md)** - Декларативная система непрерывного развертывания (CD) для Kubernetes на основе GitOps
+  - Application Management для управления Argo CD Applications с автоматической синхронизацией
+  - Repository Management для управления Git, Helm и OCI репозиториями
+  - Project Management для управления проектами с ограничениями доступа
+  - Sync Operations для симуляции синхронизации с прогрессом, hooks и rollback
+  - Health Checks для автоматических проверок здоровья applications
+  - Sync Policy для поддержки automated, manual и sync-window политик
+  - Sync Windows для ограничения времени синхронизации
+  - Sync Hooks для поддержки PreSync, Sync, PostSync hooks
+  - RBAC для Role-Based Access Control управления доступом
+  - Notifications для уведомлений через Slack, Email, PagerDuty, Webhook
+  - ApplicationSets для генерации applications из шаблонов
+  - Helm Support для поддержки Helm charts и repositories
+  - OCI Support для поддержки OCI registries для Helm charts
+  - Multi-Cluster для поддержки развертывания в несколько Kubernetes кластеров
+  - Webhook Integration для обработки webhooks от GitLab, GitHub, Bitbucket
+  - Интеграции с Prometheus, Loki, Jaeger, Kubernetes, Git репозиториями
+  - Полный набор метрик производительности и использования
+
 ### Компоненты интеграции (Integration)
 
 - **[Kong Gateway](./integration/kong-gateway.md)** - Облачный API Gateway
@@ -471,6 +490,7 @@
 - **BFF Service:** [Документация BFF Service](./integration/bff-service.md)
 - **Jenkins:** [Документация Jenkins](./devops/jenkins.md)
 - **GitLab CI/CD:** [Документация GitLab CI/CD](./devops/gitlab-ci.md)
+- **Argo CD:** [Документация Argo CD](./devops/argo-cd.md)
 - **Keycloak:** [Документация Keycloak](./security/keycloak.md)
 
 ### По базам данных

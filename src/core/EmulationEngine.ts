@@ -934,6 +934,11 @@ export class EmulationEngine {
       firewallEngine.updateNodesAndConnections(nodes, connections);
     }
     
+    // Обновляем Argo CD engines connections
+    for (const argoCDEngine of this.argoCDEngines.values()) {
+      argoCDEngine.updateConnections(nodes, connections);
+    }
+    
     // Update metrics for new nodes
     for (const node of nodes) {
       if (!this.metrics.has(node.id)) {
@@ -1238,7 +1243,7 @@ export class EmulationEngine {
         } else {
           // Update config if engine already exists
           const engine = this.argoCDEngines.get(node.id)!;
-          engine.initializeConfig(node);
+          engine.initializeConfig(node, this.nodes, this.connections);
         }
       }
       
@@ -10294,7 +10299,7 @@ export class EmulationEngine {
 
   private initializeArgoCDEngine(node: CanvasNode): void {
     const engine = new ArgoCDEmulationEngine();
-    engine.initializeConfig(node);
+    engine.initializeConfig(node, this.nodes, this.connections);
     this.argoCDEngines.set(node.id, engine);
   }
 
