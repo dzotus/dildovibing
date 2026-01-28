@@ -1255,6 +1255,9 @@ export class EmulationEngine {
           // Update config if engine already exists
           const engine = this.terraformEngines.get(node.id)!;
           engine.updateConfig(node);
+          // Обновляем соединения при изменении конфигурации
+          const outgoingConnections = this.connections.filter(c => c.source === node.id);
+          engine.setConnections(outgoingConnections);
         }
       }
       
@@ -1471,6 +1474,12 @@ export class EmulationEngine {
     
     // Update data flow engine
     dataFlowEngine.updateNodesAndConnections(nodes, connections);
+    
+    // Обновляем соединения для Terraform engines
+    for (const [nodeId, engine] of this.terraformEngines.entries()) {
+      const outgoingConnections = connections.filter(c => c.source === nodeId);
+      engine.setConnections(outgoingConnections);
+    }
   }
 
   /**
@@ -1947,6 +1956,29 @@ export class EmulationEngine {
           componentLabel: node?.data.label,
           componentType: node?.type,
           context: { engine: 'kubernetes', operation: 'simulateStep' },
+        });
+      }
+    }
+    
+    // Perform Terraform updates (runs, state management, VCS webhooks)
+    for (const [nodeId, terraformEngine] of this.terraformEngines.entries()) {
+      try {
+        const node = this.nodes.find(n => n.id === nodeId);
+        if (!node) continue;
+        
+        terraformEngine.performUpdate(now);
+        
+        // Metrics are already updated in simulateTerraform method
+        // which is called from updateComponentMetrics
+      } catch (error) {
+        const node = this.nodes.find(n => n.id === nodeId);
+        errorCollector.addError(error as Error, {
+          severity: 'warning',
+          source: 'component-engine',
+          componentId: nodeId,
+          componentLabel: node?.data.label,
+          componentType: node?.type,
+          context: { engine: 'terraform', operation: 'performUpdate' },
         });
       }
     }
@@ -7679,6 +7711,9 @@ export class EmulationEngine {
       resourcesManaged: terraformMetrics.resourcesManaged,
       runsPerHour: terraformMetrics.runsPerHour,
       averageRunDuration: terraformMetrics.averageRunDuration,
+      connectedComponents: terraformMetrics.connectedComponents,
+      outgoingMessages: terraformMetrics.outgoingMessages,
+      incomingWebhooks: terraformMetrics.incomingWebhooks,
     };
   }
 
@@ -10309,6 +10344,12 @@ export class EmulationEngine {
   private initializeTerraformEngine(node: CanvasNode): void {
     const engine = new TerraformEmulationEngine();
     engine.initializeConfig(node);
+    engine.setNodeId(node.id);
+    
+    // Устанавливаем соединения для отправки сообщений
+    const outgoingConnections = this.connections.filter(c => c.source === node.id);
+    engine.setConnections(outgoingConnections);
+    
     this.terraformEngines.set(node.id, engine);
   }
 

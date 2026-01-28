@@ -5994,16 +5994,38 @@ export class DataFlowEngine {
           const workspaceName = payload.workspace || payload.workspaceId || '';
           const workspaceId = payload.workspaceId || payload.workspace;
           const branch = payload.ref?.replace('refs/heads/', '') || payload.branch || 'main';
-          const commit = payload.commit || payload.sha || undefined;
+          const commit = payload.commit || payload.sha || payload.commitHash || undefined;
+          
+          // Извлекаем HCL код из webhook payload
+          // Поддерживаем различные форматы: hclCode, code, files.main.content, files['main.tf'].content
+          const hclCode = payload.hclCode || payload.code || payload.files?.main?.content || 
+                         payload.files?.['main.tf']?.content || payload.files?.['*.tf']?.content ||
+                         (payload.files && typeof payload.files === 'object' ? 
+                           Object.values(payload.files).find((f: any) => f?.content && typeof f.content === 'string')?.content : undefined);
 
           if (workspaceName || workspaceId) {
-            // Находим workspace по имени или ID
+            // Находим workspace по имени или ID или по branch
             const workspaces = engine.getWorkspaces();
-            const workspace = workspaceId 
+            let workspace = workspaceId 
               ? workspaces.find(w => w.id === workspaceId)
-              : workspaces.find(w => w.name === workspaceName);
+              : workspaceName
+              ? workspaces.find(w => w.name === workspaceName)
+              : workspaces.find(w => w.vcsRepo?.branch === branch);
+            
+            // Если не нашли по ID/имени, используем первый workspace с подходящим branch или первый доступный
+            if (!workspace) {
+              workspace = workspaces.find(w => w.vcsRepo?.branch === branch) || workspaces[0];
+            }
             
             if (workspace) {
+              // Сохраняем HCL код если он есть в payload
+              if (hclCode && typeof hclCode === 'string') {
+                const setHCLResult = engine.setHCLCode(workspace.id, hclCode, commit);
+                if (!setHCLResult.success) {
+                  console.warn(`Failed to set HCL code for workspace ${workspace.id}: ${setHCLResult.reason}`);
+                }
+              }
+              
               const result = engine.triggerRun(workspace.id, { 
                 planOnly: payload.planOnly ?? false,
                 source: 'vcs',
@@ -6023,6 +6045,7 @@ export class DataFlowEngine {
                     commit,
                     runTriggered: true,
                     runId: result.runId,
+                    hclCodeReceived: !!hclCode,
                   },
                 };
               } else {
@@ -6047,6 +6070,7 @@ export class DataFlowEngine {
                 commit,
                 runTriggered: false,
                 reason: 'No workspace specified',
+                hclCodeReceived: !!hclCode,
               },
             };
           }

@@ -20,6 +20,7 @@ import { createWAFRule } from './wafRules';
 import { createFirewallRule } from './firewallRules';
 import { createVaultRule } from './vaultRules';
 import { createIDSIPSRule } from './idsipsRules';
+import { createTerraformVCSRule, createTerraformKubernetesRule, createTerraformArgoCDRule, createTerraformVaultRule, createTerraformObservabilityRule } from './terraformRules';
 
 /**
  * Инициализировать все правила подключения
@@ -66,5 +67,12 @@ export function initializeConnectionRules(discovery: ServiceDiscovery): Connecti
     createVaultRule(discovery),
     // Security - IDS/IPS
     createIDSIPSRule(discovery),
+    
+    // DevOps - Terraform
+    createTerraformVCSRule(discovery),
+    createTerraformKubernetesRule(discovery),
+    createTerraformArgoCDRule(discovery),
+    createTerraformVaultRule(discovery),
+    createTerraformObservabilityRule(discovery),
   ];
 }

@@ -1,5 +1,742 @@
 # Patch Notes
 
+## Версия 0.1.8zf - Terraform: Генерация исходящих сообщений, Проверка соединений, Connection Rules, Исправление UI
+
+### Terraform: Улучшение симулятивности и UI/UX
+
+**Критическое улучшение**: Terraform теперь генерирует исходящие сообщения после завершения runs и отправляет их в подключенные компоненты (Kubernetes, Argo CD, etc.). Добавлена проверка соединений перед операциями с graceful degradation. Реализованы Connection Rules для автоматической настройки конфигов при создании соединений. Исправлены UI проблемы - убран window.confirm(), табы сделаны адаптивными.
+
+**✅ СТАТУС РАЗРАБОТКИ (2026-01-29)**: Критические и важные этапы разработки завершены. Компонент Terraform улучшен по симулятивности и UI/UX:
+- ✅ Симулятивность: Генерация исходящих сообщений после runs, проверка соединений, Connection Rules реализованы (включая Terraform → Observability)
+- ✅ Метрики соединений: Добавлены метрики connectedComponents, outgoingMessages, incomingWebhooks для отслеживания соединений и взаимодействий
+- ✅ UI/UX: Убран window.confirm(), табы адаптивны, режим просмотра/редактирования для workspaces, детальный просмотр run
+- ✅ Variables: Полная поддержка Variables в TerraformEmulationEngine и UI (CRUD операции, категории, sensitive, HCL)
+- ✅ Notifications: Полная поддержка Notifications в TerraformEmulationEngine и UI (CRUD операции, типы, условия, автоматическая отправка)
+- ✅ Tags: Полная поддержка Tags в TerraformEmulationEngine и UI (CRUD операции, фильтрация workspaces по tags, отображение tags)
+- ✅ Run Policies: Полная поддержка Run Policies (approval workflows) в TerraformEmulationEngine и UI (CRUD операции, manual approval, Sentinel/OPA policies, проверка перед apply)
+- ✅ Plan/Apply Outputs: Добавлена генерация plan output и apply output в TerraformEmulationEngine с отображением в детальном просмотре run
+- ✅ Прогресс-бар: Добавлен прогресс-бар для активных runs (planning/applying) с отображением времени выполнения
+- ✅ Фильтрация runs: Добавлена фильтрация runs по workspace (run history для конкретного workspace)
+- ✅ Settings: Расширена вкладка Settings - добавлены Organization name и настройки симуляции (runTriggerRate, failureRate, vcsWebhookProbability, durations, changeProbability, defaultStateResources)
+- ✅ State: Расширена вкладка State - добавлен детальный просмотр state version с expandable card, отображение lineage и outputs
+- ✅ Run Timeline: Добавлена визуализация run timeline (график истории runs за последние 24 часа) во вкладку Runs
+- ✅ State Comparison: Добавлен функционал сравнения двух state versions с отображением diff ресурсов и outputs
+- ✅ Resource Changes History: Добавлена история изменений ресурсов в детальном просмотре state version
+- ✅ КРИТИЧНО: Исправление обособленной работы Terraform - Terraform теперь работает реактивно, зависит от HCL кода, провайдеров и State backend
+
+#### 1. КРИТИЧНО: Исправление обособленной работы Terraform (Этап 6.5) ✅
+
+**Улучшение**: Terraform теперь работает реактивно - runs создаются только при реальных событиях (webhook от VCS, API запросы, ручной запуск). Terraform зависит от HCL кода, провайдеров и State backend, что соответствует реальности.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Удалена автогенерация runs из `performUpdate()` - удалены вызовы `triggerAutoRuns()` и `triggerVCSWebhooks()`
+  - Добавлены поля `hclCode`, `hclCodeVersion`, `hclCodeUpdatedAt` в `TerraformWorkspace` интерфейс
+  - Добавлены методы `setHCLCode()`, `getHCLCode()`, `getHCLCodeInfo()` для работы с HCL кодом
+  - Реализован метод `parseHCLCode()` для парсинга HCL кода и определения реальных ресурсов
+  - Обновлен `updateActiveRuns()` - использует парсинг HCL кода вместо случайных чисел для определения изменений ресурсов
+  - Обновлен `triggerRun()` - блокирует runs если нет VCS соединения или HCL кода (для workspace с VCS repo)
+  - Обновлен `triggerRun()` - блокирует runs если `enableRemoteState=true` но нет State backend соединения
+  - Добавлен метод `checkStateBackend()` для проверки State backend соединения
+  - Добавлен метод `getTargetComponentsForWorkspace()` для получения целевых компонентов (провайдеров)
+  - Обновлен `updateActiveRuns()` - блокирует apply если нет соединений с провайдерами (только plan)
+  - Добавлены метрики зависимостей: `vcsConnected`, `stateBackendConnected`, `providersConnected`, `blockedRuns`
+  - Обновлен `updateMetrics()` - рассчитывает метрики зависимостей на основе соединений
+  - Добавлен счетчик `blockedRunsCount` для отслеживания заблокированных runs
+- ✅ В `src/core/DataFlowEngine.ts`:
+  - Обновлен `createTerraformHandler()` - извлекает HCL код из webhook payload от VCS
+  - Поддержка различных форматов HCL кода в payload: `hclCode`, `code`, `files.main.content`, `files['main.tf'].content`
+  - Автоматическое сохранение HCL кода в workspace при получении webhook
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлена секция редактирования HCL кода во вкладке Workspaces (в режиме редактирования workspace)
+  - Добавлено отображение информации о HCL коде в режиме просмотра (версия, дата обновления, превью кода)
+  - Textarea для редактирования HCL кода с моноширинным шрифтом
+  - Интеграция с TerraformEmulationEngine через методы `setHCLCode()` и `getHCLCode()`
+- ✅ В `src/services/connection/rules/terraformRules.ts`:
+  - Обновлен `createTerraformVCSRule()` - добавляет пример HCL кода при создании соединения VCS → Terraform
+  - Пример HCL кода включает Kubernetes deployment и service ресурсы
+  - Автоматическое добавление HCL кода в новый workspace или обновление существующего
+
+**Преимущества**:
+- Terraform работает реактивно - runs создаются только при реальных событиях
+- Terraform зависит от HCL кода - без кода не может выполнить plan
+- Terraform зависит от провайдеров - без соединений может только plan, но не apply
+- Terraform зависит от State backend - без соединения не может работать с remote state
+- Реалистичная симуляция - изменения ресурсов рассчитываются на основе реального HCL кода
+- Метрики зависимостей показывают состояние соединений и заблокированные runs
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/DataFlowEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+- `src/services/connection/rules/terraformRules.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 2. Генерация исходящих сообщений после завершения runs ✅
+
+**Улучшение**: Terraform теперь отправляет результаты runs в подключенные компоненты через DataFlowEngine.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлены поля `nodeId` и `connections` для хранения информации о соединениях
+  - Добавлены методы `setNodeId()` и `setConnections()` для установки соединений
+  - Добавлен метод `sendRunResults()` для отправки результатов runs в подключенные компоненты
+  - Сообщения отправляются после завершения runs (applied, errored, canceled, planned)
+  - Payload включает: runId, workspaceId, status, duration, resource changes, state outputs, error
+  - Интеграция с DataFlowEngine через прямой вызов `dataFlowEngine.addMessage()`
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Обновлен `initializeTerraformEngine()` - устанавливает nodeId и connections
+  - Обновлен `updateNodesAndConnections()` - обновляет connections для всех Terraform engines
+  - Добавлен вызов `terraformEngine.performUpdate(now)` в цикле симуляции
+
+**Преимущества**:
+- Terraform интегрирован с другими компонентами через DataFlowEngine
+- Результаты runs автоматически отправляются в целевые компоненты
+- Поддержка state outputs в сообщениях
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 3. Проверка соединений перед операциями ✅
+
+**Улучшение**: Terraform проверяет наличие соединений перед операциями с graceful degradation.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлен метод `checkVCSConnection()` - проверяет соединение с VCS компонентами
+  - Добавлен метод `checkOutgoingConnections()` - проверяет исходящие соединения
+  - Обновлен `triggerRun()` - проверяет VCS соединение (логирует предупреждение, но не блокирует)
+  - Обновлен `triggerVCSWebhooks()` - пропускает workspace если нет VCS соединения
+
+**Преимущества**:
+- Graceful degradation - Terraform продолжает работу без соединений, но логирует предупреждения
+- Реалистичная симуляция - VCS webhooks не срабатывают без соединений
+- Проверка соединений перед отправкой результатов
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. Connection Rules для Terraform ✅
+
+**Улучшение**: Реализованы Connection Rules для автоматической настройки конфигов при создании соединений.
+
+**Реализовано**:
+- ✅ Создан файл `src/services/connection/rules/terraformRules.ts`:
+  - `createTerraformVCSRule()` - VCS → Terraform (GitLab CI, GitHub, Webhook)
+    - Автоматически настраивает workspace.vcsRepo при создании соединения
+    - Создает новый workspace если не существует
+    - Cleanup при удалении соединения
+  - `createTerraformKubernetesRule()` - Terraform → Kubernetes/Docker
+    - Автоматически настраивает notification destination в workspace
+    - Поддержка условий отправки (on_success, on_failure)
+    - Cleanup при удалении соединения
+  - `createTerraformArgoCDRule()` - Terraform → Argo CD
+    - Автоматически настраивает notification destination в workspace
+    - Поддержка условий отправки (on_success)
+    - Cleanup при удалении соединения
+  - `createTerraformVaultRule()` - Vault → Terraform
+    - Автоматически настраивает Vault backend в workspace
+    - Настраивает vaultBackend.address и vaultBackend.path
+    - Cleanup при удалении соединения
+  - `createTerraformObservabilityRule()` - Terraform → Observability (Prometheus, Grafana, Loki, Jaeger, OpenTelemetry)
+    - Автоматически настраивает notification destination в workspace для отправки метрик и уведомлений
+    - Поддержка условий отправки (on_success, on_failure, on_start) для всех observability компонентов
+    - Cleanup при удалении соединения
+- ✅ В `src/services/connection/rules/index.ts`:
+  - Добавлены импорты всех Terraform правил (включая createTerraformObservabilityRule)
+  - Зарегистрированы в `initializeConnectionRules()`
+
+**Преимущества**:
+- Автоматическая настройка конфигов при создании соединений
+- Нет необходимости вручную настраивать VCS repos, notifications, Vault backends
+- Cleanup при удалении соединений
+
+**Изменённые файлы**:
+- `src/services/connection/rules/terraformRules.ts` ✅ **СОЗДАН**
+- `src/services/connection/rules/index.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 4. Исправление UI проблем ✅
+
+**Улучшение**: Убран window.confirm(), табы сделаны адаптивными.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Убран импорт `Dialog` компонентов
+  - Заменен `window.confirm()` для удаления workspace на inline confirmation (кнопки Confirm/Cancel)
+  - Заменен `window.confirm()` для отмены run на inline confirmation (кнопки Confirm/Cancel)
+  - Добавлены состояния `confirmingDeleteWorkspace` и `confirmingCancelRun`
+  - Табы сделаны адаптивными (`flex flex-wrap gap-2`)
+
+**Преимущества**:
+- Нет использования Dialog/confirm - соответствует правилам проекта
+- Адаптивный UI для разных размеров экрана
+- Лучший UX - inline confirmation вместо модальных окон
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 5. Поддержка Variables в TerraformEmulationEngine и UI ✅
+
+**Улучшение**: Реализована полная поддержка Variables (Terraform и Environment variables) с CRUD операциями в движке и UI.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлен интерфейс `TerraformVariable` с полями: id, key, value, category, sensitive, hcl, description
+  - Добавлены CRUD методы для variables:
+    - `addVariable(workspaceId, variable)` - добавление переменной с проверкой уникальности ключа
+    - `updateVariable(workspaceId, variableKey, updates)` - обновление переменной по ключу
+    - `deleteVariable(workspaceId, variableKey)` - удаление переменной по ключу
+    - `getVariables(workspaceId)` - получение всех переменных для workspace
+  - Поддержка категорий: 'terraform' (Terraform variables) и 'env' (Environment variables)
+  - Поддержка sensitive variables (masking)
+  - Поддержка HCL variables
+  - Синхронизация с конфигом через `syncWorkspaceToConfig()`
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлена новая вкладка "Variables"
+  - Select workspace для выбора workspace
+  - Карточки variables с отображением: Key, Value, Category, Sensitive, HCL
+  - Inline редактирование variables (без Dialog)
+  - Форма добавления новой variable с полями: Key, Value, Category, Sensitive, HCL
+  - Кнопки Edit и Delete для каждой variable
+  - Inline confirmation для удаления (Confirm/Cancel)
+  - Маскирование sensitive variables (показывается как ••••••••)
+  - Интеграция с TerraformEmulationEngine через CRUD методы
+
+**Преимущества**:
+- Полная поддержка Variables как в реальном Terraform Cloud/Enterprise
+- Удобный UI для управления variables
+- Валидация уникальности ключей
+- Поддержка sensitive и HCL variables
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 6. Поддержка Notifications в TerraformEmulationEngine и UI ✅
+
+**Улучшение**: Реализована полная поддержка Notifications (webhook, slack, email, component) с CRUD операциями в движке и UI. Notifications автоматически отправляются после завершения runs.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлен интерфейс `TerraformNotificationConfiguration` с полями: id, name, type, destination, conditions, enabled, description
+  - Добавлено поле `notifications` в `TerraformWorkspace`
+  - Добавлены CRUD методы для notifications:
+    - `addNotification(workspaceId, notification)` - добавление notification с проверкой уникальности имени
+    - `updateNotification(workspaceId, notificationId, updates)` - обновление notification
+    - `deleteNotification(workspaceId, notificationId)` - удаление notification
+    - `getNotifications(workspaceId)` - получение всех notifications для workspace
+  - Добавлен приватный метод `sendNotifications(run)` - отправка notifications для завершенного run
+  - Поддержка типов: 'slack', 'email', 'webhook', 'component'
+  - Поддержка условий: 'on_success', 'on_failure', 'on_start'
+  - Интеграция с DataFlowEngine для отправки notifications типа 'component'
+  - Автоматический вызов `sendNotifications()` из `sendRunResults()`
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлена новая вкладка "Notifications"
+  - Select workspace для выбора workspace
+  - Карточки notifications с отображением: Name, Type, Destination, Conditions, Enabled
+  - Inline редактирование notifications (без Dialog)
+  - Форма добавления новой notification с полями: Name, Type, Destination, Conditions, Enabled
+  - Выбор целевого компонента для типа 'component' через Select с фильтрацией nodes
+  - Множественный выбор условий через чекбоксы
+  - Кнопки Edit и Delete для каждой notification
+  - Inline confirmation для удаления (Confirm/Cancel)
+  - Интеграция с TerraformEmulationEngine через CRUD методы
+
+**Преимущества**:
+- Полная поддержка Notifications как в реальном Terraform Cloud/Enterprise
+- Удобный UI для управления notifications
+- Автоматическая отправка notifications после завершения runs
+- Поддержка отправки в компоненты через DataFlowEngine
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 7. Поддержка Tags в TerraformEmulationEngine и UI ✅
+
+**Улучшение**: Реализована полная поддержка Tags для workspaces с CRUD операциями в движке и UI. Добавлена фильтрация workspaces по tags.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Поле `tags` уже было в интерфейсе `TerraformWorkspace`
+  - Добавлены методы для управления tags:
+    - `addTag(workspaceId, tag)` - добавление tag с проверкой уникальности и нормализацией (lowercase, trim)
+    - `removeTag(workspaceId, tag)` - удаление tag из workspace
+    - `getWorkspacesByTag(tag)` - получение всех workspaces с указанным tag
+    - `getAllTags()` - получение всех уникальных tags из всех workspaces (отсортированные)
+  - Синхронизация tags с конфигом через `syncWorkspaceToConfig()`
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлены state переменные для управления tags: `workspaceTagFilter`, `newTagInput`, `allTags`
+  - Добавлен useEffect для получения всех tags из движка
+  - Добавлены функции `addTag()` и `removeTag()` для работы с tags
+  - Добавлен `filteredWorkspaces` useMemo для фильтрации workspaces по выбранному tag
+  - Добавлен Select фильтр в CardHeader секции Workspaces для фильтрации по tags
+  - Добавлено отображение tags для каждого workspace в виде badges с возможностью удаления (кнопка X)
+  - Добавлена секция управления tags в CardContent каждого workspace:
+    - Input для ввода нового tag
+    - Кнопка "Add Tag" для добавления
+    - Поддержка добавления по Enter
+  - Tags отображаются в списке workspaces с возможностью быстрого удаления
+
+**Преимущества**:
+- Полная поддержка Tags как в реальном Terraform Cloud/Enterprise
+- Удобный UI для управления tags
+- Фильтрация workspaces по tags для быстрого поиска
+- Нормализация tags (lowercase, trim) для консистентности
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 8. Режим просмотра/редактирования для Workspaces ✅
+
+**Улучшение**: Добавлен режим просмотра/редактирования для workspaces - переключение между режимом просмотра (read-only) и редактирования.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлено состояние `editingWorkspace` для отслеживания workspace в режиме редактирования
+  - Добавлена кнопка Edit/Save для переключения между режимами
+  - Режим просмотра показывает информацию в read-only формате:
+    - Terraform Version, Working Directory, Auto Apply, VCS Repository
+    - Description (если есть)
+    - Tags (если есть)
+  - Режим редактирования показывает все поля для редактирования:
+    - Workspace Name, Terraform Version, Working Directory, Auto Apply
+    - Description (Textarea)
+    - VCS Repository (identifier, branch)
+    - Tags (управление tags)
+
+**Преимущества**:
+- Улучшенный UX - пользователь может просматривать информацию без риска случайного редактирования
+- Четкое разделение между просмотром и редактированием
+- Соответствие паттернам реального Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 9. Детальный просмотр Run (Expandable Card) ✅
+
+**Улучшение**: Добавлен детальный просмотр run с expandable card - разворачиваемая карточка с полной информацией о run.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлено состояние `expandedRuns` (Set<string>) для отслеживания развернутых runs
+  - Добавлены импорты `ChevronDown` и `ChevronUp` из lucide-react
+  - Добавлена кнопка для разворачивания/сворачивания деталей run (ChevronDown/ChevronUp)
+  - Детальная информация включает:
+    - Run ID (monospace font)
+    - Workspace name
+    - Triggered By (если доступно)
+    - Source (badge)
+    - Created At, Started At, Finished At (если доступно)
+    - Duration
+    - Resource Changes с визуализацией:
+      - Additions (зеленый фон, +N)
+      - Changes (желтый фон, ~N)
+      - Destructions (красный фон, -N)
+    - Message (если есть)
+    - Error (если есть, красный фон)
+
+**Преимущества**:
+- Полная информация о run в одном месте
+- Визуализация resource changes с цветовым кодированием
+- Удобный просмотр деталей без перехода на другую страницу
+- Соответствие паттернам реального Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 10. Поддержка Run Policies (Approval Workflows) ✅
+
+**Улучшение**: Реализована полная поддержка Run Policies для workspaces с CRUD операциями в движке и UI. Добавлена логика проверки policies перед apply и поддержка manual approval.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлен интерфейс `TerraformRunPolicy` с полями:
+    - `id`, `name`, `type` ('manual_approval' | 'sentinel' | 'opa')
+    - `enabled`, `conditions`, `description`
+  - Добавлен интерфейс `RunPolicyCheckResult` для результатов проверки policies
+  - Добавлено поле `runPolicies` в `TerraformWorkspace`
+  - Добавлено поле `policyChecks` в `TerraformRun` для отслеживания проверок и approval:
+    - `checked`, `passed`, `requiresApproval`, `approved`, `approvedBy`, `approvedAt`
+  - Добавлены методы для управления policies:
+    - `addRunPolicy(workspaceId, policy)` - добавление policy с проверкой уникальности имени
+    - `updateRunPolicy(workspaceId, policyId, updates)` - обновление policy
+    - `deleteRunPolicy(workspaceId, policyId)` - удаление policy
+    - `getRunPolicies(workspaceId)` - получение всех policies для workspace
+  - Добавлен метод `checkRunPolicies(run, workspace)` для проверки policies:
+    - Проверяет enabled policies для run
+    - Поддерживает условия: `onPlanOnly`, `onApply`, `minResourceChanges`, `requireDestruction`
+    - Симулирует проверку Sentinel/OPA policies (90% pass rate)
+    - Возвращает `RunPolicyCheckResult` с информацией о blocking policies и необходимости approval
+  - Добавлен метод `approveRun(runId, approvedBy)` для manual approval:
+    - Проверяет что run в статусе 'planned'
+    - Устанавливает `approved: true` в `policyChecks`
+    - Перепроверяет policies перед переходом к apply
+    - Переводит run в статус 'applying' если approval успешно и policies прошли
+  - Интегрирована проверка policies в lifecycle runs:
+    - В `updateActiveRuns()` после завершения planning проверяются policies
+    - Если policies требуют approval и run не одобрен - run остается в статусе 'planned'
+    - Если policies прошли и run одобрен (или auto-apply) - run переходит в 'applying'
+    - Если policies заблокированы - run остается в 'planned' с сообщением об ошибке
+  - Синхронизация policies с конфигом через `syncWorkspaceToConfig()`
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлены импорты `TerraformRunPolicy`, `Shield`, `CheckCircle2` из lucide-react
+  - Добавлены state переменные для управления policies:
+    - `selectedWorkspaceForPolicies`, `workspacePolicies`, `newPolicy`
+    - `editingPolicy`, `confirmingDeletePolicy`, `showAddPolicy`
+  - Добавлен useEffect для загрузки policies при выборе workspace
+  - Добавлены функции для управления policies:
+    - `addPolicy()` - добавление новой policy
+    - `updatePolicy()` - обновление policy
+    - `deletePolicy()` - удаление policy
+    - `approveRun()` - одобрение run для применения
+  - Добавлена новая вкладка "Policies" в TabsList:
+    - Select для выбора workspace
+    - Кнопка "Add Policy" для добавления новой policy
+    - Форма добавления policy с полями:
+      - Policy Name, Policy Type (manual_approval/sentinel/opa)
+      - Description, Enabled
+      - Conditions: Apply to Plan-Only Runs, Apply to Apply Runs
+      - Для Sentinel/OPA: Min Resource Changes, Require Destruction
+    - Список policies для выбранного workspace:
+      - Карточки с информацией о policy (name, type, enabled status, conditions)
+      - Кнопки Edit и Delete для каждой policy
+      - Inline редактирование (без Dialog)
+      - Inline confirmation для удаления (Confirm/Cancel)
+  - Добавлена кнопка "Approve" для runs в статусе 'planned' которые требуют approval:
+    - Отображается только если `run.policyChecks?.requiresApproval && !run.policyChecks?.approved`
+    - При клике вызывает `approveRun()` для одобрения run
+    - После одобрения run переходит в статус 'applying'
+
+**Преимущества**:
+- Полная поддержка Run Policies как в реальном Terraform Cloud/Enterprise
+- Manual approval workflows для контроля применения изменений
+- Симуляция Sentinel/OPA policies для проверки compliance
+- Гибкие условия для применения policies (plan-only, apply, min changes, require destruction)
+- Удобный UI для управления policies и одобрения runs
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 11. Отображение счетчиков Variables и Notifications в списке Workspaces ✅
+
+**Улучшение**: Добавлены badges с количеством variables и notifications для каждого workspace в списке workspaces для быстрого обзора.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлены badges с количеством variables для каждого workspace
+  - Добавлены badges с количеством notifications для каждого workspace
+  - Счетчики отображаются только если есть variables/notifications (условный рендеринг)
+  - Используются иконки `Variable` и `Bell` из lucide-react
+  - Счетчики отображаются в строке с другими badges (версия, auto-apply, last run status)
+  - Используется метод `terraformEngine.getVariables()` и `terraformEngine.getNotifications()` для получения актуальных данных
+
+**Преимущества**:
+- Быстрый обзор количества variables и notifications для каждого workspace
+- Улучшенный UX - пользователь видит важную информацию без перехода на другие вкладки
+- Соответствие паттернам реального Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 12. Метод getStateOutputs в TerraformEmulationEngine ✅
+
+**Улучшение**: Добавлен метод для получения outputs из state для workspace через API.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлен метод `getStateOutputs(workspaceId: string): Record<string, any> | undefined`
+  - Метод получает state для workspace через `getStateForWorkspace()`
+  - Возвращает outputs из state или undefined если state не найден
+  - Используется для доступа к state outputs через API
+
+**Преимущества**:
+- Удобный доступ к state outputs через API
+- Соответствие реальному Terraform Cloud/Enterprise API
+- Используется для отображения outputs в UI и отправки в исходящих сообщениях
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 13. Plan Output и Apply Output в TerraformEmulationEngine и UI ✅
+
+**Улучшение**: Добавлена генерация plan output и apply output для runs с детальным отображением в UI.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлены поля `planOutput` и `applyOutput` в интерфейс `TerraformRun`
+  - `planOutput` содержит: changes (additions, changes, destructions), resourceChanges (список изменений ресурсов), summary
+  - `applyOutput` содержит: success, resourcesCreated/Updated/Destroyed, outputs (state outputs), summary
+  - Добавлен метод `generateResourceChanges()` для генерации списка изменений ресурсов
+  - Генерация plan output при переходе run в статус 'planned'
+  - Генерация apply output при завершении apply (success/failure)
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Отображение plan output в детальном просмотре run:
+    - Summary с количеством изменений
+    - Визуализация изменений (additions/changes/destructions) с цветовым кодированием
+    - Список изменений ресурсов с адресами, действиями (create/update/delete/replace) и типами
+  - Отображение apply output в детальном просмотре run:
+    - Summary с результатами apply
+    - Визуализация созданных/обновленных/уничтоженных ресурсов
+    - Отображение state outputs (если доступны)
+
+**Преимущества**:
+- Детальная информация о планах и результатах apply
+- Визуализация изменений ресурсов
+- Соответствие реальному Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 14. Прогресс-бар для активных runs ✅
+
+**Улучшение**: Добавлен прогресс-бар для визуализации прогресса выполнения активных runs (planning/applying).
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Прогресс-бар отображается для runs со статусом 'planning' или 'applying'
+  - Расчет прогресса на основе времени выполнения и ожидаемой длительности
+  - Отображение времени выполнения (elapsed time)
+  - Использование компонента `Progress` из shadcn/ui
+
+**Преимущества**:
+- Визуальная индикация прогресса выполнения runs
+- Улучшенный UX для мониторинга активных runs
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 15. Фильтрация runs по workspace (Run History) ✅
+
+**Улучшение**: Добавлена фильтрация runs по workspace для просмотра истории runs конкретного workspace.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлен state `runWorkspaceFilter` для хранения выбранного workspace
+  - Добавлен Select фильтр в CardHeader вкладки Runs
+  - Фильтрация runs по workspaceId в `filteredRuns` useMemo
+  - Select показывает все доступные workspaces с опцией "All Workspaces"
+
+**Преимущества**:
+- Возможность просмотра истории runs для конкретного workspace
+- Улучшенная навигация по runs
+- Соответствие реальному Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 19. Метрики с учетом соединений (Этап 6.3) ✅
+
+**Улучшение**: Добавлены метрики для отслеживания соединений и сообщений: connectedComponents, outgoingMessages, incomingWebhooks.
+
+**Реализовано**:
+- ✅ В `src/core/TerraformEmulationEngine.ts`:
+  - Добавлены метрики в интерфейс `TerraformEngineMetrics`: connectedComponents, outgoingMessages, incomingWebhooks
+  - Добавлены счетчики `outgoingMessagesCount` и `incomingWebhooksCount`
+  - Обновлен метод `updateMetrics()` для расчета метрик соединений:
+    - `connectedComponents` - количество уникальных подключенных компонентов (входящие + исходящие соединения)
+    - `outgoingMessages` - количество отправленных сообщений (из счетчика)
+    - `incomingWebhooks` - количество полученных webhooks (из счетчика)
+  - Увеличение счетчика `outgoingMessagesCount` при отправке сообщений через `sendRunResults()`
+  - Увеличение счетчика `incomingWebhooksCount` при получении webhooks через `triggerRun()` (source === 'vcs' или triggeredBy === 'vcs-webhook')
+- ✅ В `src/core/EmulationEngine.ts`:
+  - Обновлен метод `simulateTerraform()` для включения новых метрик в `customMetrics`:
+    - connectedComponents, outgoingMessages, incomingWebhooks
+
+**Преимущества**:
+- Отслеживание количества подключенных компонентов
+- Отслеживание количества отправленных сообщений
+- Отслеживание количества полученных webhooks
+- Метрики отражают реальное состояние соединений и взаимодействий
+
+**Изменённые файлы**:
+- `src/core/TerraformEmulationEngine.ts` ✅ **ОБНОВЛЕН**
+- `src/core/EmulationEngine.ts` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 20. Расширение вкладки Settings ✅
+
+**Улучшение**: Добавлены Organization name и настройки симуляции в вкладку Settings.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлена новая секция "Organization Settings" с полем Organization Name (редактируемое Input поле)
+  - Добавлена новая секция "Simulation Settings" с настройками симуляции:
+    - Run Trigger Rate (runs/hour) - количество runs в час на workspace
+    - Failure Rate (0-1) - вероятность ошибки run
+    - VCS Webhook Probability (0-1) - вероятность VCS webhook в час
+    - Average Plan Duration (ms) - базовая длительность plan фазы
+    - Average Apply Duration (ms) - базовая длительность apply фазы
+    - Change Probability (0-1) - вероятность изменений в plan
+    - Default State Resources - количество ресурсов по умолчанию для нового state
+  - Все настройки синхронизируются с `TerraformEmulationConfig` через `updateConfig()`
+  - Валидация значений (min/max, step для числовых полей)
+  - Описания для каждой настройки
+
+**Преимущества**:
+- Полный контроль над параметрами симуляции
+- Настройка Organization name для соответствия реальному Terraform Cloud/Enterprise
+- Все настройки влияют на поведение симуляции
+- Удобный UI для конфигурации
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 21. Расширение вкладки State ✅
+
+**Улучшение**: Добавлен детальный просмотр state version с expandable card, отображение lineage и outputs.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлено состояние `expandedStates` (Set<string>) для отслеживания развернутых state versions
+  - Добавлена кнопка для разворачивания/сворачивания деталей state (ChevronDown/ChevronUp)
+  - Детальная информация в развернутом виде включает:
+    - State Details: State ID, Workspace ID, Version, Serial, Resources, Lineage (полный текст)
+    - Outputs: полный список outputs с форматированием (key = value)
+  - Свернутый вид показывает:
+    - Краткую информацию: workspace, version, serial, resources
+    - Lineage badge (первые 8 символов)
+    - Первые 2 outputs (если есть) с указанием количества оставшихся
+  - Отображение Created At и Updated At в детальном просмотре
+  - Адаптивный layout для badges (flex-wrap)
+
+**Преимущества**:
+- Полная информация о state version в одном месте
+- Удобный просмотр lineage и outputs
+- Соответствие паттернам реального Terraform Cloud/Enterprise UI
+- Адаптивный UI для разных размеров экрана
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 22. Визуализация Run Timeline ✅
+
+**Улучшение**: Добавлен график истории runs за последние 24 часа для визуализации активности runs.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлен импорт Recharts компонентов (LineChart, AreaChart, BarChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer)
+  - Добавлена карточка "Run Timeline" перед списком runs во вкладке Runs
+  - Группировка runs по часам за последние 24 часа
+  - Отображение success/failed/active runs на графике
+  - Использование AreaChart для визуализации с stacked areas
+  - График отображается только если есть данные для отображения
+  - Цветовое кодирование: зеленый для success, красный для failed, синий для active
+
+**Преимущества**:
+- Визуальная индикация активности runs во времени
+- Быстрый обзор успешных и неудачных runs
+- Улучшенный UX для анализа истории runs
+- Соответствие паттернам реального Terraform Cloud/Enterprise UI
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 23. Сравнение State Versions ✅
+
+**Улучшение**: Добавлен функционал сравнения двух state versions с отображением diff ресурсов и outputs.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлено состояние `comparingStates` для хранения выбранных версий (from/to)
+  - Добавлены кнопки "From" и "To" на карточках state versions для выбора версий для сравнения
+  - Добавлена карточка "State Comparison" над списком state versions (отображается когда выбраны версии)
+  - Отображение diff ресурсов:
+    - Разница в количестве ресурсов между версиями
+    - Цветовое кодирование (зеленый для увеличения, красный для уменьшения)
+    - Отображение значений "From" и "To"
+  - Отображение diff outputs:
+    - Добавленные outputs (зеленый фон)
+    - Удаленные outputs (красный фон)
+    - Измененные outputs (желтый фон, показывается старое и новое значение)
+    - Неизмененные outputs (серый фон)
+  - Визуальное выделение выбранных версий в списке (синяя рамка и badge "From"/"To")
+  - Кнопка закрытия сравнения (X)
+
+**Преимущества**:
+- Удобное сравнение state versions для анализа изменений
+- Визуальное отображение diff ресурсов и outputs
+- Соответствие реальному Terraform Cloud/Enterprise UI
+- Улучшенный UX для анализа изменений в state
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
+#### 24. История изменений ресурсов (Resource Changes History) ✅
+
+**Улучшение**: Добавлена история изменений ресурсов в детальном просмотре state version для отслеживания runs, которые привели к созданию этой версии state.
+
+**Реализовано**:
+- ✅ В `src/components/config/devops/TerraformConfigAdvanced.tsx`:
+  - Добавлена секция "Resource Changes History" в детальном просмотре state version
+  - Поиск runs, которые привели к созданию этой версии state:
+    - Фильтрация по workspace (workspaceId или workspaceName)
+    - Фильтрация по времени (runs завершились после предыдущей версии state и до создания текущей версии)
+    - Фильтрация по статусу (только applied runs с hasChanges=true)
+  - Отображение для каждого run:
+    - Run ID и время завершения
+    - Изменения ресурсов (additions/changes/destructions) с цветовым кодированием badges
+    - Детальные изменения ресурсов из planOutput (первые 3 изменения)
+    - Адреса ресурсов, действия (create/update/delete/replace) и типы
+  - Сортировка runs по времени завершения (новые сверху)
+  - Прокручиваемый список (max-height: 256px) для большого количества runs
+  - Иконка History для визуального обозначения секции
+
+**Преимущества**:
+- Отслеживание истории изменений ресурсов между версиями state
+- Понимание какие runs привели к созданию конкретной версии state
+- Детальная информация о изменениях ресурсов
+- Улучшенный UX для анализа изменений в infrastructure
+
+**Изменённые файлы**:
+- `src/components/config/devops/TerraformConfigAdvanced.tsx` ✅ **ОБНОВЛЕН**
+
+---
+
 ## Версия 0.1.8ze - Argo CD: Устранение Dialog, Inline формы, Адаптивные табы, Проверка соединений, Устранение хардкода, Визуализация Sync Operations, RBAC, Notifications, Улучшение валидации, Sync Windows, Детальный просмотр Application, Графики метрик, Sync Hooks, ApplicationSet, RBAC Enforcement, Notification Events, Расширенный Sync Policy, Поддержка Helm Charts, Поддержка OCI Registries, Multi-cluster поддержка, Оптимизация производительности, Детальное редактирование ApplicationSet генераторов
 
 ### Argo CD: Улучшение UI/UX и симулятивности
